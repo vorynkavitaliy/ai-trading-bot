@@ -1,0 +1,1 @@
+"""Trading strategies for the AI Trading Bot."""

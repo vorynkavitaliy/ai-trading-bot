@@ -1,0 +1,43 @@
+trading:
+  symbols:
+    - BTCUSDT
+    - ETHUSDT
+    - ADAUSDT
+  base_currency: USDT
+  initial_balance: 10000
+  max_position_size: 0.1
+  stop_loss_percentage: 0.02
+  take_profit_percentage: 0.05
+  cycle_interval: 3600  # 1 hour in seconds
+
+data:
+  provider: yfinance  # or 'binance'
+  timeframe: 1h
+  lookback_periods: 100
+
+ai:
+  model_type: random_forest  # or 'lstm', 'xgboost'
+  features:
+    - close
+    - volume
+    - rsi
+    - macd
+    - price_change
+    - volatility
+  prediction_horizon: 24
+  retrain_interval: 168  # hours (1 week)
+
+strategy:
+  buy_threshold: 0.02      # 2% predicted increase
+  sell_threshold: -0.01    # 1% predicted decrease
+  min_confidence: 0.6      # Minimum prediction confidence
+  max_positions: 5         # Maximum concurrent positions
+
+risk_management:
+  max_drawdown: 0.1        # 10% maximum drawdown
+  position_sizing: kelly   # or 'fixed', 'volatility'
+  diversification: true
+
+logging:
+  level: INFO
+  file: logs/trading_bot.log
