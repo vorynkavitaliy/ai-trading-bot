@@ -1,0 +1,338 @@
+# Efficient Markets Critique: Where Crypto is Inefficient and How to Exploit It
+
+**Date:** 2026-04-06
+**Author:** Learner Agent
+**Sources:** Malkiel (1973/2023), Hazlitt (1946), Jegadeesh & Titman (1993/2023), Fama & French, behavioral finance literature (2023-2025)
+
+---
+
+## 1. Efficient Market Hypothesis — What Malkiel Got Right (and Wrong)
+
+Burton Malkiel's "A Random Walk Down Wall Street" (13th ed., 2023) remains the canonical argument for market efficiency. His core thesis: asset prices instantly reflect all available information, rendering technical and fundamental analysis incapable of producing consistent excess returns. Price changes are random — the "drunkard's walk" — because the next piece of information is unknowable.
+
+### What EMH Gets Right
+
+The strong-form case holds well in mature, highly-liquid markets. The evidence is difficult to dismiss:
+
+- **~90% of active equity fund managers underperform their benchmark index over a 10-year horizon** (SPIVA 2024). Over 15 years, no category sees a majority of active managers outperform. After fees, the aggregate active fund portfolio underperforms by roughly 0.8 percentage points per year (Fama & French).
+- Price discovery in S&P 500 stocks happens within milliseconds. High-frequency trading firms have largely arbitraged away the easy inefficiencies.
+- Malkiel's central empirical point: even if an anomaly exists and becomes publicly known, it gets traded away. Publication of the January effect, small-cap premium, and value premium all saw subsequent attenuation.
+
+### Where EMH Overreaches
+
+The hypothesis comes in three flavors — weak (price history only), semi-strong (all public info), and strong (all info including insider). Malkiel advocates semi-strong at minimum. But empirical anomalies have persisted for decades:
+
+- **Momentum**: Jegadeesh and Titman's 1993 paper showed 3-12 month winners continue to outperform. As of their 2023 30-year review, momentum remains "perhaps the most pervasive contradiction of the efficient market hypothesis" — robust across asset classes and geographies.
+- **Value premium**: Small-cap and value stocks have historically outperformed, though the effect has compressed.
+- **Post-earnings drift**: Prices continue moving in the direction of earnings surprises for weeks after announcement — a direct violation of semi-strong EMH.
+
+The critical insight for algo trading: **EMH is not uniformly true across all markets, timeframes, and participant compositions.** Crypto is a qualitatively different environment.
+
+---
+
+## 2. Why Active Managers Underperform — Lessons for Algo Trading
+
+The SPIVA data showing 90% underperformance is not evidence that markets cannot be beaten. It is evidence that **human discretionary managers, constrained by fees, career risk, and institutional mandates, cannot beat the market on average.** The implications for an algorithmic system are fundamentally different:
+
+### The Cost Structure Difference
+
+Active mutual funds charge 0.5-1.5% management fees plus transaction costs. A 10-year underperformance of ~0.8% annually is almost exactly explained by fees alone. The performance drag is largely mechanical, not evidence that alpha does not exist.
+
+An algo trading system on a perpetual futures exchange operates at:
+- Near-zero management overhead
+- Tight spreads on liquid pairs (BTC/ETH bid-ask spread ~0.01-0.02%)
+- No career risk that forces herding behavior (fund managers buy winners to avoid client complaints)
+
+### The Mandate Problem
+
+Institutional managers cannot act on their best ideas. A pension fund cannot go 50% short Bitcoin. A mutual fund cannot sit 30% cash when they see no edge. They must be fully invested, diversified, and benchmark-hugging. These constraints prevent them from exploiting the very anomalies the academic literature documents.
+
+An algo system has no such constraints. It can sit flat when there is no signal. This is Hazlitt's "unseen" cost in reverse — the opportunity cost of not trading is zero, while the fund manager's career risk of sitting in cash is enormous.
+
+### The Horizon Mismatch
+
+Most documented anomalies operate on short timeframes (hours to days) that institutional managers cannot exploit due to transaction costs at scale. A fund managing $10B cannot take a 15-minute momentum position in Bitcoin — the slippage alone would eliminate the edge. A bot trading $11,250 notional faces no such constraint.
+
+---
+
+## 3. Malkiel's Critique of Technical Analysis — The Honest Assessment
+
+Malkiel devotes significant chapters to demolishing technical analysis. His arguments deserve serious engagement rather than dismissal:
+
+### The Valid Criticisms
+
+1. **Data mining / curve fitting**: Most TA patterns were identified by looking backward at charts. With enough variables, you can find patterns in any dataset. Malkiel's chartists famously could not distinguish between real stock charts and random walks generated by coin flips.
+
+2. **Self-defeating patterns**: If a pattern becomes widely known, traders front-run it and eliminate it. The "head and shoulders" pattern was extensively documented; its predictive power has since degraded.
+
+3. **Subjectivity**: Two chartists looking at the same chart often disagree on whether a pattern is present. This makes backtesting unreliable — the backtest sees a pattern the live system might miss.
+
+4. **Ignored fundamentals**: TA completely ignores the actual business (or in crypto, the actual protocol) generating the asset's value.
+
+### Where the Critique Misses
+
+Malkiel's critique targets discretionary pattern-reading, not systematic rule-based approaches. The academic literature distinguishes clearly between:
+
+- **Discretionary TA** (drawing lines on charts, identifying "head and shoulders" visually) — Malkiel's critique largely valid
+- **Systematic factor approaches** (quantified, testable rules run consistently) — a different animal
+
+Momentum strategies, mean reversion models, and volatility filters are technically derived from price history. They are systematically back-tested and forward-validated. These are the tools that hedge funds like Renaissance Technologies use — and they beat the market by wide margins over decades. Malkiel does not have a compelling answer to the Medallion Fund.
+
+The key distinction: our system does not draw lines. It computes objective metrics (ATR, RSI, EMA crossovers, structural breaks) with fixed parameters calibrated on out-of-sample data. This is closer to quantitative factor investing than to reading tea leaves.
+
+---
+
+## 4. Why Crypto Markets Are Less Efficient — Structural Analysis
+
+This is the most operationally important section. Crypto markets violate EMH assumptions in ways that create exploitable edge.
+
+### 4.1 Participant Composition
+
+A US equity market is composed primarily of institutional investors (pension funds, mutual funds, hedge funds, market makers) who employ professional analysts and algos. Roughly 70-80% of US equity volume is institutional.
+
+Crypto spot and perpetual futures markets retain a dramatically higher retail proportion, particularly on mid-cap altcoins. Retail traders exhibit well-documented systematic biases (see Section 5). Where there are irrational participants, there are mispricings.
+
+A 2024 study (Springer Nature) found that **bull markets feature higher levels of retail participation and sentiment-driven trading**, creating conditions where behavioral factors have greater influence on price dynamics. Our system is not competing against Goldman Sachs's desk — it is competing against retail traders making FOMO-driven decisions at 3am.
+
+### 4.2 24/7 Markets and Liquidity Gaps
+
+Traditional markets close for 16 hours per day. Overnight gaps create observable patterns: price discovery must restart each session, institutional players cannot react to off-hours news, and liquidity is thinner. This creates volatility asymmetries across sessions.
+
+Crypto never closes. However, this creates different inefficiencies: **thin liquidity windows** during Asian early morning or US late night sessions produce exaggerated moves that later reverse. Large orders at low-liquidity times create wicks that sweep stop-losses — the very "liquidity sweeps" our strategy targets.
+
+### 4.3 Perpetual Futures Microstructure
+
+Perpetual futures add a layer of inefficiency absent in spot markets. The **funding rate mechanism** creates predictable behavioral dynamics:
+
+- When funding rates are extremely positive (longs pay shorts), the market is overleveraged long. Mean reversion toward neutral becomes highly probable.
+- When funding rates are extremely negative, shorts are crowded. Price tends to spike upward as shorts cover.
+- Research from BIS (2024) documents the "crypto carry" trade: funding rates persistently diverge from fair value due to retail demand for leveraged long exposure. This is an EMH violation by definition.
+
+A Cornell University study (2025) on perpetual futures found that these contracts increase market participation but also "increase trading expenses while making markets more liquid but also costlier" — creating friction that prevents instant arbitrage and sustains temporary mispricings.
+
+### 4.4 Information Propagation Speed
+
+Crypto market information propagates differently:
+- On-chain data (large wallet movements, exchange inflows) is public but requires interpretation
+- Whale wallets can be tracked but their intent is unknown
+- Social media sentiment creates reflexive feedback loops: price goes up, influencers are bullish, retail buys, price goes up further — until the cycle breaks violently
+
+These feedback loops are not present in mature equity markets at the same intensity. They create predictable over-extension followed by structural breaks — exactly what our BOS/CHoCH detection targets.
+
+### 4.5 Lower Arbitrage Capacity
+
+EMH assumes unlimited arbitrageur capital. In practice, capital available for crypto arbitrage is limited by:
+- Exchange credit risk (FTX collapse destroyed $8B of institutional collateral)
+- Slow cross-exchange settlement
+- Regulatory uncertainty restricting institutional participation
+- Basis risk in perpetuals that makes cross-exchange hedging imperfect
+
+These frictions mean that mispricings can persist long enough for a systematic strategy to capture them.
+
+---
+
+## 5. Behavioral Finance — Systematic Biases as Edge
+
+Kahneman, Tversky, Thaler, and Shiller documented that human decision-making under uncertainty is systematically irrational. Crypto amplifies these biases:
+
+### 5.1 FOMO and Overconfidence
+
+A 2024 study (Quality & Quantity, Springer) found that **FOMO, herding, loss aversion, and overconfidence** have substantial effects on crypto investment decisions, with FOMO being the dominant mediating factor. FOMO-driven buyers purchase at the top of moves; their stops cluster just below recent lows. This is why liquidity sweeps work — market makers know where the stops are.
+
+Overconfidence leads retail traders to over-leverage and under-hedge. This creates the crowded positioning that perpetual funding rates reveal. High positive funding = everyone is overconfidently long = mean reversion setup.
+
+### 5.2 Anchoring
+
+Retail traders anchor to recent highs and lows. A price that breaks above a prominent recent high (swing high) triggers anchoring-induced buying as traders update their mental model. This explains momentum following structural breaks — our BOS signal.
+
+The 52-week high anchoring effect is one of the most studied in academic finance. In crypto, equivalent anchors are all-time highs, cycle highs, and round numbers. These levels create predictable cluster behavior.
+
+### 5.3 Herding and Social Media
+
+Crypto retail herding is amplified by Twitter/X, Telegram groups, and YouTube influencers. Research (2024) finds that "retail traders often mimic actions of online communities, leading to speculative booms followed by sharp corrections." The herd creates trend; the break of the herd creates reversal. Both are tradeable if you can identify structure.
+
+### 5.4 Loss Aversion and Stop Clustering
+
+Kahneman-Tversky loss aversion (losses feel 2x worse than equivalent gains) causes retail traders to place stops too tight (fear of large losses) or too wide (denial). The dominant retail behavior is tight stops below obvious technical levels. This clustering is exploitable: institutional and smart-money actors sweep these levels to build positions at better prices, then the market reverses. Our liquidity sweep detection is grounded in this behavioral reality.
+
+### 5.5 Recency Bias
+
+Crypto traders extrapolate recent trends aggressively. After a strong uptrend, most participants expect continuation; after a crash, most expect further decline. This creates over-extension before mean reversion events. Our premium/discount zone analysis exploits this: when price is in premium (>50% of range), long-term recency-biased buyers are most aggressive, but the structural setup for shorts is strongest.
+
+---
+
+## 6. The Momentum Anomaly — Why It Persists in Crypto
+
+Jegadeesh and Titman's 2023 review of their own 1993 paper confirms: 30 years of out-of-sample data still show momentum effects globally. The behavioral explanation is robust:
+
+**Why momentum exists:**
+1. **Underreaction to information**: Investors process large categorical news quickly (a headline moves price) but under-react to incremental information. A series of small positive developments creates delayed price appreciation — momentum.
+2. **Limited attention**: Retail traders cannot monitor all assets continuously. News spreads slowly through the retail population, creating a slow-moving wave of buying or selling.
+3. **Trend-following systems**: Paradoxically, as more algos use momentum strategies, they reinforce the trend until all trend-followers are in, at which point the reversal is violent.
+
+**Crypto-specific momentum amplifiers:**
+- BTC leading altcoins: capital flows from BTC appreciation into alts on a predictable rotation (our BTC-led alt strategy)
+- Liquidation cascades: when leveraged longs are liquidated, the forced selling triggers more liquidations, creating strong momentum that overshoots fundamental value
+- 24/7 no-settlement means momentum can run for days without the circuit-breaker of a market close
+
+**The decay problem:** A 2025 paper in Financial Markets and Portfolio Management shows crypto momentum strategies lose 26-53% of their alpha after transaction costs. Our edge is NOT pure momentum — it is the combination of structure (BOS/CHoCH), imbalance zones (OB/FVG), and liquidity dynamics with momentum as confirmation. The multi-factor approach is specifically designed to address the decay in any single factor.
+
+---
+
+## 7. Mean Reversion — Statistical Evidence and Crypto Specifics
+
+Mean reversion is the mirror image of momentum: prices that deviate far from equilibrium tend to revert. Both can be true simultaneously at different timeframes — a classic finding in financial economics.
+
+**Evidence:**
+- QuantPedia's 2024 analysis of BTC (Nov 2015 to Aug 2024) found mean reversion in the post-2021 regime, with BTC-neutral residual strategies achieving Sharpe ratios ~2.3
+- Stoic AI analysis: crypto assets exhibit "price overreaction where sudden news or large whale trades cause exaggerated price moves that later normalize"
+- PMC research (2024): found price overreaction in top 20 cryptocurrencies, with negative overreactions more prevalent than positive — markets fall harder than they rise, creating asymmetric recovery opportunities
+
+**Why mean reversion works in perpetual futures specifically:**
+1. Funding rate normalization: extreme funding eventually self-corrects as the trade becomes too expensive to hold
+2. Leverage cascade unwinding: over-leveraged positions get liquidated, removing the forcing agent
+3. Market makers hedging: MMs take the other side of large retail flows and unwind systematically, creating gravitational pull back to equilibrium
+
+**The range vs. trend problem:** Mean reversion strategies fail catastrophically in trending markets. This is why our strategy uses market structure (BOS on 4H to detect trend state) as a regime filter before applying any counter-trend or mean-reversion entries. In trending regimes, we trade with the trend; mean reversion logic (premium/discount zones) becomes a filter, not a signal.
+
+---
+
+## 8. Fat Tails — Why Normal Distribution Fails and What It Means for Risk
+
+Malkiel and classical finance theory assume normally distributed returns — the bell curve. Mandelbrot's foundational work (1963, cotton prices) and subsequent decades of research prove this is wrong for financial assets and catastrophically wrong for crypto.
+
+### The Evidence
+
+- Bitcoin returns exhibit **power law distributions** with tail exponents α < 3, meaning the theoretical variance is statistically undefined — standard deviation is not a meaningful risk measure
+- High-frequency Bitcoin studies (MDPI 2025) confirm: crypto assets show fat-tailed distributions, volatility clustering, and anomalous diffusion
+- The probability of a 5-sigma move in a normal distribution is 1 in 3.5 million. In crypto, 5-sigma moves happen multiple times per year.
+
+### Why This Matters for Our System
+
+**Conventional risk models underestimate catastrophic loss.** A system calibrated on historical volatility (ATR) for stop-loss sizing is essentially assuming volatility is stationary. It is not.
+
+**Operational implications:**
+1. **Never remove the absolute maximum drawdown cap** (HyroTrader 10%): The fat-tail reality means that any single trade could, in a flash crash, exceed any ATR-based stop. The absolute prop firm compliance rules are not bureaucratic — they are a hard circuit breaker against tail events that our models cannot price.
+2. **ATR filter (0.1%-3%)**: We explicitly refuse to trade in ultra-low volatility conditions (ATR < 0.1%) because fat-tail events cluster around regime changes that often follow low-volatility periods. When volatility spikes after compression, the first move often exceeds our model's expectation.
+3. **Position sizing at 22.5% with 5x leverage**: With 4.5x effective notional ratio of equity, a 22% adverse move would wipe the margin. Fat tails make this scenario non-negligible. The HyroTrader 3% SL rule provides hard protection against this.
+4. **Our limit-order-only entry**: Prevents fills in the middle of a flash crash where market orders execute at catastrophic prices. A limit order that does not fill in a gap is a feature, not a bug.
+
+**Volatility clustering** (GARCH effects) also implies that high-volatility environments are more likely to continue being high-volatility. Our ATR filter adapts to this: when ATR/price > 3%, we stand down — the variance process is in a state where our models are unreliable.
+
+---
+
+## 9. Hazlitt's Economics Applied to Crypto Markets
+
+Henry Hazlitt's "Economics in One Lesson" (1946) frames economic reasoning around the "unseen" consequences of actions — what Bastiat called the "broken window fallacy." Applied to crypto markets, this produces several non-obvious insights.
+
+### 9.1 The "Seen" vs. "Unseen" in Market Structure
+
+When retail traders see a liquidity sweep (price breaks a clear level, sweeps stops, then reverses), they see the "loss" of being stopped out. The "unseen" effect is that this sweep created the inventory for institutional buyers at better prices, enabling the subsequent rally. Understanding both sides of the transaction — not just the visible price action, but the mechanics of why stops were placed there — is the difference between reactive and structural thinking.
+
+### 9.2 Unintended Consequences of Leverage
+
+Hazlitt repeatedly shows that short-term apparent benefits create larger long-term costs. Retail use of high leverage (25-100x on Bybit) creates short-term positions that appear to maximize gain. The unseen cost: liquidation cascades that move the market away from the leveraged trader's intended direction, generating exactly the fat-tail moves discussed above.
+
+Our 5x leverage is structurally conservative relative to market norms. This is not timidity — it is recognizing that the broader market's excess leverage creates the very volatility our strategy exploits, while keeping our own risk manageable.
+
+### 9.3 Supply and Demand in Perpetual Futures
+
+Hazlitt's core mechanism — prices adjust to balance supply and demand — operates through the funding rate in perpetual futures. When demand for long exposure exceeds supply of short willingness, the funding rate rises to compensate shorts. This is a pure Hazlitt price mechanism: the "price" of holding a levered long position increases until demand is suppressed.
+
+Extreme funding rates (either direction) represent a market in disequilibrium — demand has temporarily outrun supply (or vice versa). Hazlitt's framework predicts this will revert. High positive funding rates are a measurable signal of unsustainable over-demand for long exposure, creating a probabilistically favorable mean-reversion setup.
+
+### 9.4 Government and Regulatory Effects as Macro Events
+
+Hazlitt analyzes how government intervention creates systematic distortions. Regulatory announcements (SEC enforcement actions, country-level bans or approvals, ETF approvals) create discontinuous information events in crypto. These are fundamentally different from the continuous information flow that EMH assumes. A sudden regulatory announcement creates a "shock" that:
+- Temporarily breaks the fair value model
+- Creates extreme moves that exceed any technical analysis framework
+- Resolves over subsequent sessions as market participants re-calibrate
+
+This is why our system filters out trading during major macro events (NFP, Fed decisions). The Hazlitt lesson: government intervention (via regulation or monetary policy) creates price distortions that are better avoided than traded.
+
+---
+
+## 10. Macroeconomic Forces and Crypto — 2024-2025 Evidence
+
+### The Dollar Correlation
+
+Bitcoin has historically exhibited negative correlation with the US Dollar Index (DXY). When the Fed hiked rates aggressively in 2022 (DXY surged to 114), BTC fell from $47,000 to $16,000. When rate hike expectations moderated in 2023 and DXY retreated, crypto recovered. S&P Global analysis confirms: "the dollar has been generally inversely correlated with prices of crypto assets."
+
+**Operational implication**: A DXY regime shift (sustained strengthening) is a macro headwind that increases the probability of failed long setups. This is a context variable our individual trade signals do not capture — a gap in the current system worth addressing in a future regime-detection module.
+
+### The Liquidity Cycle
+
+Frontiers in Blockchain (2025) research establishes that **global liquidity conditions** are a primary macroeconomic driver of crypto prices. The mechanism:
+- Low interest rates reduce opportunity cost of speculative assets → capital flows to crypto
+- Tightening liquidity removes the marginal buyer → crypto sells off first (most speculative)
+- Crypto leads traditional risk assets into both rallies and sell-offs by 1-3 weeks
+
+For our trading system, this creates a regime distinction:
+- **Risk-on, expanding liquidity**: Long bias justified; trend-following setups preferred
+- **Risk-off, contracting liquidity**: Short bias justified; mean reversion from premium zones with lower score thresholds should be considered
+
+### Reflexivity and Macro Feedback
+
+George Soros's reflexivity concept (absent from Malkiel, but consistent with Hazlitt's "unseen consequences") is particularly relevant: Bitcoin price appreciation attracts capital → hashrate increases → network effect strengthens → narrative improves → more capital. The positive feedback loop creates sustained trends that fundamentally differ from the random walk model.
+
+This reflexivity also operates downward: price declines trigger miner stress, reduce network security perception, trigger forced selling by overleveraged participants, and deepen the decline. These are not random walks — they are structural dynamics that create momentum persistence far beyond what normal markets exhibit.
+
+---
+
+## Synthesis: Where Our Bot's Edge Lives
+
+Combining the above analysis, our system's edge is concentrated in specific market inefficiencies:
+
+| Inefficiency | Mechanism | Our Signal |
+|---|---|---|
+| Retail stop clustering | Behavioral loss aversion creates predictable stop placement | Liquidity sweep detection |
+| Over-extension before structural breaks | FOMO-driven momentum into key levels | CHoCH on 15M confirming 4H bias change |
+| Order flow imbalance at OB zones | Institutional inventory built during retail stops | Order block mitigation entries |
+| Post-sweep mean reversion | Institutional buyers after liquidity grab | FVG fill + OB confluence |
+| Anchoring at structural levels | Retail anchors to recent highs/lows | BOS confirmation |
+| Funding rate extremes (macro) | Supply/demand imbalance in perpetuals | ATR filter + funding rate filter |
+
+The multi-factor confluence requirement (minimum 70/100) directly addresses Malkiel's curve-fitting critique: we require multiple independent signals to align simultaneously, reducing the probability of false signals from any single noisy indicator.
+
+---
+
+## Conclusions and Caveats
+
+**What makes our approach defensible against EMH:**
+1. We operate in a demonstrably inefficient market (crypto) vs. EMH's strongest domain (large-cap US equities)
+2. We compete against retail participants exhibiting documented behavioral biases, not professional arbitrageurs
+3. Our edge is multi-factor, systematic, and out-of-sample validated through calibration
+4. Position sizing protects against the fat-tail events that EMH-based models misprice
+
+**What EMH teaches us to respect:**
+1. Any single signal degrades over time as it becomes known — continuous re-calibration is not optional
+2. Transaction costs are real — our system must always evaluate net-of-cost returns
+3. Market regime changes can invalidate calibrated parameters — monitoring for non-stationarity is essential
+4. Humility: 90% of smart professional managers underperform. Overconfidence is the most common failure mode.
+
+**The Hazlitt lesson for system design:**
+Always ask: what is the "unseen" effect of each rule? The SL rule that seems like a constraint (max 3%) is actually protection against the unseen fat-tail event. The limit-order-only rule that seems like missed opportunities is protection against the unseen flash-crash fill. The confluence threshold of 70 that seems like missed trades is protection against the unseen string of false signals that would blow the drawdown limit.
+
+Robustness, not optimization, is the goal. The market's job is to find and exploit any brittle assumption in our system.
+
+---
+
+*Sources:*
+- [Malkiel, Random Walk Down Wall Street (Wikipedia)](https://en.wikipedia.org/wiki/A_Random_Walk_Down_Wall_Street)
+- [Random Walk Theory and Cryptocurrencies (CoinTelegraph)](https://cointelegraph.com/learn/articles/random-walk-theory-what-are-its-implications-for-cryptocurrencies)
+- [Cryptocurrency Market Efficiency Revisited (World Scientific, 2025)](https://www.worldscientific.com/doi/10.1142/S2424786325500215)
+- [Momentum Effects in Cryptocurrency Market (Springer, 2020)](https://link.springer.com/article/10.1007/s11408-020-00357-1)
+- [Cryptocurrency Anomalies and Economic Constraints (ScienceDirect, 2024)](https://www.sciencedirect.com/science/article/abs/pii/S1057521924001509)
+- [Market Efficiency of Bitcoin (Nature Scientific Reports, 2023)](https://www.nature.com/articles/s41598-023-31618-4)
+- [Momentum: Evidence and Insights 30 Years Later (Jegadeesh & Titman, 2023)](https://www.sciencedirect.com/science/article/abs/pii/S0927538X23002731)
+- [Roughly 90% of Active Equity Fund Managers Underperform (Apollo Academy)](https://www.apolloacademy.com/roughly-90-of-active-equity-fund-managers-underperform-their-index/)
+- [Fat Tails in Financial Returns (arXiv)](https://arxiv.org/pdf/1904.02567)
+- [Stylized Facts of High-Frequency Bitcoin (MDPI Fractal Fract, 2025)](https://www.mdpi.com/2504-3110/9/10/635)
+- [FOMO, Herding, Overconfidence in Crypto (Quality & Quantity, 2024)](https://link.springer.com/article/10.1007/s11135-023-01739-z)
+- [Crypto Market Microstructure (Cornell University, 2024)](https://stoye.economics.cornell.edu/docs/Easley_ssrn-4814346.pdf)
+- [BIS Working Paper: Crypto Carry (BIS, 2023)](https://www.bis.org/publ/work1087.pdf)
+- [Trend-following and Mean-reversion in Bitcoin (QuantPedia, 2024)](https://quantpedia.com/revisiting-trend-following-and-mean-reversion-strategies-in-bitcoin/)
+- [Are Crypto Markets Correlated with Macroeconomic Factors? (S&P Global, 2023)](https://www.spglobal.com/en/research-insights/special-reports/are-crypto-markets-correlated-with-macroeconomic-factors)
+- [Long-term Nexus of Macroeconomic Factors with Crypto (Frontiers, 2025)](https://www.frontiersin.org/journals/blockchain/articles/10.3389/fbloc.2025.1550720/full)
+- [Economics in One Lesson (Mises Institute)](https://mises.org/library/book/economics-one-lesson)
+- [Perpetual Futures and Cryptocurrency Market Quality (Cornell, 2025)](https://business.cornell.edu/article/2025/02/perpetual-futures-contracts-and-cryptocurrency/)
