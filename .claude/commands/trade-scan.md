@@ -1,28 +1,56 @@
 ---
-description: "Autonomous trading cycle for a SINGLE pair. Each terminal runs one pair. Scans, analyzes, generates signals (LONG and SHORT), executes trades, monitors positions. Run via /loop for continuous operation."
-argument-hint: "<PAIR> (e.g., BTCUSDT)"
+description: "Autonomous trading cycle. Scans one or all pairs, generates signals (LONG and SHORT), executes trades, monitors positions. Run via /loop for continuous operation."
+argument-hint: "<PAIR|all> (e.g., BTCUSDT or all)"
 ---
 
-# Trade Scan Cycle — Single Pair Focus
+# Trade Scan Cycle
 
-This command is designed for **one terminal = one pair**. Multiple terminals run in parallel, each focused on its own pair. This allows deep, concentrated analysis per asset.
+Supports two modes:
+- **Single pair**: `/loop 3m /trade-scan BTCUSDT` — focused on one pair
+- **All pairs**: `/loop 3m /trade-scan all` — scans all 8 watchlist pairs sequentially in one cycle
 
-**REQUIRED:** `$ARGUMENTS` must specify a trading pair (e.g., BTCUSDT). If empty, ask the user which pair to trade.
+**REQUIRED:** `$ARGUMENTS` must specify a trading pair (e.g., BTCUSDT) or `all` for full watchlist. If empty, ask the user.
+
+## Execution
+
+The full cycle is implemented in TypeScript at `src/scan.ts`. Run via:
+
+```
+npm run scan -- $ARGUMENTS --report
+```
+
+Supports multiple arguments:
+```
+npm run scan -- all --report          # all 8 pairs
+npm run scan -- BTCUSDT ETHUSDT       # specific pairs
+npm run scan -- SOLUSDT               # single pair
+```
+
+Each scan takes ~5-10s per pair, so all 8 complete within ~2 minutes per cycle.
+
+This single command performs everything documented below: risk check → regime detection → session check → news → multi-TF analysis → confluence scoring (LONG + SHORT) → slot management → trade execution across all accounts → position management → Telegram report.
 
 ## Architecture
 
+**Option A: One terminal, all pairs (recommended)**
+```
+Terminal: /loop 3m /trade-scan all
+```
+
+**Option B: Multiple terminals, one pair each**
 ```
 Terminal 1: /loop 3m /trade-scan BTCUSDT
 Terminal 2: /loop 3m /trade-scan ETHUSDT
-Terminal 3: /loop 3m /trade-scan SOLUSDT
-...each agent is independent, focused on ONE pair
+...
 ```
 
-Each agent independently:
-- Analyzes its assigned pair in both directions (LONG and SHORT)
+All terminals share state via Redis (positions, heat, locks, kill switch).
+
+Each scan cycle independently:
+- Analyzes assigned pair(s) in both directions (LONG and SHORT)
 - Executes trades on ALL accounts from `accounts.json`
 - Manages its own positions
-- Shares risk state (portfolio heat, DD) via cross-account checks
+- Shares risk state (portfolio heat, DD, position registry) via Redis
 
 ## Pre-Flight
 
@@ -136,17 +164,35 @@ This is where single-pair focus shines. Analyze `$ARGUMENTS` pair thoroughly:
 
 **If both LONG and SHORT qualify** → pick the higher confluence score. If tied, pick the direction matching regime bias.
 
+### 5b. Session & News Filters
+
+Before execution, apply additional filters:
+- **Dead zone (22:00-00:00 UTC)**: no new entries
+- **Funding window (±10 min of 00:00/08:00/16:00 UTC)**: no new entries
+- **High-impact news (2+ triggers in 30 min)**: block all entries
+- **Session quality**: Asian session signals are lower confidence (×0.85)
+
+### 5c. Slot Management — Position Replacement
+
+If all position slots are occupied:
+1. Get weakest open position (lowest confluence) from shared Redis registry
+2. Compare with new signal's confluence score
+3. If new signal > weakest position → close weakest, free slot, proceed
+4. If new signal ≤ weakest → skip ("all slots full")
+5. If slots are NOT full → skip this step entirely
+
+This ensures the portfolio always holds the strongest available setups.
+
 ### 6. Trade Execution
 
 If a signal passes (score >= 3, all filters pass):
 
 **a. Plan the trade:**
-- Entry: limit order at demand/supply zone boundary
-- SL: beyond liquidity pool, 1.5x ATR distance from entry
-- TP1 (50%): 2:1 R:R
-- TP2 (30%): 3:1 R:R
-- TP3 (20%): trailing stop at 1x ATR
-- Size: 1% risk (standard) or 1.5% (A+ = 4/4 confluence)
+- Entry: market order at current 3M candle close
+- SL: beyond liquidity pool, 1.5x ATR distance from entry (3-way: ATR/swing/micro-3M)
+- TP: **2:1 R:R** (realistic intraday target)
+- Trailing stop: activates at 1.5R, trails at 1x ATR
+- Size: 0.2% risk (standard) or 0.6% (A+ = 4/4 confluence)
 
 **b. Validate against portfolio:**
 - Total heat after entry < 5%?
@@ -234,9 +280,20 @@ Funding: {rate} | OI change: {pct}%
 - WebSocket disconnect → bybit-api auto-reconnects
 - If this pair's position was closed by another system → acknowledge and reset state
 
-## Cross-Terminal Awareness
+## Cross-Terminal Awareness (via Redis)
 
-Each terminal is independent but must be aware of total portfolio state:
+Each terminal is independent but shares state via Redis:
+- **Shared position registry** (`positions:open`): all terminals register their positions with symbol, direction, confluence score, entry price
+- **Portfolio heat map** (`heat:{account}`): cross-terminal risk tracking per symbol
+- **Position count**: before opening, check total open positions across ALL terminals
+- **Position replacement**: when slots are full (3 base / 5 for A+), compare new signal vs weakest existing — replace if stronger
 - Always check ALL open positions (not just this pair) when calculating DD and heat
 - If another terminal has positions that push total heat near limit → this terminal reduces or skips
 - Never open opposing positions on the same pair across accounts (cross-account hedging ban)
+
+## Intraday Trading Focus
+
+- **Prefer intraday exits** — target 2:1 R:R which is achievable within one session
+- **Max hold time: 72 hours** — positions older than 3 days are force-closed at market
+- **No unrealistic TPs** — don't set take-profits that require multi-day moves
+- Trailing stop at 1.5R locks in profit and lets runners continue without holding indefinitely

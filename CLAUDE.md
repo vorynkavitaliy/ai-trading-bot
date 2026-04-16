@@ -73,7 +73,8 @@ These rules are **absolute**. Violation = permanent account loss. No exceptions.
 | SL can be moved but NEVER removed | Edit-never-cancel principle |
 | Max total margin | **25%** of current balance |
 | Max notional exposure | **2x** initial balance |
-| Max simultaneous positions | **4-5** (2 base + 2-3 for A+ setups) |
+| Max simultaneous positions | **5** (3 base + 2 for A+ setups) |
+| Max position hold time | **72 hours** (prefer intraday, max 2-3 days) |
 
 ## Evaluation Phase Rules
 
@@ -130,26 +131,81 @@ Minimum **3 of 4** conditions must be met before entry:
 
 ## Risk Management Per Trade
 
-- Default risk: **1% of initial balance** per trade
-- Max risk: **1.5%** (only for A+ setups with 4/4 confluence)
-- SL placement: ATR-based (1.5x ATR below/above entry)
-- TP: minimum **2:1 R:R** (prefer 3:1)
+- Default risk: **0.2% of initial balance** per trade (conservative)
+- Max risk: **0.6%** (only for A+ setups with 4/4 confluence)
+- SL placement: ATR-based (1.0x ATR below/above entry)
+- TP: **1.5:1 R:R** (realistic intraday targets, no unreachable TPs)
 - Trailing stop: activate at 1.5R profit, trail at 1x ATR
 
 ## Position Management
 
-- Max **2 base positions** at any time
-- **2-3 additional slots** for A+ setups only (4/4 confluence + strong regime)
+- Max **3 base positions** at any time
+- **2 additional slots** for A+ setups only (4/4 confluence + strong regime)
 - Total heat (sum of all position risks) must stay under **5%**
 - Diversify across different sectors/directions — no concentration
 - All SL/TP must be server-side orders on Bybit (not client-side)
+- **Position replacement**: when all slots are full and a new signal has higher confluence than the weakest open position — close weakest, open new
+- **Max hold time**: 72 hours. Positions older than 3 days are force-closed at market. Prefer intraday exits.
 
-## Geopolitical Context
+## Inter-Terminal Communication
 
-- Every trading decision MUST consider current macro context
-- Triggers: Fed decisions, CPI data, BlackRock moves, major geopolitical events
-- Reduce exposure during high-impact events
-- No new entries 30 minutes before/after scheduled macro events
+All terminals share state via Redis:
+- **Shared position registry** (`positions:open`): each terminal registers/unregisters positions with symbol, direction, confluence, entry price
+- **Portfolio heat map** (`heat:{account}`): cross-terminal risk tracking
+- **Advisory locks** (`lock:{name}`): prevent race conditions between terminals
+- **Kill switch pub/sub**: instant broadcast to all terminals when DD limits hit
+
+This allows terminals to:
+- See positions opened by other terminals
+- Compare signal quality against existing positions
+- Make intelligent replacement decisions when slots are full
+
+## Trading Sessions (UTC)
+
+| Session | Hours (UTC) | Quality | Notes |
+|---|---|---|---|
+| Asian | 00:00 – 07:00 | ×0.85 | Accumulation, lower quality signals |
+| London | 07:00 – 13:00 | ×1.0 | Manipulation phase, stop hunts |
+| NY+London overlap | 13:00 – 17:00 | ×1.1 | **Best quality**, institutional flow |
+| New York | 17:00 – 22:00 | ×1.0 | Distribution phase |
+| Dead zone | 22:00 – 00:00 | ×0.7 | **No new entries** |
+
+- **No entries during dead zone** (22:00–00:00 UTC)
+- **No entries ±10 min around funding rate windows** (00:00, 08:00, 16:00 UTC)
+- Asian session signals are lower confidence — expect more false breakouts
+
+## Geopolitical Context & News
+
+Every trading decision MUST consider current macro context.
+
+### News Sources (auto-fetched every 15 min)
+
+| Source | Type | What it gives |
+|---|---|---|
+| CoinDesk RSS | RSS | Crypto-specific news, market analysis |
+| CoinTelegraph RSS | RSS | Crypto news, regulatory updates |
+| Google News RSS | RSS | Broad coverage: crypto + macro + geopolitics |
+| CryptoPanic API | API | Real-time crypto news with community sentiment |
+| Fear & Greed Index | API | Market sentiment (0-100 scale) |
+
+### News Rules — Decisions, Not Blocks
+
+News **does NOT block** entries. Instead, news **adjusts decisions**:
+
+| Situation | Effect |
+|---|---|
+| High-impact news (3+ triggers) | Risk × 0.25 (quarter size) |
+| Medium-impact news (1-2 triggers) | Risk × 0.5 (half size) |
+| Fear & Greed ≤ 15 (extreme fear) | Additional × 0.5 |
+| risk-off bias (war, crash, hack) | Block LONG signals, allow SHORT |
+| risk-on bias (approval, inflow) | Block SHORT signals, allow LONG |
+| No significant news | Risk × 1.0 (normal) |
+
+**Philosophy:** Markets don't stop after 30 minutes. News creates a persistent environment — the system trades WITH the news direction, at adjusted size, not against it.
+
+### High-Impact Keywords (auto-detected)
+
+`fed, fomc, rate decision, rate hike/cut, powell, cpi, inflation, nfp, blackrock, etf approval/outflow, sec, lawsuit, hack, exploit, collapse, bankruptcy, liquidation, war, sanction, tariff, iran, blockade, missile, nuclear, peace talks, ceasefire, default, debt ceiling`
 
 ## Telegram Reports
 

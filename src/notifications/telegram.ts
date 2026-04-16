@@ -3,23 +3,28 @@ import { PositionInfo, SubAccount, WalletInfo } from '../core/types';
 
 export class TelegramNotifier {
   private bot: Telegraf;
-  private chatId: string;
+  private chatIds: string[];
 
+  /** chatId may be a single id or comma-separated list ("123,456,789") */
   constructor(token: string, chatId: string) {
     this.bot = new Telegraf(token);
-    this.chatId = chatId;
+    this.chatIds = chatId.split(',').map((s) => s.trim()).filter(Boolean);
+    if (this.chatIds.length === 0) throw new Error('TELEGRAM_CHAT_ID is empty');
   }
 
   private ts(): string {
     return new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
   }
 
+  /** Fan out to every chat in parallel — one failure does not block the others */
   private async send(text: string): Promise<void> {
-    try {
-      await this.bot.telegram.sendMessage(this.chatId, text, { parse_mode: 'HTML' });
-    } catch (err: any) {
-      console.error('[Telegram] Send failed:', err.message);
-    }
+    await Promise.all(this.chatIds.map(async (id) => {
+      try {
+        await this.bot.telegram.sendMessage(id, text, { parse_mode: 'HTML' });
+      } catch (err: any) {
+        console.error(`[Telegram] Send to ${id} failed:`, err.message);
+      }
+    }));
   }
 
   // ═══════════════════════════════════════════
@@ -55,7 +60,7 @@ export class TelegramNotifier {
       `📊 R:R: ${params.rr}\n` +
       `📐 Размер: ${params.qty} | Риск: ${params.riskPct}% ($${params.riskUsd})\n` +
       `\n` +
-      `🔗 Confluence: ${params.confluence}/4 | Режим: ${params.regime}\n` +
+      `🔗 Confluence: ${params.confluence} | Режим: ${params.regime}\n` +
       `👥 Аккаунтов: ${params.accounts}\n` +
       `\n` +
       `──────────────\n` +
@@ -87,6 +92,7 @@ export class TelegramNotifier {
       trailing: 'трейлинг-стопу',
       manual: 'ручному закрытию',
       breakeven: 'безубытку',
+      expired: '⏰ истечению макс. времени удержания',
       kill_switch: '⚠️ KILL SWITCH (drawdown)',
     };
 
