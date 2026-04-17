@@ -28,6 +28,8 @@ export interface ExecutionReport {
   success: boolean;
   orderId?: string;
   qty: number;
+  /** Formatted qty per instrument precision — use for display, not for math. */
+  qtyString?: string;
   riskUsd: number;
   reason?: string;
 }
@@ -154,7 +156,7 @@ export async function executeAcrossAccounts(ctx: ExecuteContext): Promise<Execut
         payload: { tradeId, orderId: res.result?.orderId },
       });
 
-      return { account: sub.label, success: true, orderId: res.result?.orderId, qty: sizing.qty, riskUsd: sizing.riskUsd };
+      return { account: sub.label, success: true, orderId: res.result?.orderId, qty: sizing.qty, qtyString: sizing.qtyString, riskUsd: sizing.riskUsd };
     } catch (err: any) {
       await AuditRepo.log({
         level: 'error', source: 'executor', event: 'order_exception',
@@ -205,8 +207,8 @@ export async function executeAcrossAccounts(ctx: ExecuteContext): Promise<Execut
       rr: ctx.plan.rr.toFixed(2),
       riskPct: (ctx.signal.confluence >= 7 ? config.trade.maxRiskPct : config.trade.defaultRiskPct).toFixed(2),
       riskUsd: totalRisk.toFixed(2),
-      qty: succeeded.map((r) => r.qty).join(' / '),
-      confluence: `${ctx.signal.confluence}/4`,
+      qty: succeeded.map((r) => r.qtyString ?? r.qty.toFixed(4)).join(' / '),
+      confluence: `${ctx.signal.confluence}/8`,
       regime: ctx.regimeLabel,
       accounts: succeeded.length,
     });
