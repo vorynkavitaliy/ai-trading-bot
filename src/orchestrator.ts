@@ -655,10 +655,23 @@ export class Bot {
     });
   }
 
-  // ─── Periodic full report (every 30 min cron) ───────────────────────
+  // ─── Periodic full report (rate-limited to 1/hour) ─────────────────
+  //
+  // Callers may request a full report every cycle (e.g. /trade-scan --report),
+  // but we only actually send to Telegram once per hour. Trade events, SL hits,
+  // and risk alerts fire independently and are NOT rate-limited.
 
   async fullReport(): Promise<void> {
     if (!this.telegram) return;
+
+    const now = Date.now();
+    const lastSent = await cache.getLastFullReport();
+    if (lastSent && now - lastSent < 60 * 60 * 1000) {
+      const minsAgo = Math.round((now - lastSent) / 60000);
+      console.log(`[fullReport] skipped — last sent ${minsAgo}m ago (rate limit: 1/hour)`);
+      return;
+    }
+
     try {
       const wallets = await this.bybit.getAllWallets();
       const allPos = await this.bybit.getAllPositions();
@@ -714,6 +727,7 @@ export class Bot {
           itemSummaries: news.items.slice(0, 5).map((i) => i.title.slice(0, 80)),
         },
       });
+      await cache.setLastFullReport(now);
     } catch (err: any) {
       console.error('[fullReport]', err);
     }

@@ -44,6 +44,7 @@ const KEYS = {
   haltedAccount: (account: string) => `halted:${account}`,
   positions: 'positions:open',
   pendingOrders: 'orders:pending',
+  telegramLastFullReport: 'telegram:last_full_report',
 };
 
 function utcDay(): string {
@@ -220,6 +221,21 @@ export class Cache {
     return Object.values(raw).map((v) => {
       try { return JSON.parse(v); } catch { return null; }
     }).filter(Boolean) as PendingOrder[];
+  }
+
+  // ─── Telegram rate limits ───
+
+  async getLastFullReport(): Promise<number | null> {
+    const v = await this.client.get(KEYS.telegramLastFullReport);
+    return v ? Number(v) : null;
+  }
+
+  async setLastFullReport(ts: number): Promise<void> {
+    if (this.client instanceof InMemoryFallback) {
+      await this.client.set(KEYS.telegramLastFullReport, String(ts), 'EX', 7200);
+    } else {
+      await (this.client as Redis).set(KEYS.telegramLastFullReport, String(ts), 'EX', 7200);
+    }
   }
 
   // ─── Pub/sub: kill switch broadcasts ───
