@@ -1,14 +1,12 @@
 ---
 name: Active Watchlist
 description: Specific setups I am hunting. Triggered or invalidated setups are removed.
-updated: 2026-04-17T00:00:00Z
+updated: 2026-04-17T09:00:00Z
 ---
 
 # Active Watchlist
 
 > Setups I am waiting for. Each has a trigger condition and an invalidation. When a setup either triggers or invalidates, I remove it from this list.
->
-> **This is not a wish list.** Every entry has a specific, testable condition — not "BTC might break out." A valid entry says "BTC 4H sweep of 67,200 liquidity + reclaim above 68,000 within 8 hours → long."
 
 ---
 
@@ -32,12 +30,16 @@ updated: 2026-04-17T00:00:00Z
 
 ## Active Setups
 
-*No active setups. Watchlist is empty.*
+*Empty — BNB triggered 11:01 UTC and moved to active position.*
 
 ---
 
 ## Recently Removed (last 24h)
 
+- **BNBUSDT LONG** — TRIGGERED 2026-04-17 11:01:34 UTC. Fill: 629.9, SL 626.2, TP 635.5, R:R 1.51. Trade file: `Trades/2026-04-17_BNBUSDT_long.md`. Thesis: `Thesis/BNBUSDT.md`.
+
 *Keep here briefly for postmortem context, then archive.*
 
-- None
+- **AVAXUSDT LONG** — removed twice today: 08:18 (first flicker), re-added 08:24, removed again 08:30 (second flicker). 4th flicker at 09:00 confirms instability. Setup will not re-add without 3+ consecutive 6/8 cycles.
+- **LINKUSDT LONG** — removed 2026-04-17 09:00 UTC. R:R dropped <1.0 for 3 consecutive cycles (0.95 → 0.72 → 0.76) — own invalidation rule triggered. SHORT score also climbed to 4/8 (proactive-exit equivalent). Setup dead without fresh structural reset. Process outcome: no chase, no loss.
+- **DOGEUSDT LONG** — removed 2026-04-17 10:45 UTC. Confluence dropped 6/8 → 5/8 per own invalidation rule. R:R trajectory today 1.48→1.44→1.46→1.40 never crossed the 1.5 trigger before confluence broke. Outcome: zero position, zero loss — R:R floor + confluence floor both did their job. Re-add only on fresh structural reset (not on score flicker back to 6/8).
