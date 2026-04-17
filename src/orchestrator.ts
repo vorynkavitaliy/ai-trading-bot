@@ -91,7 +91,7 @@ export class Bot {
 
       // 2. Pull klines (parallel) — 4H bias, 1H structure, 15M setup, 3M entry trigger
       const [c4h, c1h, c15m, c3m] = await Promise.all([
-        this.bybit.getKlines(symbol, '240', 250),
+        this.bybit.getKlines(symbol, '240', 200),
         this.bybit.getKlines(symbol, '60', 200),
         this.bybit.getKlines(symbol, '15', 200),
         this.bybit.getKlines(symbol, '3', 200),
@@ -294,7 +294,7 @@ export class Bot {
 
       // 2. Pull klines (parallel)
       const [c4h, c1h, c15m, c3m] = await Promise.all([
-        this.bybit.getKlines(symbol, '240', 250),
+        this.bybit.getKlines(symbol, '240', 200),
         this.bybit.getKlines(symbol, '60', 200),
         this.bybit.getKlines(symbol, '15', 200),
         this.bybit.getKlines(symbol, '3', 200),
