@@ -191,11 +191,15 @@ export class Bot {
         return { signal, executed: false, skipReason: 'Near funding rate window (±10 min)' };
       }
 
-      // 9. Block re-entry if already have a position on this symbol
+      // 9. Block re-entry if already have a position OR a pending limit on this symbol
       const allPositions = await this.bybit.getAllPositions(symbol);
       const hasExisting = allPositions.some((a) => a.positions.length > 0);
       if (hasExisting) {
         return { signal, executed: false, skipReason: 'position already open' };
+      }
+      const pending = await this.hasPendingEntryOrder(symbol);
+      if (pending.blocked) {
+        return { signal, executed: false, skipReason: pending.reason };
       }
 
       // 10. Slot management — check if we need to replace a weaker position
@@ -347,11 +351,15 @@ export class Bot {
         return { symbol, signal, skipReason: 'Near funding rate window' };
       }
 
-      // 9. Already have position on this symbol
+      // 9. Already have position OR pending limit on this symbol
       const allPositions = await this.bybit.getAllPositions(symbol);
       const hasExisting = allPositions.some((a) => a.positions.length > 0);
       if (hasExisting) {
         return { symbol, signal, skipReason: 'position already open' };
+      }
+      const pending = await this.hasPendingEntryOrder(symbol);
+      if (pending.blocked) {
+        return { symbol, signal, skipReason: pending.reason };
       }
 
       // 10. Plan trade
@@ -460,6 +468,42 @@ export class Bot {
   }
 
   // ─── Pending limit order monitoring ──────────────────────────────
+
+  /**
+   * Is there already a pending entry order (limit, not SL/TP) on this symbol?
+   *
+   * Blocks duplicate submission that can happen because `getPositions()` does
+   * NOT see GTC limits sitting in the order book. Two fast consecutive scans
+   * could each submit the same limit before the monitor ever fires.
+   *
+   * Checks Redis (fast path — what we registered) and Bybit (authoritative —
+   * catches Redis flushes or cross-terminal races).
+   */
+  private async hasPendingEntryOrder(symbol: string): Promise<{ blocked: boolean; reason?: string }> {
+    const local = await cache.getPendingOrder(symbol);
+    if (local) {
+      const ageMin = Math.round((Date.now() - local.placedAt) / 60_000);
+      return { blocked: true, reason: `pending limit @ ${local.limitPrice} (age ${ageMin}m)` };
+    }
+
+    // Defensive: Redis may be flushed or order placed outside our path.
+    // Active orders exclude SL/TP (those attach to positions) so any match = live entry limit.
+    try {
+      const subs = this.accounts.getAllSubAccounts();
+      const lists = await Promise.all(subs.map((s) => this.bybit.getOpenOrders(s, symbol)));
+      const live = lists.flat().filter((o: any) => {
+        const type = String(o.stopOrderType ?? o.orderType ?? '').toLowerCase();
+        // SL/TP carry non-empty stopOrderType. Entry limits are plain Limit/Market.
+        return !o.stopOrderType && (type === 'limit' || type === 'market');
+      });
+      if (live.length > 0) {
+        return { blocked: true, reason: `Bybit has live entry order (Redis-Bybit divergence)` };
+      }
+    } catch (err: any) {
+      console.warn(`[hasPendingEntryOrder] Bybit check failed for ${symbol}: ${err.message}`);
+    }
+    return { blocked: false };
+  }
 
   /**
    * Check all pending limit orders. Cancel if:
