@@ -31,6 +31,46 @@ export class TelegramNotifier {
   //  TRADE EVENTS
   // ═══════════════════════════════════════════
 
+  /**
+   * Limit order placed (not yet filled). Less prominent than tradeOpened.
+   * Fires when orchestrator places a limit order awaiting pullback.
+   */
+  async limitPlaced(params: {
+    pair: string;
+    direction: 'LONG' | 'SHORT';
+    limitPrice: string;
+    sl: string;
+    tp: string;
+    rr: string;
+    confluence: string;
+    regime: string;
+    accounts: number;
+    maxAgeMin?: number;
+  }): Promise<void> {
+    const icon = params.direction === 'LONG' ? '📈' : '📉';
+    const ageCap = params.maxAgeMin ?? 45;
+    await this.send(
+      `🤖 <b>Claude Trading Bot</b>\n` +
+      `\n` +
+      `📝 Лимит размещён (ждёт fill'а):\n` +
+      `──────────────\n` +
+      `\n` +
+      `${icon} <b>${params.direction} лимит</b> (${params.pair})\n` +
+      `\n` +
+      `💰 Лимит: <code>${params.limitPrice}</code>\n` +
+      `🛑 SL (после fill'а): <code>${params.sl}</code>\n` +
+      `🎯 TP (после fill'а): <code>${params.tp}</code>\n` +
+      `📊 R:R: ${params.rr}\n` +
+      `⏱ Auto-cancel: ${ageCap}m если не филлится\n` +
+      `\n` +
+      `🔗 Confluence: ${params.confluence} | Режим: ${params.regime}\n` +
+      `👥 Аккаунтов: ${params.accounts}\n` +
+      `\n` +
+      `──────────────\n` +
+      `🕐 ${this.ts()}`
+    );
+  }
+
   async tradeOpened(params: {
     pair: string;
     direction: 'LONG' | 'SHORT';

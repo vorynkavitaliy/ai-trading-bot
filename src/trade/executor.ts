@@ -197,21 +197,38 @@ export async function executeAcrossAccounts(ctx: ExecuteContext): Promise<Execut
 
   if (ctx.telegram && succeeded.length > 0) {
     const totalRisk = succeeded.reduce((s, r) => s + r.riskUsd, 0);
-    const entryLabel = ctx.plan.limitEntry ? `${fmtPrice(ctx.plan.limitEntry, ctx.instrument.tickSize)} (limit)` : fmtPrice(ctx.plan.entry, ctx.instrument.tickSize);
-    await ctx.telegram.tradeOpened({
-      pair: ctx.plan.symbol,
-      direction: ctx.plan.direction === 'Long' ? 'LONG' : 'SHORT',
-      entry: entryLabel,
-      sl: fmtPrice(ctx.plan.stopLoss, ctx.instrument.tickSize),
-      tp: fmtPrice(ctx.plan.takeProfit, ctx.instrument.tickSize),
-      rr: ctx.plan.rr.toFixed(2),
-      riskPct: (ctx.signal.confluence >= 7 ? config.trade.maxRiskPct : config.trade.defaultRiskPct).toFixed(2),
-      riskUsd: totalRisk.toFixed(2),
-      qty: succeeded.map((r) => r.qtyString ?? r.qty.toFixed(4)).join(' / '),
-      confluence: `${ctx.signal.confluence}/8`,
-      regime: ctx.regimeLabel,
-      accounts: succeeded.length,
-    });
+    if (ctx.plan.limitEntry) {
+      // Limit order placed — position NOT yet filled. Use less-prominent notification.
+      // Real "tradeOpened" will fire from monitorPendingOrders when fill detected.
+      await ctx.telegram.limitPlaced({
+        pair: ctx.plan.symbol,
+        direction: ctx.plan.direction === 'Long' ? 'LONG' : 'SHORT',
+        limitPrice: fmtPrice(ctx.plan.limitEntry, ctx.instrument.tickSize),
+        sl: fmtPrice(ctx.plan.stopLoss, ctx.instrument.tickSize),
+        tp: fmtPrice(ctx.plan.takeProfit, ctx.instrument.tickSize),
+        rr: ctx.plan.rr.toFixed(2),
+        confluence: `${ctx.signal.confluence}/8`,
+        regime: ctx.regimeLabel,
+        accounts: succeeded.length,
+        maxAgeMin: 45,
+      });
+    } else {
+      // Market order — fill is immediate, position is real.
+      await ctx.telegram.tradeOpened({
+        pair: ctx.plan.symbol,
+        direction: ctx.plan.direction === 'Long' ? 'LONG' : 'SHORT',
+        entry: fmtPrice(ctx.plan.entry, ctx.instrument.tickSize),
+        sl: fmtPrice(ctx.plan.stopLoss, ctx.instrument.tickSize),
+        tp: fmtPrice(ctx.plan.takeProfit, ctx.instrument.tickSize),
+        rr: ctx.plan.rr.toFixed(2),
+        riskPct: (ctx.signal.confluence >= 7 ? config.trade.maxRiskPct : config.trade.defaultRiskPct).toFixed(2),
+        riskUsd: totalRisk.toFixed(2),
+        qty: succeeded.map((r) => r.qtyString ?? r.qty.toFixed(4)).join(' / '),
+        confluence: `${ctx.signal.confluence}/8`,
+        regime: ctx.regimeLabel,
+        accounts: succeeded.length,
+      });
+    }
   }
 
   return reports;

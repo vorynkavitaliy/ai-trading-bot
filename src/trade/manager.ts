@@ -123,6 +123,8 @@ export class PositionManager {
         feesUsd: Number(match.cumExecFee ?? 0),
       });
 
+      await cache.setRecentClose(symbol, open.direction as 'Long' | 'Short');
+
       return {
         account: sub.label,
         symbol,
@@ -217,6 +219,7 @@ export class PositionManager {
       });
 
       await cache.clearHeat(sub.label, p.symbol);
+      await cache.setRecentClose(p.symbol, open.direction as 'Long' | 'Short');
 
       return {
         account: sub.label, symbol: p.symbol,
@@ -280,6 +283,7 @@ export class PositionManager {
       });
 
       await cache.clearHeat(sub.label, p.symbol);
+      await cache.setRecentClose(p.symbol, open.direction as 'Long' | 'Short');
 
       return {
         account: sub.label,

@@ -201,6 +201,11 @@ export class Bot {
       if (pending.blocked) {
         return { signal, executed: false, skipReason: pending.reason };
       }
+      // Revenge-re-entry guard: same-direction re-entry blocked for 2h after a close.
+      const cooldown = await cache.hasRecentClose(symbol, signal.direction as 'Long' | 'Short');
+      if (cooldown.blocked) {
+        return { signal, executed: false, skipReason: `recent ${signal.direction} close (${cooldown.ageMin}m ago, cooldown 120m)` };
+      }
 
       // 10. Slot management — check if we need to replace a weaker position
       //     Reuse isAplus computed above for the R:R exception.
@@ -361,6 +366,11 @@ export class Bot {
       if (pending.blocked) {
         return { symbol, signal, skipReason: pending.reason };
       }
+      // Revenge-re-entry guard: same-direction re-entry blocked for 2h after a close.
+      const cooldown = await cache.hasRecentClose(symbol, signal.direction as 'Long' | 'Short');
+      if (cooldown.blocked) {
+        return { symbol, signal, skipReason: `recent ${signal.direction} close (${cooldown.ageMin}m ago, cooldown 120m)` };
+      }
 
       // 10. Plan trade
       const last = (c3m as Candle[])[c3m.length - 1].close;
@@ -391,6 +401,10 @@ export class Bot {
   async scanAll(symbols: string[], opts: { reportTelegram?: boolean } = {}): Promise<{
     symbol: string; signal: Signal | null; executed: boolean; skipReason?: string; plan?: any;
   }[]> {
+    // Phase 0: Monitor pending limit orders (cancel stale past maxAge, detect fills)
+    // Critical: scanAll runs via /trade-scan all — without this, stale limits age indefinitely.
+    await this.monitorPendingOrders();
+
     // Phase 1: Analyze ALL pairs in parallel
     const analyses = await Promise.all(symbols.map((s) => this.analyzePair(s, opts)));
 
@@ -535,6 +549,27 @@ export class Bot {
           terminal: order.symbol,
         });
         console.log(`[Orders] ${order.symbol} limit filled → position registered`);
+
+        // Fire real tradeOpened notification — limitPlaced was sent on placement.
+        if (this.telegram) {
+          const totalQty = positions.flatMap((a) => a.positions).reduce((s, p: any) => s + Number(p.size ?? 0), 0);
+          const firstPos = positions.flatMap((a) => a.positions).find((p: any) => Number(p.size) > 0);
+          const subCount = positions.filter((a) => a.positions.some((p: any) => Number(p.size) > 0)).length;
+          await this.telegram.tradeOpened({
+            pair: order.symbol,
+            direction: order.direction === 'Long' ? 'LONG' : 'SHORT',
+            entry: String((firstPos as any)?.entryPrice ?? order.limitPrice),
+            sl: String((firstPos as any)?.stopLoss ?? order.stopLoss),
+            tp: String((firstPos as any)?.takeProfit ?? order.takeProfit),
+            rr: '—',
+            riskPct: '—',
+            riskUsd: '—',
+            qty: String(totalQty),
+            confluence: `${order.confluence}/8`,
+            regime: order.regime,
+            accounts: subCount,
+          });
+        }
         continue;
       }
 

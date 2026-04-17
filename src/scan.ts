@@ -72,8 +72,14 @@ async function main() {
         printResult(r.symbol, r);
       }
 
-      if (executed.length) {
-        console.log(`\n🎯 Исполнено: ${executed.map((r) => r.symbol).join(', ')}`);
+      // Distinguish actual market fills from limit-placements (which aren't filled yet).
+      const filled = executed.filter((r) => !r.plan?.limitEntry);
+      const placed = executed.filter((r) => r.plan?.limitEntry);
+      if (filled.length) {
+        console.log(`\n🎯 Исполнено (market fill): ${filled.map((r) => r.symbol).join(', ')}`);
+      }
+      if (placed.length) {
+        console.log(`\n📝 Лимиты размещены (ждут fill'а): ${placed.map((r) => r.symbol).join(', ')}`);
       }
     }
 

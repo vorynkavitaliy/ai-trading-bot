@@ -45,6 +45,8 @@ const KEYS = {
   positions: 'positions:open',
   pendingOrders: 'orders:pending',
   telegramLastFullReport: 'telegram:last_full_report',
+  /** Recent-close cooldown: blocks same-direction re-entry within TTL. */
+  recentClose: (symbol: string, direction: string) => `recentClose:${symbol}:${direction}`,
 };
 
 function utcDay(): string {
@@ -221,6 +223,33 @@ export class Cache {
     return Object.values(raw).map((v) => {
       try { return JSON.parse(v); } catch { return null; }
     }).filter(Boolean) as PendingOrder[];
+  }
+
+  // ─── Recent-close cooldown ───
+  // After a position closes, block same-direction re-entry for a TTL window.
+  // Prevents revenge re-entries (e.g. XRP scanner re-triggers immediately after a loss).
+  // Direction-aware: a LONG close does NOT block a SHORT entry — only same-direction.
+
+  async setRecentClose(symbol: string, direction: 'Long' | 'Short', ttlMinutes = 120): Promise<void> {
+    const key = KEYS.recentClose(symbol, direction);
+    const value = String(Date.now());
+    if (this.client instanceof InMemoryFallback) {
+      await this.client.set(key, value);
+    } else {
+      await (this.client as Redis).set(key, value, 'EX', ttlMinutes * 60);
+    }
+  }
+
+  async hasRecentClose(symbol: string, direction: 'Long' | 'Short'): Promise<{ blocked: boolean; ageMin?: number }> {
+    const key = KEYS.recentClose(symbol, direction);
+    const v = await this.client.get(key);
+    if (!v) return { blocked: false };
+    const ageMin = Math.round((Date.now() - Number(v)) / 60_000);
+    return { blocked: true, ageMin };
+  }
+
+  async clearRecentClose(symbol: string, direction: 'Long' | 'Short'): Promise<void> {
+    await this.client.del(KEYS.recentClose(symbol, direction));
   }
 
   // ─── Telegram rate limits ───
