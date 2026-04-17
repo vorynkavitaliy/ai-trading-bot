@@ -45,12 +45,12 @@ Every cycle, I score the OPPOSITE direction on my open position. If the opposite
 - Safety gate: only applies when position is < 1R in profit. Above 1R, trailing handles it.
 - This is the "would I open this right now?" test. If the answer is no, I close. *(ref: `CLAUDE.md` → Proactive Position Health Check)*
 
-### 5. Time Stop (72-hour limit)
+### 5. Time Stop (48-hour limit)
 
-HyroTrader rule + my own intraday preference. A position that has not resolved in 72 hours has failed to express its edge.
-- Force-close at market at T+72h.
-- Most of my trades resolve intraday (< 24h). Multi-day holds are the exception.
-- If I find myself frequently hitting 72h limits, my entries are too early (before structure confirms).
+My own discipline (tighter than HyroTrader's 72h cap). A position that has not resolved in 48 hours has failed to express its edge.
+- Force-close at market at T+48h.
+- Most of my trades resolve intraday (< 24h). Multi-day holds are the exception, not the norm.
+- If I find myself frequently hitting the 48h limit, my entries are too early (before structure confirms).
 
 ### 6. Strategic Close (LLM / portfolio decision)
 
@@ -102,7 +102,7 @@ Each cycle, for each open position, I answer:
 1. **I never remove a stop-loss.** Only tighten or trail.
 2. **I never turn a winner into a loser.** Once price prints +1.5R, SL moves to breakeven. Non-negotiable.
 3. **I never average down.** If I'm wrong, I'm smaller, not bigger.
-4. **I never hold past 72 hours.** Not one more cycle.
+4. **I never hold past 48 hours.** Not one more cycle.
 5. **I never close in panic.** If my hand is reaching for the close button because "it feels bad," I first write one sentence: "I am closing because _____." If I can't finish that sentence with a rule from this file, I don't close.
 6. **I never skip the postmortem.** Every closed trade gets a `Postmortem/` file. Wins AND losses.
 

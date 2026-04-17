@@ -97,7 +97,7 @@ export class RiskEngine {
       return { ok: false, reason: a.reason, assessment: a };
     }
 
-    // Position count cap — 3 base, 5 for A+ (4/4 confluence)
+    // Position count cap — 3 base, 5 for A+ (7-8/8 confluence)
     const positions = await this.bybit.getPositions(sub);
     const maxAllowed = opts.isAplus ? config.trade.maxPositions : 3;
     if (positions.length >= maxAllowed) {

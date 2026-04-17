@@ -195,7 +195,7 @@ These rules are **absolute**. Violation = permanent account loss. No exceptions.
 | Max total margin | **25%** of current balance |
 | Max notional exposure | **2x** initial balance |
 | Max simultaneous positions | **5** (3 base + 2 for A+ setups) |
-| Max position hold time | **72 hours** (prefer intraday, max 2-3 days) |
+| Max position hold time | **48 hours** (prefer intraday, max 2 days) |
 
 ## Evaluation Phase Rules
 
@@ -316,7 +316,7 @@ For BTCUSDT itself — BTC context is not applied (self-referencing).
 - Diversify across different sectors/directions — no concentration
 - All SL/TP must be server-side orders on Bybit (not client-side)
 - **Position replacement**: when all slots are full and a new signal has higher confluence than the weakest open position — close weakest, open new
-- **Max hold time**: 72 hours. Positions older than 3 days are force-closed at market. Prefer intraday exits.
+- **Max hold time**: 48 hours. Positions older than 2 days are force-closed at market. Prefer intraday exits.
 - **Proactive early exit**: every cycle re-evaluates open positions — "would I still open this trade now?"
 - **Limit orders at OB levels**: when order block is below/above current price, place limit for better entry
 - **Pending order monitoring**: every cycle checks limits — cancel if expired (45 min) or structure invalidated (BOS against)

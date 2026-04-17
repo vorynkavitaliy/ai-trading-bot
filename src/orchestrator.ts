@@ -145,7 +145,7 @@ export class Bot {
           regime: signal.regime,
           scores: { long: signal.long, short: signal.short },
           executed: false,
-          rejectReason: signal.rejectReason ?? `confluence ${signal.confluence}/4 < ${config.trade.minConfluence}`,
+          rejectReason: signal.rejectReason ?? `confluence ${signal.confluence}/8 < ${config.trade.minConfluence}`,
         });
         // Only report on risk warnings. Position open/close/trail already emit
         // their own Telegram events — don't spam a full scan report each cycle.
@@ -204,15 +204,15 @@ export class Bot {
         // All slots full — try to replace weakest if new signal is stronger
         const weakest = await cache.getWeakestPosition();
         if (!weakest || signal.confluence <= weakest.confluence) {
-          return { signal, executed: false, skipReason: `All ${openCount} slots full, new signal (${signal.confluence}/4) not stronger than weakest (${weakest?.confluence ?? '?'}/4)` };
+          return { signal, executed: false, skipReason: `All ${openCount} slots full, new signal (${signal.confluence}/8) not stronger than weakest (${weakest?.confluence ?? '?'}/8)` };
         }
 
         // New signal is stronger — close the weakest position to free a slot
-        console.log(`[Orchestrator] Replacing ${weakest.symbol} (${weakest.confluence}/4) with ${symbol} (${signal.confluence}/4)`);
+        console.log(`[Orchestrator] Replacing ${weakest.symbol} (${weakest.confluence}/8) with ${symbol} (${signal.confluence}/8)`);
         await this.closePositionForReplacement(weakest.symbol);
         await AuditRepo.log({
           level: 'info', source: 'orchestrator', event: 'position_replaced',
-          symbol, message: `Closed ${weakest.symbol} (${weakest.confluence}/4) → opening ${symbol} (${signal.confluence}/4)`,
+          symbol, message: `Closed ${weakest.symbol} (${weakest.confluence}/8) → opening ${symbol} (${signal.confluence}/8)`,
         });
       }
 
@@ -329,7 +329,7 @@ export class Bot {
           symbol, direction: signal.direction, confluence: signal.confluence,
           regime: signal.regime, scores: { long: signal.long, short: signal.short },
           executed: false,
-          rejectReason: signal.rejectReason ?? `confluence ${signal.confluence}/4 < ${config.trade.minConfluence}`,
+          rejectReason: signal.rejectReason ?? `confluence ${signal.confluence}/8 < ${config.trade.minConfluence}`,
         });
         return { symbol, signal, skipReason: signal.rejectReason ?? 'low confluence' };
       }
@@ -406,16 +406,16 @@ export class Bot {
         if (!weakest || a.signal!.confluence <= weakest.confluence) {
           results.push({
             symbol: a.symbol, signal: a.signal, executed: false,
-            skipReason: `Slots full (${openCount}/${maxAllowed}), not stronger than weakest (${weakest?.confluence ?? '?'}/4)`,
+            skipReason: `Slots full (${openCount}/${maxAllowed}), not stronger than weakest (${weakest?.confluence ?? '?'}/8)`,
           });
           continue;
         }
         // Replace weakest
-        console.log(`[scanAll] Replacing ${weakest.symbol} (${weakest.confluence}/4) with ${a.symbol} (${a.signal!.confluence}/4)`);
+        console.log(`[scanAll] Replacing ${weakest.symbol} (${weakest.confluence}/8) with ${a.symbol} (${a.signal!.confluence}/8)`);
         await this.closePositionForReplacement(weakest.symbol);
         await AuditRepo.log({
           level: 'info', source: 'orchestrator', event: 'position_replaced',
-          symbol: a.symbol, message: `Closed ${weakest.symbol} (${weakest.confluence}/4) → ${a.symbol} (${a.signal!.confluence}/4)`,
+          symbol: a.symbol, message: `Closed ${weakest.symbol} (${weakest.confluence}/8) → ${a.symbol} (${a.signal!.confluence}/8)`,
         });
       }
 

@@ -62,7 +62,7 @@ fees_usd: null
 - **TP price:** [level] — [structural target, 1.5R+]
 - **Risk:** [%] of account
 - **Expected R at TP:** [R]
-- **Max hold:** 72h / [intraday preference]
+- **Max hold:** 48h / [intraday preference]
 
 ## Life of Trade (updates during hold)
 

@@ -124,7 +124,7 @@ last_revised: 2026-04-17
 
 ### What I avoid in NY
 - Counter-trend plays late in the session (no follow-through in dead zone to close the trade)
-- Opening positions that require multi-hour holds late in NY (72h clock is ticking with no liquidity to work against)
+- Opening positions that require multi-hour holds late in NY (48h clock is ticking with no liquidity to work against)
 
 ---
 

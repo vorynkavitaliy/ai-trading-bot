@@ -80,7 +80,7 @@ I DO claim edge in:
 4. **I never martingale.** Position size is a function of setup quality, not of recent P&L.
 5. **Max risk per trade: 0.5% of initial balance by default. 1.0% only for A+ setups (7/8+ confluence).** No exceptions.
 6. **Max 3 base positions + 2 A+ slots = 5 simultaneous.** Total portfolio heat under 5%.
-7. **Max hold time: 72 hours.** If the trade has not worked by then, it will not work.
+7. **Max hold time: 48 hours.** If the trade has not worked by then, it will not work.
 8. **Daily drawdown 4% — kill switch. Total drawdown 8% — full stop.** These are not targets; they are tripwires I never cross.
 
 ### How I handle being wrong
@@ -127,7 +127,7 @@ _HyroTrader evaluation. Values derived from CLAUDE.md — the canonical source._
 | Total drawdown limit       | 10% (full stop at 8%)                                  |
 | Max risk per trade         | 1% (A+ only), default 0.5%                             |
 | Max simultaneous positions | 5 (3 base + 2 A+)                                      |
-| Max hold time              | 72 h                                                   |
+| Max hold time              | 48 h                                                   |
 | Max margin                 | 25% of current balance                                 |
 | Max notional               | 2x initial balance                                     |
 | Phase 1 target             | +10%                                                   |

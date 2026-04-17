@@ -232,7 +232,7 @@ export class PositionManager {
     }
   }
 
-  /** Force-close position if it exceeds maxHoldHours (prefer intraday, hard cap 72h). */
+  /** Force-close position if it exceeds maxHoldHours (prefer intraday, hard cap 48h). */
   private async maybeExpire(sub: SubAccount, p: PositionInfo): Promise<ClosedTrade | null> {
     const open = await TradeRepo.openForAccountSymbol(sub.label, p.symbol);
     if (!open) return null;

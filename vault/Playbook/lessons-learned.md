@@ -74,7 +74,7 @@ After every closed trade — especially losses, but also wins with notable featu
 
 **Context:** General observation across the first weeks of operation.
 **What I learned:** Intraday trades resolve cleanly; multi-day holds accumulate funding and get whipsawed by news. Session awareness matters more than I initially weighted.
-**How it applies:** Default to intraday exits. Use 72h only for genuine swing setups with clear 4H structure. Most positions should be closed by the end of the session they were opened in.
+**How it applies:** Default to intraday exits. Use the 48h cap only for genuine swing setups with clear 4H structure. Most positions should be closed by the end of the session they were opened in.
 **Tags:** `[win-learned]` `[session-misread]`
 
 ### [2026-04-16] — Slot Replacement Over Queueing

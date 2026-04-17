@@ -64,7 +64,7 @@ export const config = {
     maxPositions: num('MAX_POSITIONS', 5),
     maxHeatPct: num('MAX_HEAT_PCT', 5.0),
     /** Max position hold time in hours. Prefer intraday, hard close at this limit. */
-    maxHoldHours: num('MAX_HOLD_HOURS', 72),
+    maxHoldHours: num('MAX_HOLD_HOURS', 48),
     /** Fixed leverage applied to every position. Keep low — risk is controlled by qty, not leverage. */
     leverage: num('LEVERAGE', 3),
   },

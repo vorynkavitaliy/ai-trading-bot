@@ -92,7 +92,7 @@ function printResult(symbol: string, result: { signal: any; executed: boolean; s
     const s = result.signal;
     const icon = result.executed ? '✅' : (s.direction !== 'None' ? '⏳' : '—');
     console.log(
-      `${icon} [${symbol}] regime=${s.regime} | L:${s.long.total}/4 S:${s.short.total}/4 | ` +
+      `${icon} [${symbol}] regime=${s.regime} | L:${s.long.total}/8 S:${s.short.total}/8 | ` +
       `dir=${s.direction} | exec=${result.executed}` +
       (result.skipReason ? ` | ${result.skipReason}` : '')
     );

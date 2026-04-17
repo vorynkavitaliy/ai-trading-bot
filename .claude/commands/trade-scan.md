@@ -73,7 +73,7 @@ Apply the Playbook to the current data. For each pair being evaluated:
   - Would I open this trade RIGHT NOW with the current chart?
   - Has the opposite direction scored 4/8+ this cycle?
   - Has the narrative changed since entry?
-  - Is position age approaching 72h?
+  - Is position age approaching 48h?
 - If any "yes to exit" → close. No ego.
 
 **D. New Entry Consideration** (only if slots available or replacement candidate exists)
