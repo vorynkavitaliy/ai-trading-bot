@@ -72,9 +72,33 @@ I score BOTH long and short every cycle. The higher-scoring direction is my cand
 
 - ✅ Entry price within 0.3% of current mark (or a valid limit at OB level)
 - ✅ SL distance ≤ 2% from entry (BTC) / ≤ 3% (altcoins)
-- ✅ R:R ≥ 1.5:1 with realistic TP (near next structural level, not fantasy)
+- ✅ R:R ≥ **1.5:1 standard** / ≥ **1.3:1 A+** with realistic TP (near next structural level, not fantasy) — see **A+ Execution Exception** below
 - ✅ Position size respects leverage limits for the pair
 - ✅ Orderbook not showing obvious manipulation at entry level
+
+#### A+ Execution Exception (confluence ≥ 7/8)
+
+Standard rule: minimum R:R = 1.5.
+**A+ exception: for 7-8/8 confluence setups, minimum R:R = 1.3.**
+
+**Justification (EV math):**
+Expected value per trade = `WR × avg_win − (1 − WR) × avg_loss`. Setups with 7-8/8 confluence are expected to have higher win rate than the 5-6/8 baseline (discipline-validated accumulation of signal quality, not speculation). Indicative EV at 1.3R across WR levels:
+
+| Win Rate | EV at 1.3R | EV at 1.5R |
+|---|---|---|
+| 40% | −0.08R (losing) | 0.00R (breakeven) |
+| 45% | +0.04R | +0.13R |
+| **50%** | **+0.15R** | **+0.25R** |
+| 55% | +0.26R | +0.38R |
+
+**The 1.3R threshold is only positive-EV if A+ WR is ≥ ~43%.** We accept this as an operating hypothesis to capture high-confluence setups clipped by nearby structure (the 2026-04-17 AVAX 7/8 × 5 consecutive case). Once we accumulate ≥ 20 A+ closed trades, we validate WR against this hypothesis and adjust.
+
+**What this is NOT:**
+- NOT a blanket R:R reduction — 5-6/8 setups still require 1.5R.
+- NOT permission to force A+ labeling — confluence must genuinely score 7 or 8.
+- NOT a TP-widening excuse — planner still places TP at real structure, not fantasy. The exception only accepts shorter *realized* R:R when structure clips it.
+
+**Telemetry to watch:** `skipReason` log line shows the effective threshold and A+ flag, e.g. `R:R 1.28 < 1.3 (7/8 A+)` vs `R:R 1.28 < 1.5 (6/8)` — lets postmortems diagnose whether A+ trades actually hit their hypothesized WR.
 
 ### 6. Is this a unique bet, or am I doubling my exposure?
 

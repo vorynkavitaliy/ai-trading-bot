@@ -59,6 +59,8 @@ export const config = {
     /** 8-factor model: 5/8 = entry, 7-8/8 = A+ setup */
     minConfluence: num('MIN_CONFLUENCE', 5),
     minRR: num('MIN_RR', 1.5),
+    /** Lower R:R allowed for A+ setups (confluence ≥ 7/8). Justification: higher WR expected compensates for shorter target. */
+    minRRAplus: num('MIN_RR_APLUS', 1.3),
     atrSlMult: num('ATR_SL_MULT', 1.0),
     trailActivateR: num('TRAIL_ACTIVATE_R', 1.5),
     maxPositions: num('MAX_POSITIONS', 5),

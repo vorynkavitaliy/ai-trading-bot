@@ -174,8 +174,12 @@ export class Bot {
         targetRR: config.trade.minRR,
       });
 
-      if (plan.rr < config.trade.minRR) {
-        return { signal, executed: false, skipReason: `R:R ${plan.rr} < ${config.trade.minRR}` };
+      // A+ setups (7-8/8 confluence) accept lower R:R — higher WR compensates per EV math.
+      // See vault/Playbook/entry-rules.md → "A+ Execution Exception"
+      const isAplus = signal.confluence >= 7;
+      const effectiveMinRR = isAplus ? config.trade.minRRAplus : config.trade.minRR;
+      if (plan.rr < effectiveMinRR) {
+        return { signal, executed: false, skipReason: `R:R ${plan.rr} < ${effectiveMinRR} (${signal.confluence}/8${isAplus ? ' A+' : ''})` };
       }
 
       // 8. Session + funding window checks
@@ -195,9 +199,9 @@ export class Bot {
       }
 
       // 10. Slot management — check if we need to replace a weaker position
+      //     Reuse isAplus computed above for the R:R exception.
       const openCount = await cache.getPositionCount();
       const maxBase = 3;
-      const isAplus = signal.confluence >= 7;
       const maxAllowed = isAplus ? config.trade.maxPositions : maxBase;
 
       if (openCount >= maxAllowed) {
@@ -358,8 +362,11 @@ export class Bot {
         instrument, targetRR: config.trade.minRR,
       });
 
-      if (plan.rr < config.trade.minRR) {
-        return { symbol, signal, skipReason: `R:R ${plan.rr} < ${config.trade.minRR}` };
+      // A+ exception — see scanPair comment + entry-rules.md
+      const isAplus = signal.confluence >= 7;
+      const effectiveMinRR = isAplus ? config.trade.minRRAplus : config.trade.minRR;
+      if (plan.rr < effectiveMinRR) {
+        return { symbol, signal, skipReason: `R:R ${plan.rr} < ${effectiveMinRR} (${signal.confluence}/8${isAplus ? ' A+' : ''})` };
       }
 
       return { symbol, signal, plan, instrument, news, c1h: c1h as Candle[] };
