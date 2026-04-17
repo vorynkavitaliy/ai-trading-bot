@@ -14,6 +14,19 @@
 import { Bot } from './orchestrator';
 import { config } from './config';
 
+/** Check if current UTC hour is within trading schedule */
+function isWithinSchedule(): { active: boolean; reason: string } {
+  if (!config.schedule.enabled) return { active: true, reason: 'schedule disabled' };
+  const hour = new Date().getUTCHours();
+  const { startHourUTC, endHourUTC } = config.schedule;
+  const active = hour >= startHourUTC && hour < endHourUTC;
+  if (!active) {
+    const kyivHour = (hour + 3) % 24;
+    return { active: false, reason: `Off hours (${kyivHour}:00 Kyiv). Schedule: 10:00-01:00 Kyiv (${startHourUTC}:00-${endHourUTC}:00 UTC)` };
+  }
+  return { active: true, reason: 'within schedule' };
+}
+
 async function main() {
   const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
   const report = process.argv.includes('--report');
@@ -31,6 +44,14 @@ async function main() {
   await bot.start();
 
   try {
+    // Schedule check — skip cycle if outside working hours
+    const schedule = isWithinSchedule();
+    if (!schedule.active) {
+      console.log(`💤 ${schedule.reason}`);
+      await bot.stop('off hours');
+      return;
+    }
+
     const t0 = Date.now();
     console.log(`\n═══ Scan cycle: ${symbols.join(', ')} (${new Date().toISOString()}) ═══\n`);
 

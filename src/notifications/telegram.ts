@@ -92,6 +92,7 @@ export class TelegramNotifier {
       trailing: 'трейлинг-стопу',
       manual: 'ручному закрытию',
       breakeven: 'безубытку',
+      early_exit: '🧠 проактивному закрытию (условия изменились)',
       expired: '⏰ истечению макс. времени удержания',
       kill_switch: '⚠️ KILL SWITCH (drawdown)',
     };
@@ -219,34 +220,69 @@ export class TelegramNotifier {
   }
 
   async fullReport(params: {
-    accounts: { label: string; volume: number; equity: string; pnlToday: string; pnlTotal: string; dailyDd: string; totalDd: string; positions: number; status: string }[];
-    totalPnlToday: string;
-    totalPositions: number;
+    accounts: { label: string; volume: number; equity: string; pnlTodayPct: string; dailyDd: string; totalDd: string; status: string }[];
+    /** Unique positions across all accounts (deduplicated by symbol) */
+    positions: { symbol: string; direction: string; pnlPct: string }[];
     regime: string;
-    newsHighlights: string;
+    news: {
+      bias: string;
+      impact: string;
+      riskMultiplier: number;
+      fearGreed?: { value: number; classification: string };
+      triggers: string[];
+      itemSummaries: string[];
+    };
   }): Promise<void> {
+    const posCount = params.positions.length;
     let msg =
       `🤖 <b>═══ FULL REPORT ═══</b>\n` +
       `\n` +
       `🌐 Режим: <b>${params.regime}</b>\n` +
-      `📊 PnL сегодня: <b>${params.totalPnlToday} USDT</b>\n` +
-      `📋 Позиций: ${params.totalPositions}\n` +
-      `\n` +
-      `──────────────\n` +
-      `💼 <b>Аккаунты:</b>\n`;
+      `📋 Позиций: ${posCount}\n`;
 
-    for (const a of params.accounts) {
-      const statusIcon = a.status === 'CLEAR' ? '🟢' : a.status === 'WARNING' ? '🟡' : '🔴';
-      msg +=
-        `\n${statusIcon} <b>${a.label}</b> ($${a.volume.toLocaleString()})\n` +
-        `  Equity: $${a.equity}\n` +
-        `  PnL сегодня: ${a.pnlToday} | Всего: ${a.pnlTotal}\n` +
-        `  DD: ${a.dailyDd}% daily / ${a.totalDd}% total\n` +
-        `  Позиций: ${a.positions}\n`;
+    // Positions list with PnL %
+    if (posCount > 0) {
+      for (const p of params.positions) {
+        const pnl = Number(p.pnlPct);
+        const icon = pnl > 0 ? '🟢' : pnl < 0 ? '🔴' : '⚪';
+        msg += `${icon} ${p.symbol} ${p.direction}: <b>${pnl >= 0 ? '+' : ''}${p.pnlPct}%</b>\n`;
+      }
+    } else {
+      msg += `— нет открытых позиций\n`;
     }
 
-    if (params.newsHighlights) {
-      msg += `\n──────────────\n📰 <b>Новости:</b>\n${params.newsHighlights}\n`;
+    // Accounts — compact format
+    msg += `\n──────────────\n💼 <b>Аккаунты:</b>\n`;
+    for (const a of params.accounts) {
+      const statusIcon = a.status === 'CLEAR' ? '🟢' : a.status === 'WARNING' ? '🟡' : '🔴';
+      const pnl = Number(a.pnlTodayPct);
+      msg += `${statusIcon} <b>${a.label}</b>: PnL ${pnl >= 0 ? '+' : ''}${a.pnlTodayPct}% | DD ${a.dailyDd}%/${a.totalDd}%\n`;
+    }
+
+    // News — expanded with context
+    msg += `\n──────────────\n📰 <b>Макро-контекст:</b>\n`;
+    msg += `Bias: <b>${params.news.bias}</b> | Impact: <b>${params.news.impact}</b>`;
+    if (params.news.riskMultiplier < 1) msg += ` | Risk ×${params.news.riskMultiplier}`;
+    msg += `\n`;
+
+    if (params.news.fearGreed) {
+      const fg = params.news.fearGreed;
+      const fgIcon = fg.value <= 25 ? '😱' : fg.value <= 45 ? '😰' : fg.value <= 55 ? '😐' : fg.value <= 75 ? '😊' : '🤑';
+      msg += `${fgIcon} Fear & Greed: <b>${fg.value}</b> (${fg.classification})\n`;
+    }
+
+    if (params.news.triggers.length > 0) {
+      msg += `\n<b>Триггеры:</b>\n`;
+      for (const t of params.news.triggers) {
+        msg += `• ${t}\n`;
+      }
+    }
+
+    if (params.news.itemSummaries.length > 0) {
+      msg += `\n<b>Последние новости:</b>\n`;
+      for (const s of params.news.itemSummaries.slice(0, 5)) {
+        msg += `• ${s}\n`;
+      }
     }
 
     msg += `\n──────────────\n🕐 ${this.ts()}`;

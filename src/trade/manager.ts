@@ -6,6 +6,8 @@ import { cache } from '../cache';
 import { Indicators, Candle } from '../analysis/indicators';
 import { config } from '../config';
 import { quantize } from '../risk/sizing';
+import { Regime } from '../signal/regime';
+import { scoreConfluence } from '../signal/confluence';
 
 export interface ClosedTrade {
   account: string;
@@ -38,6 +40,14 @@ export interface TrailEvent {
  * **Does NOT send Telegram directly** — returns events so the orchestrator
  * can aggregate across sub-accounts into one message per symbol/event.
  */
+/** Context passed to manage() for proactive position health checks (8-factor model) */
+export interface ManageContext {
+  c1h: Candle[];
+  c15m?: Candle[];
+  regime?: Regime;
+  newsBias?: 'risk-on' | 'risk-off' | 'neutral';
+}
+
 export class PositionManager {
   constructor(private bybit: BybitClient) {}
 
@@ -46,6 +56,7 @@ export class PositionManager {
     symbol: string,
     c1h: Candle[],
     tickSize: number,
+    ctx?: ManageContext,
   ): Promise<{ closed: ClosedTrade[]; trailed: TrailEvent[] }> {
     const closed: ClosedTrade[] = [];
     const trailed: TrailEvent[] = [];
@@ -68,6 +79,16 @@ export class PositionManager {
         closed.push(aged);
         continue;
       }
+
+      // Proactive health check — close early if conditions turned against us
+      if (ctx) {
+        const earlyExit = await this.maybeEarlyExit(sub, p, atr, ctx);
+        if (earlyExit) {
+          closed.push(earlyExit);
+          continue;
+        }
+      }
+
       const ev = await this.maybeTrail(sub, p, atr, tickSize);
       if (ev) trailed.push(ev);
     }
@@ -118,6 +139,95 @@ export class PositionManager {
       };
     } catch (err: any) {
       console.error(`[PositionManager] reconcile failed:`, err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Proactive position health check — "would I still enter this trade right now?"
+   *
+   * Uses the 8-factor confluence model to score the OPPOSITE direction.
+   * If the opposite direction scores 4/8+, conditions have flipped — close early.
+   *
+   * Only triggers if position is NOT already in significant profit (> 1R).
+   * If > 1R, trailing stop handles it.
+   */
+  private async maybeEarlyExit(
+    sub: SubAccount,
+    p: PositionInfo,
+    atr: number,
+    ctx: ManageContext,
+  ): Promise<ClosedTrade | null> {
+    const open = await TradeRepo.openForAccountSymbol(sub.label, p.symbol);
+    if (!open) return null;
+    if (!ctx.c1h || !ctx.c15m || ctx.c1h.length < 50) return null;
+
+    const isLong = p.side === 'Buy';
+    const entry = Number(p.entryPrice);
+    const cur = Number(p.markPrice);
+    const sl = Number(p.stopLoss);
+    const stopDist = Math.abs(entry - (sl || entry));
+
+    // Don't early-exit if already in good profit (> 1R) — let trailing handle it
+    if (stopDist > 0) {
+      const r = isLong ? (cur - entry) / stopDist : (entry - cur) / stopDist;
+      if (r >= 1.0) return null;
+    }
+
+    // Score the OPPOSITE direction using 8-factor model
+    // If we're Long and the Short score is 4/8+ → market turned against us
+    const oppositeDir = isLong ? 'Short' : 'Long';
+    const factors = scoreConfluence(oppositeDir, {
+      c4h: ctx.c1h, // Use 1H as surrogate if 4H not available in manage context
+      c1h: ctx.c1h,
+      c15m: ctx.c15m,
+      regime: ctx.regime ?? 'Range',
+      newsBias: ctx.newsBias,
+    });
+
+    const adverseCount = factors.reduce((s, f) => s + f.score, 0);
+    const adverseDetails = factors.filter((f) => f.score === 1).map((f) => `${f.name}: ${f.detail}`);
+
+    // Need 4/8 adverse factors to trigger early exit
+    if (adverseCount < 4) return null;
+
+    // Execute early exit
+    const side = isLong ? 'Sell' : 'Buy';
+    try {
+      await sub.client.submitOrder({
+        category: 'linear', symbol: p.symbol, side, orderType: 'Market',
+        qty: p.size, reduceOnly: true, timeInForce: 'GTC',
+      });
+
+      const exitPrice = cur;
+      const qty = Number(open.qty);
+      const pnl = isLong ? (exitPrice - entry) * qty : (entry - exitPrice) * qty;
+      const pnlPct = open.account_volume > 0 ? (pnl / Number(open.account_volume)) * 100 : 0;
+      const rMultiple = stopDist > 0 ? pnl / (stopDist * qty) : undefined;
+
+      await TradeRepo.close({
+        tradeId: open.id, exitPrice, exitReason: 'early_exit',
+        pnlUsd: pnl, pnlPct, rMultiple, feesUsd: 0,
+      });
+
+      await AuditRepo.log({
+        level: 'warn', source: 'position-manager', event: 'early_exit',
+        accountLabel: sub.label, symbol: p.symbol,
+        message: `Proactive close: ${adverseDetails.join('; ')} (${adverseCount}/8 adverse)`,
+      });
+
+      await cache.clearHeat(sub.label, p.symbol);
+
+      return {
+        account: sub.label, symbol: p.symbol,
+        direction: open.direction, entry, exit: exitPrice, qty,
+        pnlUsd: pnl, pnlPct, rMultiple,
+        reason: 'early_exit',
+        openedAt: new Date(open.opened_at).getTime(),
+        closedAt: Date.now(),
+      };
+    } catch (err: any) {
+      console.error(`[PositionManager] early exit failed ${p.symbol}:`, err.message);
       return null;
     }
   }
@@ -295,6 +405,7 @@ export async function announceClosedAggregated(
       : first.reason === 'take_profit' ? 'TP1'
       : first.reason === 'trailing' ? 'trailing'
       : first.reason === 'expired' ? 'expired'
+      : first.reason === 'early_exit' ? 'early_exit'
       : 'manual';
 
     await telegram.tradeClosed({

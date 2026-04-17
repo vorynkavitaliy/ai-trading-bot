@@ -53,10 +53,11 @@ export const config = {
   },
 
   trade: {
-    defaultRiskPct: num('DEFAULT_RISK_PCT', 0.2),
-    /** A+ setups (4/4 confluence) */
-    maxRiskPct: num('MAX_RISK_PCT', 0.6),
-    minConfluence: num('MIN_CONFLUENCE', 3),
+    defaultRiskPct: num('DEFAULT_RISK_PCT', 0.5),
+    /** A+ setups (7-8/8 confluence) */
+    maxRiskPct: num('MAX_RISK_PCT', 1.0),
+    /** 8-factor model: 5/8 = entry, 7-8/8 = A+ setup */
+    minConfluence: num('MIN_CONFLUENCE', 5),
     minRR: num('MIN_RR', 1.5),
     atrSlMult: num('ATR_SL_MULT', 1.0),
     trailActivateR: num('TRAIL_ACTIVATE_R', 1.5),
@@ -82,6 +83,13 @@ export const config = {
     'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT',
     'XRPUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT',
   ]),
+
+  /** Trading schedule — UTC hours. Outside these hours the bot skips cycles. */
+  schedule: {
+    startHourUTC: num('SCHEDULE_START_UTC', 7),   // 10:00 Kyiv (UTC+3)
+    endHourUTC: num('SCHEDULE_END_UTC', 22),       // 01:00 Kyiv (UTC+3)
+    enabled: process.env.SCHEDULE_ENABLED !== 'false',
+  },
 
   news: {
     feeds: list('NEWS_FEEDS', [

@@ -48,7 +48,7 @@ export async function executeAcrossAccounts(ctx: ExecuteContext): Promise<Execut
       // 1. Risk gate (uses initial balance for risk_usd calc)
       // Hard cap: per HyroTrader no single trade may risk more than 3% of balance.
       const HARD_CAP = 3.0;
-      const isAplus = ctx.signal.confluence >= 4;
+      const isAplus = ctx.signal.confluence >= 7;
       const baseRisk = isAplus ? config.trade.maxRiskPct : config.trade.defaultRiskPct;
       const newsAdj = ctx.newsRiskMultiplier ?? 1.0;
       const riskPct = Math.min(baseRisk * newsAdj, HARD_CAP);
@@ -93,22 +93,29 @@ export async function executeAcrossAccounts(ctx: ExecuteContext): Promise<Execut
         }
       }
 
-      // 4. Submit
+      // 4. Submit — limit at OB level when available, otherwise market
       const orderLinkId = `${baseLink}-${sub.index}`;
       const side = ctx.plan.direction === 'Long' ? 'Buy' : 'Sell';
+      const useLimit = !!ctx.plan.limitEntry;
+      const tick = ctx.instrument.tickSize;
 
-      const res = await sub.client.submitOrder({
+      const orderParams: any = {
         category: 'linear',
         symbol: ctx.plan.symbol,
         side,
-        orderType: 'Market',
+        orderType: useLimit ? 'Limit' : 'Market',
         qty: sizing.qtyString,
-        stopLoss: fmtPrice(ctx.plan.stopLoss, ctx.instrument.tickSize),
-        takeProfit: fmtPrice(ctx.plan.takeProfit, ctx.instrument.tickSize),
+        stopLoss: fmtPrice(ctx.plan.stopLoss, tick),
+        takeProfit: fmtPrice(ctx.plan.takeProfit, tick),
         tpslMode: 'Full',
-        timeInForce: 'IOC',
+        timeInForce: useLimit ? 'GTC' : 'IOC',
         orderLinkId,
-      });
+      };
+      if (useLimit) {
+        orderParams.price = fmtPrice(ctx.plan.limitEntry!, tick);
+      }
+
+      const res = await sub.client.submitOrder(orderParams);
 
       if (res.retCode !== 0) {
         await AuditRepo.log({
@@ -170,16 +177,33 @@ export async function executeAcrossAccounts(ctx: ExecuteContext): Promise<Execut
     rejectReason: succeeded.length === 0 ? reports.map((r) => r.reason).filter(Boolean).join('; ') : undefined,
   });
 
+  // Register pending limit orders for monitoring (cancel if stale)
+  if (ctx.plan.limitEntry && succeeded.length > 0) {
+    await cache.registerPendingOrder(ctx.plan.symbol, {
+      symbol: ctx.plan.symbol,
+      direction: ctx.plan.direction,
+      limitPrice: ctx.plan.limitEntry,
+      stopLoss: ctx.plan.stopLoss,
+      takeProfit: ctx.plan.takeProfit,
+      confluence: ctx.signal.confluence,
+      regime: ctx.regimeLabel,
+      placedAt: Date.now(),
+      maxAge: 45 * 60_000, // 45 min — if not filled, structure likely invalidated
+      orderIds: succeeded.map((r) => r.orderId).filter(Boolean) as string[],
+    });
+  }
+
   if (ctx.telegram && succeeded.length > 0) {
     const totalRisk = succeeded.reduce((s, r) => s + r.riskUsd, 0);
+    const entryLabel = ctx.plan.limitEntry ? `${fmtPrice(ctx.plan.limitEntry, ctx.instrument.tickSize)} (limit)` : fmtPrice(ctx.plan.entry, ctx.instrument.tickSize);
     await ctx.telegram.tradeOpened({
       pair: ctx.plan.symbol,
       direction: ctx.plan.direction === 'Long' ? 'LONG' : 'SHORT',
-      entry: fmtPrice(ctx.plan.entry, ctx.instrument.tickSize),
+      entry: entryLabel,
       sl: fmtPrice(ctx.plan.stopLoss, ctx.instrument.tickSize),
       tp: fmtPrice(ctx.plan.takeProfit, ctx.instrument.tickSize),
       rr: ctx.plan.rr.toFixed(2),
-      riskPct: (ctx.signal.confluence >= 4 ? config.trade.maxRiskPct : config.trade.defaultRiskPct).toFixed(2),
+      riskPct: (ctx.signal.confluence >= 7 ? config.trade.maxRiskPct : config.trade.defaultRiskPct).toFixed(2),
       riskUsd: totalRisk.toFixed(2),
       qty: succeeded.map((r) => r.qty).join(' / '),
       confluence: `${ctx.signal.confluence}/4`,

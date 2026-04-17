@@ -37,6 +37,8 @@ export class Bot {
   private instrumentCache = new Map<string, InstrumentSpec>();
   private lastNews: MacroAssessment | null = null;
   private lastNewsAt = 0;
+  private btcContext: { regime: import('./signal/regime').Regime; trend1h: 'up' | 'down' | 'range'; rsiSlope: number } | null = null;
+  private btcContextAt = 0;
 
   constructor() {
     this.accounts = new AccountManager();
@@ -81,6 +83,9 @@ export class Bot {
     skipReason?: string;
   }> {
     try {
+      // 0. Monitor pending limit orders (cancel stale, detect fills)
+      await this.monitorPendingOrders();
+
       // 1. Refresh DD snapshot for all accounts (cheap REST)
       await Promise.all(this.accounts.getAllSubAccounts().map((s) => this.risk.snapshot(s)));
 
@@ -96,10 +101,11 @@ export class Bot {
         return { signal: null, executed: false, skipReason: 'insufficient klines' };
       }
 
-      // 3. News context (refresh every 15 min)
+      // 3. News context (refresh every 15 min) + BTC context for altcoin correlation
       const news = await this.refreshNews();
+      const btc = symbol !== 'BTCUSDT' ? await this.getBtcContext() : null;
 
-      // 4. Generate signal
+      // 4. Generate signal (with BTC context for altcoins)
       const signal = generateSignal({
         symbol,
         c4h: c4h as Candle[],
@@ -107,13 +113,19 @@ export class Bot {
         c15m: c15m as Candle[],
         c3m: c3m as Candle[],
         newsBias: news.bias,
+        btc: btc ?? undefined,
       });
 
       // 5. Manage existing positions on this pair (trail SL, reconcile closed).
-      // Aggregate per-account events into single Telegram messages.
+      //    Pass full context so positions can be proactively closed if conditions flip.
       const instrument = await this.getInstrument(symbol);
       const managed = await Promise.all(this.accounts.getAllSubAccounts().map((sub) =>
-        this.positionManager.manage(sub, symbol, c1h as Candle[], instrument.tickSize)
+        this.positionManager.manage(sub, symbol, c1h as Candle[], instrument.tickSize, {
+          c1h: c1h as Candle[],
+          c15m: c15m as Candle[],
+          regime: signal.regime,
+          newsBias: news.bias,
+        })
       ));
       const allClosed: ClosedTrade[] = managed.flatMap((m) => m.closed);
       const allTrailed: TrailEvent[] = managed.flatMap((m) => m.trailed);
@@ -185,7 +197,7 @@ export class Bot {
       // 10. Slot management — check if we need to replace a weaker position
       const openCount = await cache.getPositionCount();
       const maxBase = 3;
-      const isAplus = signal.confluence >= 4;
+      const isAplus = signal.confluence >= 7;
       const maxAllowed = isAplus ? config.trade.maxPositions : maxBase;
 
       if (openCount >= maxAllowed) {
@@ -284,19 +296,24 @@ export class Bot {
         return { symbol, signal: null, skipReason: 'insufficient klines' };
       }
 
-      // 3. News context
+      // 3. News + BTC context
       const news = await this.refreshNews();
+      const btc = symbol !== 'BTCUSDT' ? await this.getBtcContext() : null;
 
-      // 4. Generate signal
+      // 4. Generate signal (with BTC context for altcoins)
       const signal = generateSignal({
         symbol, c4h: c4h as Candle[], c1h: c1h as Candle[],
         c15m: c15m as Candle[], c3m: c3m as Candle[], newsBias: news.bias,
+        btc: btc ?? undefined,
       });
 
-      // 5. Manage existing positions (trail SL, reconcile closed)
+      // 5. Manage existing positions (trail SL, reconcile closed, proactive health check)
       const instrument = await this.getInstrument(symbol);
       const managed = await Promise.all(this.accounts.getAllSubAccounts().map((sub) =>
-        this.positionManager.manage(sub, symbol, c1h as Candle[], instrument.tickSize)
+        this.positionManager.manage(sub, symbol, c1h as Candle[], instrument.tickSize, {
+          c1h: c1h as Candle[], c15m: c15m as Candle[],
+          regime: signal.regime, newsBias: news.bias,
+        })
       ));
       const allClosed: ClosedTrade[] = managed.flatMap((m) => m.closed);
       const allTrailed: TrailEvent[] = managed.flatMap((m) => m.trailed);
@@ -380,7 +397,7 @@ export class Bot {
     for (const a of ready) {
       // Re-check slot availability (may have been filled by higher-priority signal above)
       const openCount = await cache.getPositionCount();
-      const isAplus = a.signal!.confluence >= 4;
+      const isAplus = a.signal!.confluence >= 7;
       const maxAllowed = isAplus ? config.trade.maxPositions : 3;
 
       if (openCount >= maxAllowed) {
@@ -435,6 +452,87 @@ export class Bot {
     return results;
   }
 
+  // ─── Pending limit order monitoring ──────────────────────────────
+
+  /**
+   * Check all pending limit orders. Cancel if:
+   * 1. Expired (older than maxAge — default 45 min)
+   * 2. Structure invalidated (opposite BOS detected)
+   * 3. Already filled (position exists → remove from pending)
+   */
+  async monitorPendingOrders(): Promise<void> {
+    const pending = await cache.getAllPendingOrders();
+    if (pending.length === 0) return;
+
+    for (const order of pending) {
+      const now = Date.now();
+      const age = now - order.placedAt;
+
+      // Check if already filled (position exists on Bybit)
+      const positions = await this.bybit.getAllPositions(order.symbol);
+      const hasPosition = positions.some((a) => a.positions.length > 0);
+      if (hasPosition) {
+        // Filled — remove from pending, register as position
+        await cache.removePendingOrder(order.symbol);
+        await cache.registerPosition(order.symbol, {
+          symbol: order.symbol,
+          direction: order.direction,
+          confluence: order.confluence,
+          regime: order.regime,
+          entry: order.limitPrice,
+          openedAt: now,
+          terminal: order.symbol,
+        });
+        console.log(`[Orders] ${order.symbol} limit filled → position registered`);
+        continue;
+      }
+
+      // Check if expired
+      if (age > order.maxAge) {
+        console.log(`[Orders] ${order.symbol} limit expired after ${(age / 60_000).toFixed(0)} min — cancelling`);
+        await this.cancelPendingOrder(order);
+        continue;
+      }
+
+      // Check if structure invalidated (BOS against us)
+      try {
+        const c1h = await this.bybit.getKlines(order.symbol, '60', 50);
+        if (c1h.length > 10) {
+          const { Structure } = await import('./analysis/structure');
+          const bos = Structure.bos(c1h as Candle[]);
+          const isLong = order.direction === 'Long';
+          if ((isLong && bos === 'bearish') || (!isLong && bos === 'bullish')) {
+            console.log(`[Orders] ${order.symbol} limit invalidated — BOS ${bos} against ${order.direction}`);
+            await this.cancelPendingOrder(order);
+            continue;
+          }
+        }
+      } catch { /* ignore kline fetch errors */ }
+    }
+  }
+
+  private async cancelPendingOrder(order: import('./cache').PendingOrder): Promise<void> {
+    // Cancel on all sub-accounts
+    const subs = this.accounts.getAllSubAccounts();
+    await Promise.all(subs.map(async (sub) => {
+      try {
+        await sub.client.cancelAllOrders({ category: 'linear', symbol: order.symbol });
+      } catch (err: any) {
+        console.error(`[Orders] cancel failed ${sub.label} ${order.symbol}:`, err.message);
+      }
+    }));
+    await cache.removePendingOrder(order.symbol);
+    await AuditRepo.log({
+      level: 'info', source: 'orchestrator', event: 'limit_cancelled',
+      symbol: order.symbol,
+      message: `Limit ${order.direction} @ ${order.limitPrice} cancelled (${((Date.now() - order.placedAt) / 60_000).toFixed(0)} min old)`,
+    });
+    if (this.telegram) {
+      await this.telegram.error('Лимитка отменена',
+        `${order.symbol} ${order.direction} @ ${order.limitPrice} — setup больше не актуален`);
+    }
+  }
+
   // ─── Position replacement ────────────────────────────────────────
 
   private async closePositionForReplacement(symbol: string): Promise<void> {
@@ -472,6 +570,31 @@ export class Bot {
     } catch (err: any) {
       console.error('[Bot] news fetch failed:', err.message);
       return this.lastNews ?? { bias: 'neutral', impact: 'low', riskMultiplier: 1.0, reason: 'news unavailable', triggers: [], items: [] };
+    }
+  }
+
+  /** BTC context for altcoin correlation — cached 5 min */
+  private async getBtcContext(): Promise<typeof this.btcContext> {
+    if (this.btcContext && Date.now() - this.btcContextAt < 5 * 60_000) return this.btcContext;
+    try {
+      const [btc4h, btc1h] = await Promise.all([
+        this.bybit.getKlines('BTCUSDT', '240', 250),
+        this.bybit.getKlines('BTCUSDT', '60', 100),
+      ]);
+      if (btc4h.length < 50 || btc1h.length < 30) return this.btcContext;
+
+      const { regime } = (await import('./signal/regime')).detectRegime(btc4h as Candle[]);
+      const { Structure } = await import('./analysis/structure');
+      const { Indicators } = await import('./analysis/indicators');
+      const trend1h = Structure.trend(btc1h as Candle[]);
+      const rsiSlope = Indicators.rsiSlope(btc1h as Candle[]) ?? 0;
+
+      this.btcContext = { regime, trend1h, rsiSlope };
+      this.btcContextAt = Date.now();
+      return this.btcContext;
+    } catch (err: any) {
+      console.error('[Bot] BTC context fetch failed:', err.message);
+      return this.btcContext;
     }
   }
 
@@ -541,34 +664,55 @@ export class Bot {
       const allPos = await this.bybit.getAllPositions();
       const news = await this.refreshNews();
 
-      const rows = await Promise.all(wallets.map(async (w) => {
+      // Accounts — PnL as % of starting balance
+      const accountRows = await Promise.all(wallets.map(async (w) => {
         const a = await this.risk.assess(w.sub, Number(w.wallet.equity));
         const pnlToday = await TradeRepo.dailyPnl(w.sub.label);
-        const posCount = allPos.find((p) => p.sub.label === w.sub.label)?.positions.length ?? 0;
+        const pnlTodayPct = ((pnlToday / w.sub.volume) * 100).toFixed(2);
         const status = a.status === 'ok' ? 'CLEAR' : a.status === 'warn' ? 'WARNING' : 'CRITICAL';
-        const totalPnl = Number(w.wallet.equity) - w.sub.volume;
         return {
           label: w.sub.label,
           volume: w.sub.volume,
           equity: Number(w.wallet.equity).toFixed(2),
-          pnlToday: pnlToday.toFixed(2),
-          pnlTotal: totalPnl.toFixed(2),
+          pnlTodayPct,
           dailyDd: a.dailyDdPct.toFixed(2),
           totalDd: a.totalDdPct.toFixed(2),
-          positions: posCount,
           status,
         };
       }));
 
-      const totalPnlToday = rows.reduce((s, r) => s + Number(r.pnlToday), 0);
-      const totalPositions = rows.reduce((s, r) => s + r.positions, 0);
+      // Positions — deduplicate by symbol (one entry per pair, not per account)
+      // PnL % = unrealised PnL / account volume (use first account as reference)
+      const seenSymbols = new Set<string>();
+      const positions: { symbol: string; direction: string; pnlPct: string }[] = [];
+      for (const ap of allPos) {
+        for (const p of ap.positions) {
+          if (seenSymbols.has(p.symbol)) continue;
+          seenSymbols.add(p.symbol);
+          const pnlPct = ((Number(p.unrealisedPnl) / ap.sub.volume) * 100).toFixed(2);
+          positions.push({
+            symbol: p.symbol,
+            direction: p.side === 'Buy' ? 'LONG' : 'SHORT',
+            pnlPct,
+          });
+        }
+      }
+
+      // Regime — use shared positions to determine
+      const regimeLabel = news.bias === 'risk-off' ? 'Risk-Off' : news.bias === 'risk-on' ? 'Risk-On' : 'Neutral';
 
       await this.telegram.fullReport({
-        accounts: rows,
-        totalPnlToday: totalPnlToday.toFixed(2),
-        totalPositions,
-        regime: 'mixed (per-pair)',
-        newsHighlights: news.triggers.slice(0, 5).join('\n') || 'без значимых триггеров',
+        accounts: accountRows,
+        positions,
+        regime: regimeLabel,
+        news: {
+          bias: news.bias,
+          impact: news.impact,
+          riskMultiplier: news.riskMultiplier,
+          fearGreed: news.fearGreed,
+          triggers: news.triggers,
+          itemSummaries: news.items.slice(0, 5).map((i) => i.title.slice(0, 80)),
+        },
       });
     } catch (err: any) {
       console.error('[fullReport]', err);

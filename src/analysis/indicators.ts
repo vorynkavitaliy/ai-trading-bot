@@ -141,6 +141,34 @@ export const Indicators = {
     if (avg === undefined || cur === undefined) return false;
     return cur >= avg * mult;
   },
+
+  /** RSI slope over last N bars: positive = rising momentum, negative = fading */
+  rsiSlope(c: Candle[], rsiPeriod = 14, lookback = 5): number | undefined {
+    if (c.length < rsiPeriod + lookback + 1) return undefined;
+    const rsi = RSI.calculate({ values: closes(c), period: rsiPeriod });
+    if (rsi.length < lookback) return undefined;
+    const recent = rsi.slice(-lookback);
+    return (recent[recent.length - 1] - recent[0]) / lookback;
+  },
+
+  /** ATR percentile: where current ATR sits vs last N ATR values (0-100) */
+  atrPercentile(c: Candle[], atrPeriod = 14, lookback = 100): number | undefined {
+    if (c.length < atrPeriod + lookback) return undefined;
+    const atrValues = ATR.calculate({ high: highs(c), low: lows(c), close: closes(c), period: atrPeriod });
+    if (atrValues.length < lookback) return undefined;
+    const window = atrValues.slice(-lookback);
+    const current = window[window.length - 1];
+    const below = window.filter((v) => v <= current).length;
+    return (below / window.length) * 100;
+  },
+
+  /** Volume declining: average volume of last 5 bars vs previous 10 bars */
+  volumeDeclining(c: Candle[]): boolean {
+    if (c.length < 15) return false;
+    const recent5 = c.slice(-5).reduce((s, k) => s + k.volume, 0) / 5;
+    const prev10 = c.slice(-15, -5).reduce((s, k) => s + k.volume, 0) / 10;
+    return recent5 < prev10 * 0.6; // volume dropped 40%+
+  },
 };
 
 /** Find indices of swing highs/lows (`pivot` bars on each side). */

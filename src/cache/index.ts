@@ -12,6 +12,20 @@ import { config } from '../config';
  * That is fine for single-pair operation; production multi-pair MUST have Redis.
  */
 
+export interface PendingOrder {
+  symbol: string;
+  direction: 'Long' | 'Short';
+  limitPrice: number;
+  stopLoss: number;
+  takeProfit: number;
+  confluence: number;
+  regime: string;
+  placedAt: number;      // ms timestamp
+  /** Max age before auto-cancel (ms) */
+  maxAge: number;
+  orderIds: string[];    // Bybit order IDs per sub-account
+}
+
 export interface SharedPosition {
   symbol: string;
   direction: 'Long' | 'Short';
@@ -28,8 +42,8 @@ const KEYS = {
   lock: (key: string) => `lock:${key}`,
   killSwitch: 'channel:kill-switch',
   haltedAccount: (account: string) => `halted:${account}`,
-  /** Shared position registry — all terminals read/write this hash */
   positions: 'positions:open',
+  pendingOrders: 'orders:pending',
 };
 
 function utcDay(): string {
@@ -183,6 +197,29 @@ export class Cache {
   async getPositionCount(): Promise<number> {
     const all = await this.client.hgetall(KEYS.positions);
     return Object.keys(all).length;
+  }
+
+  // ─── Pending limit orders registry ───
+
+  async registerPendingOrder(symbol: string, order: PendingOrder): Promise<void> {
+    await this.client.hset(KEYS.pendingOrders, symbol, JSON.stringify(order));
+  }
+
+  async removePendingOrder(symbol: string): Promise<void> {
+    await this.client.hdel(KEYS.pendingOrders, symbol);
+  }
+
+  async getPendingOrder(symbol: string): Promise<PendingOrder | null> {
+    const raw = await this.client.hget(KEYS.pendingOrders, symbol);
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  }
+
+  async getAllPendingOrders(): Promise<PendingOrder[]> {
+    const raw = await this.client.hgetall(KEYS.pendingOrders);
+    return Object.values(raw).map((v) => {
+      try { return JSON.parse(v); } catch { return null; }
+    }).filter(Boolean) as PendingOrder[];
   }
 
   // ─── Pub/sub: kill switch broadcasts ───
