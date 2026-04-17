@@ -7,6 +7,7 @@
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "scan": "tsx src/scan.ts",
+    "reconcile": "tsx src/reconcile.ts",
     "test-client": "tsx src/test-client.ts",
     "test": "tsx src/test-client.ts"
   },

@@ -121,6 +121,11 @@ Full schema documented in `vault/README.md`.
 Every `/loop 3m /trade-scan {PAIR}` fire follows this sequence:
 
 ```
+═══ PHASE 0 — RECONCILE (vault ↔ Bybit) — BLOCKING ═══
+  0. npm run reconcile                              — JSON diff, must be `aligned: true`
+     If divergence: create reconstructed trade files OR close-out stale ones,
+     append to Journal → only then continue.
+
 ═══ PHASE 1 — LOAD CONTEXT (read vault) ═══
   1. vault/Playbook/00-trader-identity.md         — re-anchor identity
   2. vault/Playbook/lessons-learned.md            — anti-patterns to avoid
@@ -153,14 +158,15 @@ Every `/loop 3m /trade-scan {PAIR}` fire follows this sequence:
 
 ## Vault Discipline Rules
 
-1. **Identity first, every cycle.** Before any market decision, the identity file is read. No exceptions.
-2. **Write decisions, not narration.** "Closed ETH at -0.7R because 1H BOS invalidated thesis" > "I was looking at ETH and then decided to close."
-3. **Cite structure and research.** Every claim backed by a level, a factor, or a research source.
-4. **Update, don't accumulate.** Thesis files are rewritten when the view changes — NOT appended. Git preserves history.
-5. **Short over long.** A sharp 10-line thesis beats a meandering 100-line thesis. Clarity dominates volume.
-6. **Bybit is truth for WHAT; vault is truth for WHY.** Positions and PnL are authoritative on Bybit. The reasoning behind every action lives in the vault. Both must agree — reconcile every cycle.
-7. **Postmortem within 1 hour of close.** Grade the process independently of the outcome.
-8. **Lessons are earned.** A line enters `lessons-learned.md` only if it cost P&L or saved P&L and generalizes. No cargo-cult wisdom.
+1. **Reconcile first, every cycle.** Phase 0 runs BEFORE any vault read. An ungovernable position is the cardinal failure mode.
+2. **Identity first (after reconcile), every cycle.** Before any market decision, the identity file is read. No exceptions.
+3. **Write decisions, not narration.** "Closed ETH at -0.7R because 1H BOS invalidated thesis" > "I was looking at ETH and then decided to close."
+4. **Cite structure and research.** Every claim backed by a level, a factor, or a research source.
+5. **Update, don't accumulate.** Thesis files are rewritten when the view changes — NOT appended. Git preserves history.
+6. **Short over long.** A sharp 10-line thesis beats a meandering 100-line thesis. Clarity dominates volume.
+7. **Bybit is truth for WHAT; vault is truth for WHY.** Positions and PnL are authoritative on Bybit. The reasoning behind every action lives in the vault. Both must agree — Phase 0 enforces this.
+8. **Postmortem within 1 hour of close.** Grade the process independently of the outcome.
+9. **Lessons are earned.** A line enters `lessons-learned.md` only if it cost P&L or saved P&L and generalizes. No cargo-cult wisdom.
 
 ## Failure Modes To Guard Against
 

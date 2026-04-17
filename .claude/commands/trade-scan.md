@@ -13,6 +13,34 @@ argument-hint: "<PAIR|all> (e.g., BTCUSDT or all)"
 
 ## Cycle Structure (EVERY /loop fire)
 
+### PHASE 0 — RECONCILE (vault ↔ Bybit) — BLOCKING
+
+**This is the single most important check. Skip it and you operate blind.**
+
+Run:
+```
+npm run reconcile
+```
+
+The script emits JSON with:
+- `aligned: true|false`
+- `divergences.bybit_without_vault` — live positions with no open vault/Trades/ file (ungovernable)
+- `divergences.vault_without_bybit` — vault file says open but position is gone (stale)
+- `action_required` — concrete reconciliation steps
+
+**If `aligned: true` → proceed to Phase 1.**
+
+**If `aligned: false` → HALT analysis. Reconcile before any trading decision:**
+
+| Divergence | Response |
+|---|---|
+| `bybit_without_vault` (position exists, no vault file) | Immediately create `vault/Trades/{YYYY-MM-DD}_{SYMBOL}_{DIRECTION}_RECONSTRUCTED.md` with all known fields (entry, SL, TP, size, opened-estimate). Mark `status: open`, `trade_category: reconstructed`, add note that original opening context is unknown. |
+| `vault_without_bybit` (vault file says open, no Bybit position) | Update vault file: `status: closed`, `closed: <now>`, `closed_reason: external-close-detected`, write 3-line "Close Summary" noting reconciliation, create a Postmortem flagged as `process_grade: F` (blind close). |
+
+**After reconciliation** — append to `vault/Journal/{TODAY}.md` under a dedicated "Reconciliation events" header. If the same divergence type recurs → append to `vault/Playbook/lessons-learned.md` with operational tag.
+
+**Only after alignment is restored, continue to Phase 1.** Skipping this step = repeating the exact failure that already cost us once (see `lessons-learned.md` 2026-04-17 entry).
+
 ### PHASE 1 — LOAD CONTEXT (read vault)
 
 Read in this order, in parallel where independent:
@@ -138,6 +166,7 @@ Based on what happened in Phases 3-4, write back:
 
 ```
 EVERY CYCLE (every 3 min):
+  Phase 0: npm run reconcile (BLOCKING — must be aligned)
   Phase 1: read vault (identity + lessons + thesis + watchlist + journal)
   Phase 2: npm run scan (mechanical)
   Phase 3: think as trader
@@ -189,6 +218,7 @@ From `vault/Playbook/exit-rules.md`:
 
 ## Safety Rails
 
+- **Never skip Phase 0.** Reconciliation failure mode (see 2026-04-17 lesson) = ungovernable position = account at risk.
 - **Never override mechanical risk limits.** DD kill switch, max heat, position cap — set in TypeScript, unambiguous, binding.
 - **Never remove a stop-loss.** Only tighten or trail.
 - **Never skip the vault write (Phase 5).** A cycle without vault write is invisible; next cycle starts blind.
