@@ -7,7 +7,6 @@ import { Indicators, Candle } from '../analysis/indicators';
 import { config } from '../config';
 import { quantize } from '../risk/sizing';
 import { Regime } from '../signal/regime';
-import { scoreConfluence } from '../signal/confluence';
 
 export interface ClosedTrade {
   account: string;
@@ -73,22 +72,15 @@ export class PositionManager {
     if (atr === undefined) return { closed, trailed };
 
     for (const p of positions) {
-      // Force-close positions exceeding max hold time
+      // Force-close positions exceeding max hold time (48h hard cap)
       const aged = await this.maybeExpire(sub, p);
       if (aged) {
         closed.push(aged);
         continue;
       }
 
-      // Proactive health check — close early if conditions turned against us
-      if (ctx) {
-        const earlyExit = await this.maybeEarlyExit(sub, p, atr, ctx);
-        if (earlyExit) {
-          closed.push(earlyExit);
-          continue;
-        }
-      }
-
+      // Proactive exit is Claude's responsibility now (via execute.ts close).
+      // TS manager only handles: reconcile closed, trail SL, force-expire.
       const ev = await this.maybeTrail(sub, p, atr, tickSize);
       if (ev) trailed.push(ev);
     }
@@ -150,96 +142,8 @@ export class PositionManager {
     }
   }
 
-  /**
-   * Proactive position health check — "would I still enter this trade right now?"
-   *
-   * Uses the 8-factor confluence model to score the OPPOSITE direction.
-   * If the opposite direction scores 4/8+, conditions have flipped — close early.
-   *
-   * Only triggers if position is NOT already in significant profit (> 1R).
-   * If > 1R, trailing stop handles it.
-   */
-  private async maybeEarlyExit(
-    sub: SubAccount,
-    p: PositionInfo,
-    atr: number,
-    ctx: ManageContext,
-  ): Promise<ClosedTrade | null> {
-    const open = await TradeRepo.openForAccountSymbol(sub.label, p.symbol);
-    if (!open) return null;
-    if (!ctx.c1h || !ctx.c15m || ctx.c1h.length < 50) return null;
-
-    const isLong = p.side === 'Buy';
-    const entry = Number(p.entryPrice);
-    const cur = Number(p.markPrice);
-    const sl = Number(p.stopLoss);
-    const stopDist = Math.abs(entry - (sl || entry));
-
-    // Don't early-exit if already in good profit (> 1R) — let trailing handle it
-    if (stopDist > 0) {
-      const r = isLong ? (cur - entry) / stopDist : (entry - cur) / stopDist;
-      if (r >= 1.0) return null;
-    }
-
-    // Score the OPPOSITE direction using 8-factor model
-    // If we're Long and the Short score is 4/8+ → market turned against us
-    const oppositeDir = isLong ? 'Short' : 'Long';
-    const factors = scoreConfluence(oppositeDir, {
-      c4h: ctx.c1h, // Use 1H as surrogate if 4H not available in manage context
-      c1h: ctx.c1h,
-      c15m: ctx.c15m,
-      regime: ctx.regime ?? 'Range',
-      newsBias: ctx.newsBias,
-    });
-
-    const adverseCount = factors.reduce((s, f) => s + f.score, 0);
-    const adverseDetails = factors.filter((f) => f.score === 1).map((f) => `${f.name}: ${f.detail}`);
-
-    // Need 4/8 adverse factors to trigger early exit
-    if (adverseCount < 4) return null;
-
-    // Execute early exit
-    const side = isLong ? 'Sell' : 'Buy';
-    try {
-      await sub.client.submitOrder({
-        category: 'linear', symbol: p.symbol, side, orderType: 'Market',
-        qty: p.size, reduceOnly: true, timeInForce: 'GTC',
-      });
-
-      const exitPrice = cur;
-      const qty = Number(open.qty);
-      const pnl = isLong ? (exitPrice - entry) * qty : (entry - exitPrice) * qty;
-      const notional = entry * qty;
-      const pnlPct = notional > 0 ? (pnl / notional) * 100 : 0;
-      const rMultiple = stopDist > 0 ? pnl / (stopDist * qty) : undefined;
-
-      await TradeRepo.close({
-        tradeId: open.id, exitPrice, exitReason: 'early_exit',
-        pnlUsd: pnl, pnlPct, rMultiple, feesUsd: 0,
-      });
-
-      await AuditRepo.log({
-        level: 'warn', source: 'position-manager', event: 'early_exit',
-        accountLabel: sub.label, symbol: p.symbol,
-        message: `Proactive close: ${adverseDetails.join('; ')} (${adverseCount}/8 adverse)`,
-      });
-
-      await cache.clearHeat(sub.label, p.symbol);
-      await cache.setRecentClose(p.symbol, open.direction as 'Long' | 'Short');
-
-      return {
-        account: sub.label, symbol: p.symbol,
-        direction: open.direction, entry, exit: exitPrice, qty,
-        pnlUsd: pnl, pnlPct, rMultiple,
-        reason: 'early_exit',
-        openedAt: new Date(open.opened_at).getTime(),
-        closedAt: Date.now(),
-      };
-    } catch (err: any) {
-      console.error(`[PositionManager] early exit failed ${p.symbol}:`, err.message);
-      return null;
-    }
-  }
+  // maybeEarlyExit() removed 2026-04-18: Claude now decides proactive exits via execute.ts close,
+  // using the 12-factor rubric with grace period awareness. Old 8-factor TS scoring deleted.
 
   /** Force-close position if it exceeds maxHoldHours (prefer intraday, hard cap 48h). */
   private async maybeExpire(sub: SubAccount, p: PositionInfo): Promise<ClosedTrade | null> {

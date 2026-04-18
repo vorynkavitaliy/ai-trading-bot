@@ -6,7 +6,7 @@ import { RiskEngine } from '../risk/engine';
 import { TelegramNotifier } from '../notifications/telegram';
 import { TradeRepo, AuditRepo, SignalRepo } from '../db/repositories';
 import { cache } from '../cache';
-import { Signal } from '../signal/generator';
+import { Signal } from '../signal/types';
 import { config } from '../config';
 import { InstrumentSpec } from './planner';
 import { randomUUID } from 'crypto';
@@ -21,6 +21,14 @@ export interface ExecuteContext {
   regimeLabel: string;
   /** News-based risk multiplier: 1.0 = normal, <1.0 = reduce size */
   newsRiskMultiplier?: number;
+  /**
+   * Explicit risk percentage chosen by Claude (Claude-driven mode).
+   * Overrides automatic `confluence >= 7 → maxRiskPct` heuristic.
+   * Still hard-capped at 3% by HyroTrader rules.
+   */
+  explicitRiskPct?: number;
+  /** Short Claude rationale — stored in audit log + signal meta */
+  rationale?: string;
 }
 
 export interface ExecutionReport {
@@ -50,9 +58,13 @@ export async function executeAcrossAccounts(ctx: ExecuteContext): Promise<Execut
       // 1. Risk gate (uses initial balance for risk_usd calc)
       // Hard cap: per HyroTrader no single trade may risk more than 3% of balance.
       const HARD_CAP = 3.0;
-      const isAplus = ctx.signal.confluence >= 7;
-      const baseRisk = isAplus ? config.trade.maxRiskPct : config.trade.defaultRiskPct;
       const newsAdj = ctx.newsRiskMultiplier ?? 1.0;
+      // Claude-driven path: explicit risk_pct from Claude (12-factor rubric).
+      // Legacy path: confluence >= 7 → maxRiskPct (A+).
+      const baseRisk = ctx.explicitRiskPct !== undefined
+        ? ctx.explicitRiskPct
+        : (ctx.signal.confluence >= 7 ? config.trade.maxRiskPct : config.trade.defaultRiskPct);
+      const isAplus = baseRisk >= config.trade.maxRiskPct;
       const riskPct = Math.min(baseRisk * newsAdj, HARD_CAP);
       const riskUsd = sub.volume * (riskPct / 100);
       const gate = await ctx.risk.canEnter(sub, riskUsd, { isAplus });

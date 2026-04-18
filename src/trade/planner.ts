@@ -2,7 +2,7 @@ import { Candle, Indicators } from '../analysis/indicators';
 import { Structure } from '../analysis/structure';
 import { quantize, decimalsOf } from '../risk/sizing';
 import { config } from '../config';
-import { Direction } from '../signal/generator';
+import { Direction } from '../signal/types';
 
 export interface InstrumentSpec {
   symbol: string;

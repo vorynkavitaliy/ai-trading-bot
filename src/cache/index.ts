@@ -100,6 +100,20 @@ export class Cache {
     }
   }
 
+  // ─── Raw key/value with TTL (translations, misc caches) ───
+
+  async getRaw(key: string): Promise<string | null> {
+    return this.client.get(key);
+  }
+
+  async setRaw(key: string, value: string, ttlSec?: number): Promise<void> {
+    if (ttlSec !== undefined) {
+      await this.client.set(key, value, 'EX', ttlSec);
+    } else {
+      await this.client.set(key, value);
+    }
+  }
+
   // ─── Daily peak equity ───
 
   async setDailyPeak(account: string, equity: number): Promise<void> {

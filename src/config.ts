@@ -54,12 +54,12 @@ export const config = {
 
   trade: {
     defaultRiskPct: num('DEFAULT_RISK_PCT', 0.5),
-    /** A+ setups (7-8/8 confluence) */
+    /** A+ setups (12/12 confluence in new rubric; 7-8/8 in legacy) */
     maxRiskPct: num('MAX_RISK_PCT', 1.0),
-    /** 8-factor model: 5/8 = entry, 7-8/8 = A+ setup */
-    minConfluence: num('MIN_CONFLUENCE', 5),
+    /** 12-factor rubric: 9/12 = B+ standard minimum. Legacy fallback kept for unused paths. */
+    minConfluence: num('MIN_CONFLUENCE', 9),
     minRR: num('MIN_RR', 1.5),
-    /** Lower R:R allowed for A+ setups (confluence ≥ 7/8). Justification: higher WR expected compensates for shorter target. */
+    /** Lower R:R allowed for A+ setups. */
     minRRAplus: num('MIN_RR_APLUS', 1.3),
     atrSlMult: num('ATR_SL_MULT', 1.0),
     trailActivateR: num('TRAIL_ACTIVATE_R', 1.5),
@@ -67,6 +67,9 @@ export const config = {
     maxHeatPct: num('MAX_HEAT_PCT', 5.0),
     /** Max position hold time in hours. Prefer intraday, hard close at this limit. */
     maxHoldHours: num('MAX_HOLD_HOURS', 48),
+    /** Grace period (min) after opening before Claude can proactively close a position.
+     *  Prevents 2–3 min whipsaw exits. Surfaced to Claude via scan-data.ts grace_remaining_min. */
+    earlyExitGraceMin: num('EARLY_EXIT_GRACE_MIN', 9),
     /** Fixed leverage applied to every position. Keep low — risk is controlled by qty, not leverage. */
     leverage: num('LEVERAGE', 3),
   },

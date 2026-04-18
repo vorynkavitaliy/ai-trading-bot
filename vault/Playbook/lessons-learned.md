@@ -58,6 +58,17 @@ After every closed trade — especially losses, but also wins with notable featu
 
 ## Lessons
 
+### [2026-04-17] — News-bias flips: 1 cycle = noise, 2+ consecutive = regime shift
+
+**Context:** 17:42 UTC news bias flipped risk-off across all 8 pairs → all dir=None. I called it "major shift" in journal. 3 min later at 17:45 it flipped back to neutral — was transient flash. Same pattern recurred at 18:51 BUT persisted at 18:54 + 18:57 (3 consecutive cycles identical). Both events: same scan code, same market.
+**What I did:** At 17:42 over-dramatized the single-cycle flip; had to retract next cycle. At 18:51 properly waited for confirmation before calling it real.
+**What I should have done:** Never treat single-cycle news flip as signal. Single flip = borderline keyword entering/leaving risk-off bucket during 15-min news refresh = statistical noise.
+**Why it matters:** Over-reacting to news-flip noise produces thesis thrash. Under-reacting to real shift means being Long into a reversal. 2-cycle rule filters noise without losing meaningful signal.
+**Operational heuristic:**
+- Single-cycle news flip, confluence unchanged on neighbors → noise, ignore.
+- 2+ consecutive cycles same direction AND confluence erosion parallel → real regime shift, update thesis, prepare for opposite-side setups.
+**Tags:** `[news-react]` (operational).
+
 ### [2026-04-17] — Server-side SL/TP orders survive cron outages — that's their entire point
 
 **Context:** At 12:31 UTC the /loop cron went offline for ~1.5 hours (unknown cause; resumed at 14:00 UTC). During that window, BNB and XRP LONG positions were both open with server-side reduce-only Market orders at TP triggers. During the outage, mark pushed through both TPs: BNB 635.3 (TP 635.5), XRP 1.4625 (TP 1.4622). Both positions closed autonomously. Realized: **BNB +$397.26 (+1.46R) + XRP +$885.59 (+1.42R) = +$1282.85 combined during the outage**. I discovered the closes only when cron resumed and reconcile flagged vault-without-bybit divergences.
@@ -182,6 +193,18 @@ All of these are symmetric: they gate both NEW entries and EXISTING positions. C
 **How it applies:** Reserve full reports for hourly cadence; event-driven alerts for in-between.
 **Tags:** (operational)
 
+### [2026-04-17] — Proactive Exit on Confirmed Narrative Shift (validated)
+
+**Context:** XRPUSDT LONG #2 (21:15-21:42). Entered on mechanical R:R 1.5 trigger, 5/8 Bull. Peaked +0.3R with confluence upgrade to 6/8. Then signal dropped 5/8→4/8 and "risk-off bias" returned. Applied own 2-cycle-rule — held one cycle to filter potential noise; at 21:42 risk-off confirmed 2 consecutive. Closed proactively at +$10 gross / -$2.59 net (fees). Cycle 21:45 validated: 3rd consecutive risk-off, no recovery.
+**What I learned:** When the same narrative shift that would PREVENT a new entry has appeared AGAINST an open position and confirmed 2+ consecutive cycles, close for scratch beats hoping for TP. "Would I open this right now?" NO → close. Symmetry with entry discipline.
+**Why:** If the entry rules wouldn't fire now, the trade is no longer justified by the model that opened it. Hope is not a position management strategy.
+**How to apply:**
+- Opposite direction 4/8+ is one exit trigger; "own direction lost threshold + persistent narrative against" is another.
+- Use 2-cycle rule on news-bias flips (1 cycle = noise, 2+ = real). Don't close on 1st cycle of bad news; DO close on confirmation.
+- Accept fees/scratch as cost of exit discipline. -$3 exit > -$125 SL hit when model has turned.
+- Closing tool: `npx tsx src/close-now.ts SYMBOL Buy` (for long) or `Sell` (for short) — expects Bybit side convention, not Long/Short.
+**Tags:** exit-rules, process-discipline, narrative-shift
+
 ---
 
 ## Anti-Patterns To Re-read Regularly
@@ -203,6 +226,64 @@ These are the patterns that have produced MOST of my worst trades (based on lite
 7. **Re-entering a trade I just got stopped out of without reanalysis.** The market moved; my structure levels may have changed; what invalidated the first entry may still be invalidating the second.
 
 8. **Trading when tired / distracted / emotionally off.** (For the human operator reading this: this applies to Claude too, in the form of long-context degradation. If the conversation is ancient and feels foggy, the right move is a clean /loop cycle reading only this file and the current chart — not trying to remember.)
+
+---
+
+## [2026-04-18] — Post-loss-streak filter: stop accepting same-direction fires after 3+ losses same session
+
+**Context:** 4 consecutive alt-Bull 5/8-6/8 mechanical fires (XRP 07:03, DOGE 07:00, BNB 07:15 uncorrelated different sector, AVAX 08:36) = 4 closes, ~-$525 realized (~-1.05R combined). Market regime actively shifting bullish → bearish throughout London session. Scanner kept firing 5/8 Long signals as local structures re-formed but macro kept fading them. By AVAX fire I had information that should have blocked the entry: 3 prior losses same direction same session.
+
+**What I did:** Accepted each fire as independent signal. Pause-rule blocks correlated re-entries after OPEN positions, but I was flat between losses — rule didn't cover "post-loss-streak same session." Scanner did its job; my filter had a gap.
+
+**What I should have done:** After 3 losses in same direction same session → block next same-direction fire unless (a) score ≥6/8 (structural, not just standard), OR (b) macro confirmation BTC flips back aligned. Reset counter at session transition (07/13/17/22 UTC) or after 1 winning trade.
+
+**Why it matters:** Market regime shifts happen intra-session. Scanner fires on 3-min klines — it sees local structures, not macro rotation. When you're bleeding on a direction repeatedly in one session, the scanner's edge on that direction has temporarily disappeared. Keep trading it = paying scanner's statistical drift in fees. My R:R floor + confluence floor + correlation filter + news filter all exist to block specific failure modes. This is a NEW failure mode not covered: **session-level direction drift detection**.
+
+**How to apply:**
+- Track realized closes per session by direction (long_losses_today, short_losses_today, long_wins_today, short_wins_today).
+- If `same_direction_losses_this_session >= 3` → next same-direction fire requires +1 score above normal threshold (5/8 → 6/8) AND macro confirmation (BTC regime in direction), OR REJECT.
+- Reset at session transition or 1 winning trade same direction.
+- Today (2026-04-18 08:39): Long losses session = 3 (XRP, DOGE, AVAX). BNB scratch не count как loss. SOL LONG limit placed but NOT filled — cancelled manually to enforce the rule retrospectively. Also cancelled BNB SHORT limit (fresh start).
+
+**Tags:** `post-loss-streak-filter` `macro-regime-shift` `scanner-edge-drift` `paid-525-for-this`
+
+---
+
+## [2026-04-18] — Pause between mechanical fires on correlated pairs
+
+**Context:** 07:00 UTC London wake-up. DOGE 5/8 Bull fired mechanically. 3 minutes later at 07:03 XRP 6/8 Bull fired mechanically. I accepted the back-to-back fires without pausing. By 07:06 XRP signal had collapsed 6/8 → 4/8 — classic peak-score trap — TypeScript proactive-exit closed at -0.3R / -$376 (saved us from -1R SL hit, but loss was still avoidable).
+
+**What I did:** Took both consecutive mechanical fires on correlated alt-Bull pairs without any cooldown. Reasoning: "scanner fired → mechanical layer is the edge → my job is not to override." This was reflexive obedience, not analysis.
+
+**What I should have done:** When a correlated mechanical fire comes 1 cycle after an existing position, impose a 1-cycle pause before accepting the second fire. Re-confirm on the NEXT cycle. If the 6/8 holds through 2 consecutive cycles — it's real setup. If it collapses to 4/8 in 3 min (as XRP did) — scanner was seeing peak-score on a tired move, not fresh edge.
+
+**Why it matters:** The scanner evaluates cross-sectionally. When N correlated alts show 5-6/8 simultaneously, that's usually ONE exhausted move seen from N angles, NOT N independent signals. Yesterday (17-Apr) I codified peak-score trap as a concept in DOGE thesis. Today I LIVED it without applying the rule. R:R floor saves us from far entries; nothing saves us from "right score, wrong moment" unless WE add a pause.
+
+**Rule:** After opening any position via mechanical fire, the NEXT mechanical fire on a correlated pair requires an extra cycle of confirmation — do NOT accept it reflexively in the immediately next scan.
+
+**Tags:** `peak-score-trap` `correlation` `pause-between-mechanical-fires` `paid-250+-for-this`
+
+---
+
+### 2026-04-18 — Scanner does not know about Claude-layer filters. Override on fire.
+
+**Context:** 10:39 UTC. AVAX LONG cooldown (120m from 08:39 loss) expired. Scanner autonomously fired 5/8 LONG AVAX at market, filled instantly on both subs — the 5th alt-Bull LONG fire this session after 4 prior losses (XRP/DOGE/BNB/AVAX#1 all -0.15R to -0.30R). Post-loss-streak filter (written 08:40) demanded 6/8 OR macro confirm; neither satisfied. Claude closed within 28s via `src/close-now.ts`. Scratch (~$40-80 fees), no R damage — but trade should never have filled.
+
+**What I did wrong:** Wrote a post-loss-streak filter into `lessons-learned.md` at 08:40 and treated it as "enforced" — assumed cooldowns + R:R + confluence thresholds in TypeScript would buy me time. They don't. The moment cooldown clears, scanner mechanically refires on threshold + R:R. Market order. Instant fill. My "filter" existed only in my head.
+
+**What I should have done:** Treat every cooldown expiry during a loss streak as an active threat. Either (a) code the filter into TypeScript `src/scan.ts` as a Redis-backed per-direction freeze flag, or (b) pre-place a "DO NOT ACCEPT" note in `Watchlist/active.md` that I re-read each cycle. Until coded — close within 1 cycle of any auto-fire that matches the pattern.
+
+**Why it matters:** This is the **enforcement gap** problem. TypeScript is authoritative for mechanical rules (threshold, cooldown, R:R, DD kill). Claude is authoritative for contextual rules (loss streak, macro regime shift, news event). These live in separate layers. A Claude-layer rule that says "don't take this trade" is NOT inherited by the TypeScript scanner. The scanner fires anyway. If I don't manually override within the same cycle — position exists, fees paid, process grade drops.
+
+**Rule:** Filters that live in `lessons-learned.md` are Claude-enforced, not scanner-enforced. After writing any new filter, immediately ask: "Does this require me to override live fires?" If yes — I must be attentive to every cycle's auto-execs until (a) the condition resolves (e.g., session transition, 1 winning trade) or (b) I code the filter into TypeScript.
+
+**Operational protocol during active Claude-layer filter:**
+1. Every cycle, scan output for `✅ [SYMBOL] ... exec=true` lines on blocked pairs.
+2. If match → immediately `npx tsx src/close-now.ts SYMBOL SIDE`.
+3. Document the override as a trade file + postmortem (paper trail required since Bybit position existed).
+4. Do not wait for TypeScript proactive-exit. Close at market.
+
+**Tags:** `claude-override-required` `scanner-filter-gap` `post-loss-streak-enforcement` `paid-80-fees-for-this`
 
 ---
 

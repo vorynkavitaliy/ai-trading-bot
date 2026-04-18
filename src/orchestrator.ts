@@ -6,7 +6,8 @@ import { cache, SharedPosition } from './cache';
 import { config } from './config';
 import { RiskEngine } from './risk/engine';
 import { NewsFetcher, MacroAssessment } from './news/fetcher';
-import { generateSignal, Signal } from './signal/generator';
+import { translateHeadlines } from './news/translator';
+import { Signal } from './signal/types';
 import { planTrade, InstrumentSpec, fmtPrice } from './trade/planner';
 import { executeAcrossAccounts } from './trade/executor';
 import { PositionManager, announceClosedAggregated, announceTrailedAggregated, ClosedTrade, TrailEvent } from './trade/manager';
@@ -101,35 +102,17 @@ export class Bot {
         return { signal: null, executed: false, skipReason: 'insufficient klines' };
       }
 
-      // 3. News context (refresh every 15 min) + BTC context for altcoin correlation
-      const news = await this.refreshNews();
-      const btc = symbol !== 'BTCUSDT' ? await this.getBtcContext() : null;
+      // 2026-04-18 refactor: entry decisions moved to Claude (via /trade-scan skill).
+      // This legacy scanPair path only manages existing positions (trail SL, expire).
+      // NEW entries: Claude reads data from src/scan-data.ts and calls src/execute.ts.
 
-      // 4. Generate signal (with BTC context for altcoins)
-      const signal = generateSignal({
-        symbol,
-        c4h: c4h as Candle[],
-        c1h: c1h as Candle[],
-        c15m: c15m as Candle[],
-        c3m: c3m as Candle[],
-        newsBias: news.bias,
-        btc: btc ?? undefined,
-      });
-
-      // 5. Manage existing positions on this pair (trail SL, reconcile closed).
-      //    Pass full context so positions can be proactively closed if conditions flip.
+      // Manage existing positions on this pair (trail SL, reconcile closed, force expire).
       const instrument = await this.getInstrument(symbol);
       const managed = await Promise.all(this.accounts.getAllSubAccounts().map((sub) =>
-        this.positionManager.manage(sub, symbol, c1h as Candle[], instrument.tickSize, {
-          c1h: c1h as Candle[],
-          c15m: c15m as Candle[],
-          regime: signal.regime,
-          newsBias: news.bias,
-        })
+        this.positionManager.manage(sub, symbol, c1h as Candle[], instrument.tickSize)
       ));
       const allClosed: ClosedTrade[] = managed.flatMap((m) => m.closed);
       const allTrailed: TrailEvent[] = managed.flatMap((m) => m.trailed);
-      // Unregister closed positions from shared registry
       if (allClosed.length > 0) {
         await cache.unregisterPosition(symbol);
       }
@@ -138,135 +121,7 @@ export class Bot {
         await announceTrailedAggregated(this.telegram, allTrailed);
       }
 
-      // 6. Skip if no signal or rejected
-      if (signal.direction === 'None' || signal.confluence < config.trade.minConfluence) {
-        await SignalRepo.insert({
-          symbol, direction: signal.direction, confluence: signal.confluence,
-          regime: signal.regime,
-          scores: { long: signal.long, short: signal.short },
-          executed: false,
-          rejectReason: signal.rejectReason ?? `confluence ${signal.confluence}/8 < ${config.trade.minConfluence}`,
-        });
-        // Only report on risk warnings. Position open/close/trail already emit
-        // their own Telegram events — don't spam a full scan report each cycle.
-        if (this.telegram && opts.reportTelegram) {
-          const anyWarn = (await Promise.all(this.accounts.getAllSubAccounts().map(async (s) => {
-            const w = await this.bybit.getWallet(s);
-            return (await this.risk.assess(s, Number(w.equity))).status;
-          }))).some((st) => st !== 'ok');
-          if (anyWarn) {
-            await this.sendScanReport(symbol, signal, c1h as Candle[], news);
-          }
-        }
-        return { signal, executed: false, skipReason: signal.rejectReason ?? 'low confluence' };
-      }
-
-      // 7. Plan trade — 3M close gives the most precise entry reference
-      const last = (c3m as Candle[])[c3m.length - 1].close;
-      const plan = planTrade({
-        symbol,
-        direction: signal.direction,
-        entryRef: last,
-        c1h: c1h as Candle[],
-        c15m: c15m as Candle[],
-        c3m: c3m as Candle[],
-        instrument,
-        targetRR: config.trade.minRR,
-      });
-
-      // A+ setups (7-8/8 confluence) accept lower R:R — higher WR compensates per EV math.
-      // See vault/Playbook/entry-rules.md → "A+ Execution Exception"
-      const isAplus = signal.confluence >= 7;
-      const effectiveMinRR = isAplus ? config.trade.minRRAplus : config.trade.minRR;
-      if (plan.rr < effectiveMinRR) {
-        return { signal, executed: false, skipReason: `R:R ${plan.rr} < ${effectiveMinRR} (${signal.confluence}/8${isAplus ? ' A+' : ''})` };
-      }
-
-      // 8. Session + funding window checks
-      const session = detectSession();
-      if (!session.allowEntry) {
-        return { signal, executed: false, skipReason: `Dead zone (${session.label}) — no entries` };
-      }
-      if (isNearFundingWindow()) {
-        return { signal, executed: false, skipReason: 'Near funding rate window (±10 min)' };
-      }
-
-      // 9. Block re-entry if already have a position OR a pending limit on this symbol
-      const allPositions = await this.bybit.getAllPositions(symbol);
-      const hasExisting = allPositions.some((a) => a.positions.length > 0);
-      if (hasExisting) {
-        return { signal, executed: false, skipReason: 'position already open' };
-      }
-      const pending = await this.hasPendingEntryOrder(symbol);
-      if (pending.blocked) {
-        return { signal, executed: false, skipReason: pending.reason };
-      }
-      // Revenge-re-entry guard: same-direction re-entry blocked for 2h after a close.
-      const cooldown = await cache.hasRecentClose(symbol, signal.direction as 'Long' | 'Short');
-      if (cooldown.blocked) {
-        return { signal, executed: false, skipReason: `recent ${signal.direction} close (${cooldown.ageMin}m ago, cooldown 120m)` };
-      }
-
-      // 10. Slot management — check if we need to replace a weaker position
-      //     Reuse isAplus computed above for the R:R exception.
-      const openCount = await cache.getPositionCount();
-      const maxBase = 3;
-      const maxAllowed = isAplus ? config.trade.maxPositions : maxBase;
-
-      if (openCount >= maxAllowed) {
-        // All slots full — try to replace weakest if new signal is stronger
-        const weakest = await cache.getWeakestPosition();
-        if (!weakest || signal.confluence <= weakest.confluence) {
-          return { signal, executed: false, skipReason: `All ${openCount} slots full, new signal (${signal.confluence}/8) not stronger than weakest (${weakest?.confluence ?? '?'}/8)` };
-        }
-
-        // New signal is stronger — close the weakest position to free a slot
-        console.log(`[Orchestrator] Replacing ${weakest.symbol} (${weakest.confluence}/8) with ${symbol} (${signal.confluence}/8)`);
-        await this.closePositionForReplacement(weakest.symbol);
-        await AuditRepo.log({
-          level: 'info', source: 'orchestrator', event: 'position_replaced',
-          symbol, message: `Closed ${weakest.symbol} (${weakest.confluence}/8) → opening ${symbol} (${signal.confluence}/8)`,
-        });
-      }
-
-      // 11. Cross-pair lock — prevent two terminals racing on the same symbol
-      const lockOk = await cache.tryLock(`scan:${symbol}`, 30);
-      if (!lockOk) return { signal, executed: false, skipReason: 'lock busy' };
-
-      try {
-        const reports = await executeAcrossAccounts({
-          bybit: this.bybit,
-          risk: this.risk,
-          telegram: this.telegram,
-          instrument,
-          signal,
-          plan,
-          regimeLabel: signal.regime,
-          newsRiskMultiplier: news.riskMultiplier,
-        });
-        const ok = reports.some((r) => r.success);
-
-        // Register position in shared registry so other terminals can see it
-        if (ok) {
-          await cache.registerPosition(symbol, {
-            symbol,
-            direction: signal.direction as 'Long' | 'Short',
-            confluence: signal.confluence,
-            regime: signal.regime,
-            entry: plan.entry,
-            openedAt: Date.now(),
-            terminal: symbol,
-          });
-        }
-
-        if (ok && this.telegram && opts.reportTelegram) {
-          await this.sendScanReport(symbol, signal, c1h as Candle[], news);
-        }
-
-        return { signal, executed: ok, plan };
-      } finally {
-        await cache.unlock(`scan:${symbol}`);
-      }
+      return { signal: null, executed: false, skipReason: 'Claude-driven mode (legacy scanPair = position manage only)' };
     } catch (err: any) {
       console.error(`[scanPair ${symbol}]`, err);
       await AuditRepo.log({
@@ -309,24 +164,10 @@ export class Bot {
         return { symbol, signal: null, skipReason: 'insufficient klines' };
       }
 
-      // 3. News + BTC context
-      const news = await this.refreshNews();
-      const btc = symbol !== 'BTCUSDT' ? await this.getBtcContext() : null;
-
-      // 4. Generate signal (with BTC context for altcoins)
-      const signal = generateSignal({
-        symbol, c4h: c4h as Candle[], c1h: c1h as Candle[],
-        c15m: c15m as Candle[], c3m: c3m as Candle[], newsBias: news.bias,
-        btc: btc ?? undefined,
-      });
-
-      // 5. Manage existing positions (trail SL, reconcile closed, proactive health check)
+      // 2026-04-18 refactor: entry logic removed. analyzePair now only manages positions.
       const instrument = await this.getInstrument(symbol);
       const managed = await Promise.all(this.accounts.getAllSubAccounts().map((sub) =>
-        this.positionManager.manage(sub, symbol, c1h as Candle[], instrument.tickSize, {
-          c1h: c1h as Candle[], c15m: c15m as Candle[],
-          regime: signal.regime, newsBias: news.bias,
-        })
+        this.positionManager.manage(sub, symbol, c1h as Candle[], instrument.tickSize)
       ));
       const allClosed: ClosedTrade[] = managed.flatMap((m) => m.closed);
       const allTrailed: TrailEvent[] = managed.flatMap((m) => m.trailed);
@@ -336,58 +177,7 @@ export class Bot {
         await announceTrailedAggregated(this.telegram, allTrailed);
       }
 
-      // 7. No signal or low confluence
-      if (signal.direction === 'None' || signal.confluence < config.trade.minConfluence) {
-        await SignalRepo.insert({
-          symbol, direction: signal.direction, confluence: signal.confluence,
-          regime: signal.regime, scores: { long: signal.long, short: signal.short },
-          executed: false,
-          rejectReason: signal.rejectReason ?? `confluence ${signal.confluence}/8 < ${config.trade.minConfluence}`,
-        });
-        return { symbol, signal, skipReason: signal.rejectReason ?? 'low confluence' };
-      }
-
-      // 8. Session + funding checks
-      const session = detectSession();
-      if (!session.allowEntry) {
-        return { symbol, signal, skipReason: `Dead zone (${session.label})` };
-      }
-      if (isNearFundingWindow()) {
-        return { symbol, signal, skipReason: 'Near funding rate window' };
-      }
-
-      // 9. Already have position OR pending limit on this symbol
-      const allPositions = await this.bybit.getAllPositions(symbol);
-      const hasExisting = allPositions.some((a) => a.positions.length > 0);
-      if (hasExisting) {
-        return { symbol, signal, skipReason: 'position already open' };
-      }
-      const pending = await this.hasPendingEntryOrder(symbol);
-      if (pending.blocked) {
-        return { symbol, signal, skipReason: pending.reason };
-      }
-      // Revenge-re-entry guard: same-direction re-entry blocked for 2h after a close.
-      const cooldown = await cache.hasRecentClose(symbol, signal.direction as 'Long' | 'Short');
-      if (cooldown.blocked) {
-        return { symbol, signal, skipReason: `recent ${signal.direction} close (${cooldown.ageMin}m ago, cooldown 120m)` };
-      }
-
-      // 10. Plan trade
-      const last = (c3m as Candle[])[c3m.length - 1].close;
-      const plan = planTrade({
-        symbol, direction: signal.direction, entryRef: last,
-        c1h: c1h as Candle[], c15m: c15m as Candle[], c3m: c3m as Candle[],
-        instrument, targetRR: config.trade.minRR,
-      });
-
-      // A+ exception — see scanPair comment + entry-rules.md
-      const isAplus = signal.confluence >= 7;
-      const effectiveMinRR = isAplus ? config.trade.minRRAplus : config.trade.minRR;
-      if (plan.rr < effectiveMinRR) {
-        return { symbol, signal, skipReason: `R:R ${plan.rr} < ${effectiveMinRR} (${signal.confluence}/8${isAplus ? ' A+' : ''})` };
-      }
-
-      return { symbol, signal, plan, instrument, news, c1h: c1h as Candle[] };
+      return { symbol, signal: null, skipReason: 'Claude-driven mode (analyzePair = position manage only)' };
     } catch (err: any) {
       console.error(`[analyzePair ${symbol}]`, err);
       return { symbol, signal: null, skipReason: err.message };
@@ -405,80 +195,15 @@ export class Bot {
     // Critical: scanAll runs via /trade-scan all — without this, stale limits age indefinitely.
     await this.monitorPendingOrders();
 
-    // Phase 1: Analyze ALL pairs in parallel
+    // 2026-04-18 refactor: Claude owns entry decisions via /trade-scan + execute.ts.
+    // scanAll now just manages positions in parallel — no execution here.
     const analyses = await Promise.all(symbols.map((s) => this.analyzePair(s, opts)));
-
-    // Phase 2: Separate ready-to-execute from skipped
-    const ready = analyses.filter((a) => a.signal && a.plan && a.instrument && !a.skipReason);
-    const skipped = analyses.filter((a) => !a.plan || a.skipReason);
-
-    // Phase 3: Rank by confluence (highest first), then execute in priority order
-    ready.sort((a, b) => (b.signal!.confluence) - (a.signal!.confluence));
-
-    const results: { symbol: string; signal: Signal | null; executed: boolean; skipReason?: string; plan?: any }[] = [];
-
-    // Add skipped results
-    for (const s of skipped) {
-      results.push({ symbol: s.symbol, signal: s.signal, executed: false, skipReason: s.skipReason });
-    }
-
-    // Execute ready signals in order of quality
-    for (const a of ready) {
-      // Re-check slot availability (may have been filled by higher-priority signal above)
-      const openCount = await cache.getPositionCount();
-      const isAplus = a.signal!.confluence >= 7;
-      const maxAllowed = isAplus ? config.trade.maxPositions : 3;
-
-      if (openCount >= maxAllowed) {
-        // Try replacement
-        const weakest = await cache.getWeakestPosition();
-        if (!weakest || a.signal!.confluence <= weakest.confluence) {
-          results.push({
-            symbol: a.symbol, signal: a.signal, executed: false,
-            skipReason: `Slots full (${openCount}/${maxAllowed}), not stronger than weakest (${weakest?.confluence ?? '?'}/8)`,
-          });
-          continue;
-        }
-        // Replace weakest
-        console.log(`[scanAll] Replacing ${weakest.symbol} (${weakest.confluence}/8) with ${a.symbol} (${a.signal!.confluence}/8)`);
-        await this.closePositionForReplacement(weakest.symbol);
-        await AuditRepo.log({
-          level: 'info', source: 'orchestrator', event: 'position_replaced',
-          symbol: a.symbol, message: `Closed ${weakest.symbol} (${weakest.confluence}/8) → ${a.symbol} (${a.signal!.confluence}/8)`,
-        });
-      }
-
-      // Execute
-      const lockOk = await cache.tryLock(`scan:${a.symbol}`, 30);
-      if (!lockOk) {
-        results.push({ symbol: a.symbol, signal: a.signal, executed: false, skipReason: 'lock busy' });
-        continue;
-      }
-
-      try {
-        const reports = await executeAcrossAccounts({
-          bybit: this.bybit, risk: this.risk, telegram: this.telegram,
-          instrument: a.instrument!, signal: a.signal!, plan: a.plan!,
-          regimeLabel: a.signal!.regime,
-          newsRiskMultiplier: a.news?.riskMultiplier,
-        });
-        const ok = reports.some((r) => r.success);
-
-        if (ok) {
-          await cache.registerPosition(a.symbol, {
-            symbol: a.symbol, direction: a.signal!.direction as 'Long' | 'Short',
-            confluence: a.signal!.confluence, regime: a.signal!.regime,
-            entry: a.plan!.entry, openedAt: Date.now(), terminal: a.symbol,
-          });
-        }
-
-        results.push({ symbol: a.symbol, signal: a.signal, executed: ok, plan: a.plan });
-      } finally {
-        await cache.unlock(`scan:${a.symbol}`);
-      }
-    }
-
-    return results;
+    return analyses.map((a) => ({
+      symbol: a.symbol,
+      signal: a.signal,
+      executed: false,
+      skipReason: a.skipReason,
+    }));
   }
 
   // ─── Pending limit order monitoring ──────────────────────────────
@@ -819,7 +544,9 @@ export class Bot {
           riskMultiplier: news.riskMultiplier,
           fearGreed: news.fearGreed,
           triggers: news.triggers,
-          itemSummaries: news.items.slice(0, 5).map((i) => i.title.slice(0, 80)),
+          itemSummaries: (
+            await translateHeadlines(news.items.slice(0, 5).map((i) => i.title))
+          ).map((t) => t.slice(0, 80)),
         },
       });
       await cache.setLastFullReport(now);

@@ -86,7 +86,7 @@ Claude draws on the 35-file research library in `.claude/docs/research/` (mirror
 3. **R-based, not dollar-based.** The unit of thinking is R. A -$500 loss at 0.5R is nothing; a -$200 loss at 2R is a process failure.
 4. **Cold on losers, patient on winners.** Cut without ego; let structure dictate the exit, not anxiety.
 5. **Survival first.** Capital preservation precedes profit maximization. DD kill switches are non-negotiable.
-6. **One brain, consistent logic.** The same 8-factor model that opens a position evaluates closing it. No duplicate decision frameworks.
+6. **One brain, consistent logic.** The same 12-factor rubric that opens a position evaluates closing it. No duplicate decision frameworks. Symmetric LONG/SHORT scoring — no directional bias.
 
 ## Full Identity
 
@@ -233,86 +233,92 @@ These rules are **absolute**. Violation = permanent account loss. No exceptions.
 
 ---
 
-# TRADING PROTOCOL — Autonomous Operation
+# TRADING PROTOCOL — Claude-Driven Autonomous Operation
 
-## Hybrid Architecture: TypeScript + LLM
+## Architecture: TS = sensors + executor, Claude = brain
 
-Two layers working together every cycle:
+**Since 2026-04-18 refactor, Claude is the primary decision-maker on every 3-min cycle.** TypeScript layer no longer makes trading decisions — it provides data and executes Claude's decisions with hard risk guardrails.
 
-| Layer | Interval | What it does |
+### Layer responsibilities
+
+| Layer | Role | What it does |
 |---|---|---|
-| **TypeScript** (mechanical) | Every **3 min** | 8-factor scoring, execution, SL trailing, position management, proactive exit |
-| **LLM** (strategic) | Every **15 min** | WebSearch news, read orderbook, think about positions, strategic decisions |
+| **TS sensors** (`npx tsx src/scan-data.ts`) | Data provider | Pulls klines (4H/1H/15M/3M), indicators (RSI/MACD/ADX/ATR/OBV/EMA), orderbook depth, market structure, BTC context, session info, news bias, open positions, pending orders, risk snapshot. **Returns raw JSON. No scoring. No decisions.** |
+| **Claude** (this agent, every 3-min /loop) | Decision maker | Reads vault (identity, lessons, thesis, journal, watchlist) + scanner JSON. Applies 12-factor rubric manually. Uses WebSearch proactively when data gaps exist. Decides: open / hold / close / adjust / wait. |
+| **TS executor** (`npx tsx src/execute.ts`) | Order runner | Accepts Claude's decisions as CLI args. Validates hard guardrails (DD kill switch, mandatory SL, risk %, position caps, funding window, trading hours). Submits orders across all sub-accounts via Promise.all. Logs to DB + Redis + Telegram. |
 
-### Mechanical layer (npm run scan)
-- Fast (~10 sec for 8 pairs)
-- Cheap (no LLM tokens)
-- Handles: risk checks, kline analysis, confluence scoring, trade execution (market + limit orders), SL trailing, position expiry, pending order monitoring
+### Why this matters
 
-### LLM layer (Claude Opus — `.claude/skills/llm-analyst/SKILL.md`)
-- Deep (~30-60 sec)
-- **Character**: cold, rational, decisive. Not a financial advisor — a prop trader with skin in the game
-- **Bold on structure**: clean sweep+OB at 4/8 > messy 6/8 without structure
-- **Strict on losers**: "Would I open this right now?" — if no, close it. No ego.
-- **Portfolio thinker**: sees correlated risk, directional overweight, narrative shifts
-- Sees what code can't: orderbook manipulation, narrative context, event timing
-- **Can force-close positions** that the mechanical layer wouldn't catch
+- **No more missed SHORT signals** — old TS scoring had asymmetric bias against SHORT that Claude will never reproduce (Claude sees data both ways and weighs symmetrically).
+- **No more 2-minute whipsaw exits** — Claude has grace period awareness and reads position age before acting.
+- **No more false PnL reports** — TS executor rebuilds PnL from entry-vs-exit, ignores Bybit's closedPnl sign.
+- **Claude uses the vault as working memory** — journal entries from earlier in the day inform the current decision. Lessons from previous losses are actively applied. Thesis files get rewritten when the view changes.
 
-| Task | Interval | Layer |
+### Cadence
+
+| Activity | Frequency | Layer |
 |---|---|---|
-| Pair scan + execution | Every **3 min** | TypeScript |
-| Position monitoring | Every **3 min** | TypeScript |
-| News WebSearch + macro | Every **15 min** | LLM |
-| Position strategic review | Every **15 min** | LLM |
-| Orderbook analysis | Every **15 min** | LLM (MCP) |
-| Full Telegram report | Every **30 min** | TypeScript |
-| Drawdown monitoring | Every scan | TypeScript |
+| Reconcile vault ↔ Bybit | Every cycle (3 min) | TS (blocks rest if misaligned) |
+| Risk snapshot (DD/equity) | Every cycle | TS |
+| Scanner data pull | Every cycle | TS |
+| **Decision making** | **Every cycle** | **Claude** |
+| WebSearch (news, unusual moves) | As-needed (see triggers below) | Claude |
+| Trade execution | On Claude's command | TS |
+| Position health check | Every cycle | Claude (reads open_positions in JSON) |
+| Vault writes (journal, thesis, trades) | Every cycle | Claude |
+| Full Telegram report | Every 30 min | TS |
 
-## 8-Factor Confluence Model (Entry AND Exit)
+---
 
-One unified scoring system for both opening and monitoring positions.
+## 12-Factor Confluence Rubric (Claude applies manually)
 
-### Entry thresholds:
-- **Structural entry (sweep+OB tap + Multi-TF)**: **4/8** — pro entry BEFORE BOS
-- **Standard entry**: **5/8** — reactive confirmation
-- **Counter-trend / news-against**: **6/8**
-- **A+ setup**: **7-8/8** — increased size (1% risk)
-- **Early exit**: opposite direction scores **4/8+** → close position
+**This is a RUBRIC, not a hard-coded gate.** Claude scores each factor 0 or 1 (SMC can give 2 for strong) per direction, sums, and applies entry/exit thresholds. There is no asymmetry between LONG and SHORT — the same factor definitions apply to both.
 
-| # | Factor | Entry (Long example) | Adverse (for open Long) |
-|---|--------|---------------------|------------------------|
-| 1 | **SMC/Structure** | sweep+OB tap (STRONG=2pts), BOS (weak=1pt) | BOS opposite direction |
-| 2 | **Technical** | RSI capitulation(<30)/div, MACD hist turning | RSI>70/div bear, MACD turning down |
-| 3 | **Volume** | OBV bull, spike+green, >VWAP | OBV bear div, vol declining |
-| 4 | **Multi-TF + BTC** | 4H→1H→15M→3M + BTC 1H aligned | TF break OR BTC 1H against us |
-| 5 | **Regime + BTC** | Bull/Range + BTC aligned | Bear regime OR BTC Bear (for alts) |
-| 6 | **News/Macro** | neutral or risk-on | risk-off bias |
-| 7 | **Momentum** | ADX>20, +DI>-DI, RSI slope up | ADX weak, DI flip, RSI flat |
-| 8 | **Volatility** | ATR 10th-85th percentile | ATR extreme (>85th pct) |
+| # | Factor | LONG scoring | SHORT scoring |
+|---|--------|--------------|---------------|
+| 1 | **SMC / Structure** | sweep of low + reclaim + OB tap (STRONG=2), OR bullish BOS (weak=1) | sweep of high + rejection + OB tap (STRONG=2), OR bearish BOS (weak=1) |
+| 2 | **Classic Technical** | RSI capitulation (<30) or bullish divergence, MACD hist turning positive, EMA21>EMA55 | RSI overbought (>70) or bearish divergence, MACD hist turning negative, EMA21<EMA55 |
+| 3 | **Volume Profile** | OBV bullish (slope up or bullish div), volume spike with green close, price above VWAP | OBV bearish, volume spike with red close, price below VWAP |
+| 4 | **Multi-TF alignment** (pair-only, excludes BTC) | 4H trend up + 1H not strongly down + 15M supportive | 4H trend down + 1H not strongly up + 15M supportive |
+| 5 | **BTC Correlation** (altcoins only; = 1 for BTCUSDT) | BTC Bull regime OR Range with 1H RSI slope ≥ 0 | BTC Bear regime OR Range with 1H RSI slope ≤ 0. **Never auto-0 for SHORT when BTC 1H up — only if BTC is in full Bull with slope >2.** |
+| 6 | **Regime fit** | Bull OR Range (not Bear) | Bear OR Range (not Bull) |
+| 7 | **News / Macro** | bias neutral or risk-on | bias neutral or risk-off |
+| 8 | **Momentum** | ADX > 20, +DI > -DI, RSI slope positive | ADX > 20, -DI > +DI, RSI slope negative |
+| 9 | **Volatility** | ATR within 10th-85th percentile (not dead, not spiking) | same |
+| 10 | **Liquidation clusters** | major short-liq cluster above price (magnet target) OR far from long-liq below | major long-liq cluster below price (magnet target) OR far from short-liq above |
+| 11 | **Funding / OI** | funding rate negative or declining (shorts over-loaded) OR OI rising with price | funding rate extreme positive (longs over-loaded) OR OI rising with price decline |
+| 12 | **Session + Time** | in London/NY/Overlap, ≥ 15 min to next funding window, quality ≥ 1.0 | same |
 
-## BTC Correlation for Altcoins
+### Entry thresholds (symmetric — same for LONG and SHORT)
 
-**BTC leads altcoins.** Every altcoin signal is validated against BTC state:
+- **A+ setup: 12/12** → 1.0% risk (max) — textbook setup, size up
+- **A setup: 10-11/12** → 0.75% risk
+- **Standard (B+): 9/12** → 0.5% risk — **MINIMUM for new entries**
+- **Structural: 8/12** → 0.5% risk, **ONLY** if factor #1 = STRONG (sweep+OB tap, 2 pts) AND factor #4 = 1
+- **Below 8/12** → no entry. Period.
 
-| BTC State | Altcoin Long | Altcoin Short |
-|---|---|---|
-| BTC Bull | Allowed | Needs 6/8 (counter-trend) |
-| BTC Range | Allowed | Allowed |
-| BTC Bear | **Blocked** (regime factor = 0) | Allowed |
-| BTC 1H down | Multi-TF factor = 0 for Long | Allowed |
-| BTC 1H up | Allowed | Multi-TF factor = 0 for Short |
+### Counter-trend threshold (symmetric)
 
-BTC context is cached for 5 minutes and includes: regime (4H), 1H trend, RSI slope.
-For BTCUSDT itself — BTC context is not applied (self-referencing).
+- Counter-trend = LONG in Bear regime, or SHORT in Bull regime
+- Requires **10/12** minimum (same for both sides — no more "SHORT needs 6/8 but LONG only 5/8" asymmetry)
 
-## Risk Management Per Trade
+### Early exit threshold
 
-- Default risk: **0.5% of initial balance** per trade
-- Max risk: **1.0%** (only for A+ setups with 7-8/8 confluence)
-- SL placement: ATR-based (1.0x ATR below/above entry)
-- TP: **1.5:1 R:R** (realistic intraday targets, no unreachable TPs)
-- **Max SL/TP distance from entry**: BTC = **2%**, altcoins = **3%** (intraday cap)
-- Trailing stop: activate at 1.5R profit, trail at 1x ATR
+- Score OPPOSITE direction each cycle. If opposite ≥ **8/12** AND position age ≥ **9 min** AND position is < 1R profit → **close proactively**
+- Above 1R profit → let trailing stop handle it
+- Grace period of 9 min (3 cycles) prevents whipsaw in-out on the same position
+
+---
+
+## Risk Management per Trade
+
+- **Size tied to confluence**: 9/12 → 0.5%, 10-11/12 → 0.75%, 12/12 → 1.0%
+- **Hard cap**: 1.0% Claude-level, 3.0% HyroTrader absolute (execute.ts enforces)
+- SL placement: structural (below/above sweep or OB) + at least 0.5× ATR(1H) buffer
+- TP target: 1.5R minimum, prefer 2R when clean structure allows
+- **Max SL/TP distance from entry**: BTC 2%, alts 3% (enforced by execute.ts — rejects outside)
+- Trailing stop: activate at 1.5R profit, trail at 1× ATR(1H)
+- News risk multiplier: high-impact news × 0.25, medium × 0.5, F&G ≤ 15 extra × 0.5
 
 ## Position Management
 
@@ -327,18 +333,109 @@ For BTCUSDT itself — BTC context is not applied (self-referencing).
 - **Limit orders at OB levels**: when order block is below/above current price, place limit for better entry
 - **Pending order monitoring**: every cycle checks limits — cancel if expired (45 min) or structure invalidated (BOS against)
 
-## Proactive Position Health Check
+## Proactive Position Health Check (Claude-driven)
 
-Every scan cycle, each open position is re-evaluated using the same 8-factor model — but scoring the **OPPOSITE direction**. If the opposite direction scores **4/8+**, conditions have turned against us → **close early**.
+Every cycle for each open position, Claude re-scores the **OPPOSITE direction** using the 12-factor rubric. Decision tree:
 
-Example: we're Long ETHUSDT. Each cycle, system scores SHORT ETHUSDT:
-- SHORT scores 3/8 → hold (market hasn't flipped)
-- SHORT scores 4/8 → **early exit** (regime + news + structure + momentum all turned bearish)
-- SHORT scores 6/8 → **definitely exit** (strong reversal signal)
+| Position age | Opposite score | Unrealized PnL | Action |
+|---|---|---|---|
+| < 9 min | any | any | **HOLD** — grace period. Let the setup develop. |
+| ≥ 9 min | < 8/12 | any | HOLD — market not flipped |
+| ≥ 9 min | 8/12 | < 1R profit | **EARLY EXIT** — regime turned. No ego. |
+| ≥ 9 min | 10+/12 | any | **FORCE EXIT** — strong reversal, regardless of profit |
+| any | any | > 1R profit | HOLD — trailing stop handles it |
 
-**Safety**: only triggers if position is < 1R profit. Above 1R, trailing stop handles the exit.
+**Philosophy**: don't wait for the stop-loss when you can see the market turning. Same 12-factor rubric that opens a position evaluates closing it. One brain, consistent logic, symmetric LONG/SHORT.
 
-**Philosophy**: don't wait for the stop-loss when you can see the market turning. The same model that says "enter Short" should also say "exit Long". One brain, consistent logic.
+---
+
+## Claude's WebSearch Triggers (mandatory, not optional)
+
+Claude **MUST** use WebSearch proactively when any of these conditions are met during a cycle. Trading blind costs P&L — grabbing context is part of the job.
+
+### Triggers that REQUIRE WebSearch
+
+1. **Unusual price move**: BTC or watchlist coin moves > 2% in 10 min, or > 3% in 1 hour, without prior news identified in `news` section of scanner output.
+   - Query: `"{symbol} price today" OR "crypto news {current-date}"`
+
+2. **Funding rate extreme spike**: funding > +0.05% or < -0.05% on a major coin (BTC/ETH/SOL) → find why.
+   - Query: `"{symbol} funding rate" OR "{symbol} leverage squeeze"`
+
+3. **OI anomaly**: OI up > 5% in 1 hour with no price move — someone's positioning. Find narrative.
+   - Query: `"{symbol} open interest" OR "{symbol} whale"`
+
+4. **Open position acting weird**: position is > 30 min old, chart looks fine, but unrealized R is deteriorating. Check if there's news you missed.
+   - Query: `"{symbol} news" past hour`
+
+5. **Session transition with no clear bias**: at 07:00, 13:00, 17:00 UTC — check what's driving the tape. Especially if vault Thesis disagrees with current price action.
+   - Query: `"crypto market today" OR "bitcoin news today"`
+
+6. **Watchlist coin you don't recognize or rarely trade** (e.g., rare LINK/DOGE trigger): check token-specific catalysts.
+   - Query: `"{symbol} unlock" OR "{symbol} news this week"`
+
+7. **Before entering ANY trade with confluence 11+/12 (A or A+)**: a confirming news scan prevents stepping on a known upcoming event (FOMC, CPI, ETF announcement).
+   - Query: `"crypto calendar {current-week}" OR "{symbol} catalyst"`
+
+8. **Upon Telegram hint from operator** (if user sends a message with a coin or topic): follow up with WebSearch.
+
+### When WebSearch is OPTIONAL
+
+- Routine 5/12 or 6/12 cycles — no signal anyway, skip.
+- Open position in clean profit (> 0.5R), structure healthy — no need.
+- Funding rate normal, no price anomalies, news bias neutral — skip.
+
+### How to act on WebSearch results
+
+- **Macro event within 30 min** (FOMC, CPI print, major ETF decision) → DO NOT open new trades, tighten SL on existing.
+- **Unknown coin pump narrative** (e.g., "SEC approved X") → integrate into decision, but don't chase. Size ≤ 0.5%.
+- **Whale / on-chain alert** (e.g., "whale moved 10k BTC to exchange") → bias SHORT for that coin, raise thresholds for LONG.
+- **Quiet tape, no catalysts** → confirm to yourself that the chart is the only data, trade the structure.
+
+---
+
+## Vault Memory — Claude's Persistent Brain
+
+The vault is not decoration. It's where your persistence lives between cycles. Context resets every /loop fire; the vault does not. **Read it EVERY cycle, write to it on EVERY material event.**
+
+### Mandatory reads every cycle (in this order)
+
+1. **`vault/Playbook/00-trader-identity.md`** — re-anchor. Cold, structural, R-based. Non-negotiable.
+2. **`vault/Playbook/lessons-learned.md`** — skim. Every line cost P&L to earn. Not re-reading = paying for the lesson twice.
+3. **`vault/Thesis/{SYMBOL}.md`** — the current view on the pair being evaluated.
+4. **`vault/Watchlist/active.md`** — setups being hunted. Is one triggered now?
+5. **`vault/Journal/{TODAY}.md`** — today's narrative so far. The cycle's first paragraph is that context.
+
+### On-demand (when decision justifies it)
+
+- `vault/Playbook/entry-rules.md` — when considering a new open
+- `vault/Playbook/exit-rules.md` — when considering a close
+- `vault/Playbook/regime-playbook.md` — when BTC regime unclear or transitioning
+- `vault/Playbook/session-playbook.md` — at session transitions (07:00, 13:00, 17:00, 22:00 UTC)
+- `vault/Trades/{DATE}_{SYMBOL}_{DIR}.md` — when re-evaluating an existing position
+- `vault/Postmortem/...` — when current setup resembles a recent trade
+- `vault/Research/{topic}.md` — when methodology needs verification
+
+### Mandatory writes (material events)
+
+| Event | File | Action |
+|---|---|---|
+| Start of day (first cycle after 07:00 UTC) | `vault/Journal/{TODAY}.md` | Create from `_template.md`, write pre-market context |
+| Thesis change for a pair | `vault/Thesis/{SYMBOL}.md` | Rewrite, update `updated:` frontmatter |
+| Watchlist change | `vault/Watchlist/active.md` | Add/remove setups |
+| Every cycle that made a decision (open/close/adjust/skip) | `vault/Journal/{TODAY}.md` | Append: `[HH:MM] {decision + 1-sentence rationale}` |
+| New position opened | `vault/Trades/{YYYY-MM-DD}_{SYMBOL}_{DIR}.md` | Create from `_template.md`, full thesis + confluence breakdown |
+| Position milestone (+1R, trail activated, news shift) | Existing trade file | Append timestamped update block |
+| Position closed | Trade file frontmatter | `status: closed`, `closed_reason`, `r_multiple`. Write Close Summary + Immediate Takeaway |
+| Within 1h of close | `vault/Postmortem/{YYYY-MM-DD}_{SYMBOL}_{DIR}.md` | Create, grade the process independent of outcome |
+| Generalizable lesson emerged | `vault/Playbook/lessons-learned.md` | Append using canonical format. Only if it cost or saved P&L. |
+| Session end (13:00, 17:00, 22:00) | Journal | Session summary — what worked, what didn't, mental state |
+
+### Vault writing style
+
+- **Decisions, not narration.** "Closed ETH at -0.7R because 1H BOS invalidated thesis" > "I was looking at ETH and then decided to close"
+- **Cite structure + research.** Weak: "structure says enter". Strong: "1H OB + 4H sweep + reclaim — classic SMC setup per `stop-hunting-market-traps.md`"
+- **Terse > verbose.** 10-line thesis > 100-line ramble. Git preserves history; don't accumulate.
+- **When you reference a lesson**: quote the line from lessons-learned.md so the next cycle can follow the thread.
 
 ## Inter-Terminal Communication
 

@@ -30,7 +30,23 @@ updated: 2026-04-17T09:00:00Z
 
 ## Active Setups
 
-*Empty — BNB triggered 11:01 UTC and moved to active position.*
+### ✅ Post-loss-streak filter RESET at 13:00 UTC (Overlap open)
+
+Session transition invalidated streak counter. LONG fires now normal (5/8 standard, 6/8 counter-trend, R:R ≥ 1.5). Previous alt-Bull cluster cooled off organically during London mid-session; scanner currently shows no alt-Bull LONG dir-eligible (all L≤5 with S ties or higher).
+
+**2-cycle confirmation rule retained** for any 6/8 fire until I see 1 winning trade (accumulated evidence scanner edge has restored).
+
+### Watch: BNB SHORT — cooldown cleared, waiting for R:R ≥ 1.5
+
+- **Trigger:** 6/8 SHORT score with R:R ≥ 1.5 (currently scanner rejects R:R ~1.2-1.3).
+- **Entry zone:** bounce to resistance ~644-646 (to widen distance to TP and satisfy floor).
+- **SL:** above structural high from London open sweep.
+- **TP:** structural 1H support (mid 630s).
+- **Confluence active:** 6/8 SHORT sustained across 6+ cycles — structural signal validated.
+- **Expected score at trigger:** 6/8.
+- **Session window:** London + Overlap.
+- **Invalidation:** SHORT drops to ≤4/8 OR BNB breaks above resistance on volume.
+- **Added:** 2026-04-18 10:40 UTC.
 
 ---
 
