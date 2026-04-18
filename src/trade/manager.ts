@@ -104,14 +104,19 @@ export class PositionManager {
       const match: any = recent.find((r: any) => r.orderId === open.order_id || r.symbol === symbol);
       if (!match) return null;
 
-      const pnl = Number(match.closedPnl ?? 0);
       const exitPrice = Number(match.avgExitPrice ?? match.exitPrice ?? 0);
       const initial = Number(open.entry_price);
       const qty = Number(open.qty);
+      const isLong = open.direction === 'Long';
+      // Recompute PnL from (exit-entry)*qty — do NOT trust Bybit's closedPnl sign
+      // (Bybit sometimes returns absolute value or inverted sign depending on direction)
+      const pnl = isLong ? (exitPrice - initial) * qty : (initial - exitPrice) * qty;
       const stopDist = Math.abs(initial - Number(open.stop_loss ?? initial));
       const rMultiple = stopDist > 0 ? (pnl / (stopDist * qty)) : undefined;
-      const pnlPct = open.account_volume > 0 ? (pnl / Number(open.account_volume)) * 100 : 0;
-      const reason = inferExitReason(open, match);
+      // pnlPct from notional (entry*qty), not from full account volume
+      const notional = initial * qty;
+      const pnlPct = notional > 0 ? (pnl / notional) * 100 : 0;
+      const reason = inferExitReason(open, match, isLong, initial, exitPrice);
 
       await TradeRepo.close({
         tradeId: open.id,
@@ -204,7 +209,8 @@ export class PositionManager {
       const exitPrice = cur;
       const qty = Number(open.qty);
       const pnl = isLong ? (exitPrice - entry) * qty : (entry - exitPrice) * qty;
-      const pnlPct = open.account_volume > 0 ? (pnl / Number(open.account_volume)) * 100 : 0;
+      const notional = entry * qty;
+      const pnlPct = notional > 0 ? (pnl / notional) * 100 : 0;
       const rMultiple = stopDist > 0 ? pnl / (stopDist * qty) : undefined;
 
       await TradeRepo.close({
@@ -262,7 +268,8 @@ export class PositionManager {
       const entry = Number(open.entry_price);
       const qty = Number(open.qty);
       const pnl = isLong ? (exitPrice - entry) * qty : (entry - exitPrice) * qty;
-      const pnlPct = open.account_volume > 0 ? (pnl / Number(open.account_volume)) * 100 : 0;
+      const notional = entry * qty;
+      const pnlPct = notional > 0 ? (pnl / notional) * 100 : 0;
       const stopDist = Math.abs(entry - Number(open.stop_loss ?? entry));
       const rMultiple = stopDist > 0 ? pnl / (stopDist * qty) : undefined;
 
@@ -371,12 +378,22 @@ export function msToDuration(ms: number): string {
   return `${h}h ${m}m ${ss}s`;
 }
 
-function inferExitReason(open: any, closed: any): string {
+function inferExitReason(
+  open: any,
+  closed: any,
+  isLong?: boolean,
+  entryPrice?: number,
+  exitPrice?: number,
+): string {
   const exitType = (closed.execType ?? closed.exitType ?? '').toString();
   if (/StopLoss/i.test(exitType)) return 'stop_loss';
   if (/TakeProfit/i.test(exitType)) return 'take_profit';
   if (/Trailing/i.test(exitType)) return 'trailing';
-  if (Number(closed.closedPnl) >= 0) return 'manual_profit';
+  // Compute profit/loss from entry vs exit by direction (do NOT trust closedPnl sign)
+  if (isLong !== undefined && entryPrice !== undefined && exitPrice !== undefined && entryPrice > 0) {
+    const delta = isLong ? exitPrice - entryPrice : entryPrice - exitPrice;
+    return delta >= 0 ? 'manual_profit' : 'manual_loss';
+  }
   return 'manual_loss';
 }
 

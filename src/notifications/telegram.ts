@@ -71,6 +71,38 @@ export class TelegramNotifier {
     );
   }
 
+  async limitCancelled(params: {
+    pair: string;
+    direction: 'LONG' | 'SHORT';
+    limitPrice: string;
+    reason: 'expired' | 'invalidated' | 'manual';
+    ageMin?: number;
+  }): Promise<void> {
+    const icon = params.direction === 'LONG' ? '📈' : '📉';
+    const reasonText =
+      params.reason === 'expired'
+        ? `TTL истёк${params.ageMin !== undefined ? ` (${params.ageMin} мин)` : ''}`
+        : params.reason === 'invalidated'
+        ? 'структура сломалась (BOS против)'
+        : 'отменено вручную';
+    await this.send(
+      `🤖 <b>Claude Trading Bot</b>\n` +
+      `\n` +
+      `❌ Лимитка отменена (не была исполнена):\n` +
+      `──────────────\n` +
+      `\n` +
+      `${icon} <b>${params.direction} лимит</b> (${params.pair})\n` +
+      `\n` +
+      `💰 Цена: <code>${params.limitPrice}</code>\n` +
+      `🔁 Причина: ${reasonText}\n` +
+      `\n` +
+      `ℹ️ Позиция не открывалась — PnL = $0\n` +
+      `\n` +
+      `──────────────\n` +
+      `🕐 ${this.ts()}`
+    );
+  }
+
   async tradeOpened(params: {
     pair: string;
     direction: 'LONG' | 'SHORT';

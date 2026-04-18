@@ -576,7 +576,7 @@ export class Bot {
       // Check if expired
       if (age > order.maxAge) {
         console.log(`[Orders] ${order.symbol} limit expired after ${(age / 60_000).toFixed(0)} min — cancelling`);
-        await this.cancelPendingOrder(order);
+        await this.cancelPendingOrder(order, 'expired');
         continue;
       }
 
@@ -589,7 +589,7 @@ export class Bot {
           const isLong = order.direction === 'Long';
           if ((isLong && bos === 'bearish') || (!isLong && bos === 'bullish')) {
             console.log(`[Orders] ${order.symbol} limit invalidated — BOS ${bos} against ${order.direction}`);
-            await this.cancelPendingOrder(order);
+            await this.cancelPendingOrder(order, 'invalidated');
             continue;
           }
         }
@@ -597,7 +597,10 @@ export class Bot {
     }
   }
 
-  private async cancelPendingOrder(order: import('./cache').PendingOrder): Promise<void> {
+  private async cancelPendingOrder(
+    order: import('./cache').PendingOrder,
+    reason: 'expired' | 'invalidated' | 'manual' = 'manual',
+  ): Promise<void> {
     // Cancel on all sub-accounts
     const subs = this.accounts.getAllSubAccounts();
     await Promise.all(subs.map(async (sub) => {
@@ -608,14 +611,20 @@ export class Bot {
       }
     }));
     await cache.removePendingOrder(order.symbol);
+    const ageMin = Math.round((Date.now() - order.placedAt) / 60_000);
     await AuditRepo.log({
       level: 'info', source: 'orchestrator', event: 'limit_cancelled',
       symbol: order.symbol,
-      message: `Limit ${order.direction} @ ${order.limitPrice} cancelled (${((Date.now() - order.placedAt) / 60_000).toFixed(0)} min old)`,
+      message: `Limit ${order.direction} @ ${order.limitPrice} cancelled (${ageMin} min old, reason=${reason})`,
     });
     if (this.telegram) {
-      await this.telegram.error('Лимитка отменена',
-        `${order.symbol} ${order.direction} @ ${order.limitPrice} — setup больше не актуален`);
+      await this.telegram.limitCancelled({
+        pair: order.symbol,
+        direction: order.direction === 'Long' ? 'LONG' : 'SHORT',
+        limitPrice: String(order.limitPrice),
+        reason,
+        ageMin,
+      });
     }
   }
 

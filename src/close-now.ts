@@ -1,5 +1,5 @@
-import { AccountManager } from './core/account-manager.js';
-import { BybitClient } from './core/bybit-client.js';
+import { AccountManager } from './core/account-manager';
+import { BybitClient } from './core/bybit-client';
 import { cache } from './cache';
 
 async function main() {
