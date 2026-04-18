@@ -383,10 +383,29 @@ async function main() {
     }),
   );
 
-  // Per-symbol data in parallel
-  const data = await Promise.all(
-    symbols.map((s) => gatherForSymbol(s, bybit, risk, mgr, news, btcContext)),
-  );
+  // Per-symbol data — batched to avoid Bybit rate limits on public klines endpoint.
+  // 8 symbols × 4 TFs = 32 parallel kline calls hit rate limit (IP-based, public API).
+  // Batch size 3 → 3 batches, ~1.5s each total ~5s for 8 pairs.
+  const BATCH_SIZE = 3;
+  const data: any[] = [];
+  for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
+    const batch = symbols.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.allSettled(
+      batch.map((s) => gatherForSymbol(s, bybit, risk, mgr, news, btcContext)),
+    );
+    for (let j = 0; j < batchResults.length; j++) {
+      const r = batchResults[j];
+      if (r.status === 'fulfilled') {
+        data.push(r.value);
+      } else {
+        data.push({ symbol: batch[j], error: r.reason?.message ?? String(r.reason) });
+      }
+    }
+    // Small gap between batches to let rate limit reset
+    if (i + BATCH_SIZE < symbols.length) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
 
   const output = {
     generated_at: new Date().toISOString(),

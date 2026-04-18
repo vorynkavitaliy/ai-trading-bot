@@ -39,7 +39,9 @@ Read in this order (parallel where independent):
 
 1. **`vault/Playbook/00-trader-identity.md`** — re-anchor WHO you are
 2. **`vault/Playbook/lessons-learned.md`** — skim. Every line cost P&L to earn
-3. **`vault/Thesis/{SYMBOL}.md`** — current view (if single pair) OR all 8 files (if `all`)
+3. **`vault/Thesis/*.md`** — current views:
+   - Single pair mode (`$ARGUMENTS` = one symbol) → read only `vault/Thesis/{SYMBOL}.md`
+   - Batch mode (`$ARGUMENTS` = `all`) → read **all 8 Thesis files** in parallel
 4. **`vault/Watchlist/active.md`** — setups being hunted
 5. **`vault/Journal/{TODAY}.md`** — today's narrative. If missing, note it (create in Phase 5)
 
@@ -92,6 +94,38 @@ Integrate results into the rubric scoring. If WebSearch reveals a macro event wi
 For each symbol, for both LONG and SHORT, manually score all 12 factors 0/1 (factor #1 SMC can be 2 for STRONG). Symmetric — do NOT prefer one direction over the other.
 
 **Write the scoring to the Journal in the decision block** (see Phase 6). This creates auditability.
+
+#### Batch Mode (`all`) — Portfolio-Level Decision Making
+
+When called with `all`, you see the whole market at once. This is your **strategic advantage** — use it:
+
+**Step 1: Quick-scan all 8 pairs** — for each symbol, compute a fast score (top 3 factors: SMC, Multi-TF, Regime) to filter out junk. Pairs scoring < 5/12 on quick-scan → skip to position-management only, don't waste time scoring all 12.
+
+**Step 2: Full-score survivors** — for pairs passing quick-scan (≥ 5/12), score all 12 factors symmetrically LONG+SHORT. Aim for 2-4 deep-scores per cycle, not 8.
+
+**Step 3: Portfolio view before acting**
+- **Correlation check**: 3 altcoin-LONG signals = effectively 1 BTC-correlated trade × 3 exposure. Reject weakest two unless regime clearly decorrelates them.
+- **Directional overweight**: 4 LONGs and 0 SHORTs in a Range regime = overweight. Demand higher bar.
+- **Slot budget**: count open + pending on Bybit. Max 3 base, 5 A+. If slots full → need replacement logic.
+- **Total heat**: sum `risk_pct` across all open positions + proposed. Stop at 5% total.
+
+**Step 4: Rank and execute in priority order**
+- Sort valid signals (≥ 9/12) by confluence DESC, then by R:R DESC.
+- Execute strongest first. After each open, re-check slots before next.
+- **Replacement rule**: if slots full and new signal is stronger than weakest open (by ≥ 2 points), close weakest via `execute.ts close` then open new.
+- If no slot and no replacement wins → skip remaining, log to Journal.
+
+**Step 5: Open positions review** — iterate through all `open_positions[]` in the scanner JSON. For each:
+- Check `can_proactive_exit` flag (Claude-friendly: false if grace period active OR > 1R profit)
+- If flag is true → score opposite direction. If opposite ≥ 8/12 → close.
+- Otherwise hold, trailing stop does its job.
+
+**Step 6: Pending limits review** — iterate `pending_orders[]`:
+- If age approaching maxAge (e.g., 40/45 min) and structure still valid → let it cook
+- If structure invalidated (BOS against your direction) → `cancel-limit` with reason `invalidated`
+- If age > maxAge or thesis no longer holds → `cancel-limit` with reason `expired`
+
+**Expected batch-mode cycle time**: 20-60 seconds for full analysis of 8 pairs + execute. If you exceed 90 seconds → you're over-thinking. Cut 12-factor deep-scoring to top 2-3 candidates only.
 
 Example structure:
 ```
