@@ -128,6 +128,8 @@ async function checkGuardrails(
   symbol: string,
   direction: Direction,
   riskPct: number,
+  entry: number,
+  sl: number,
 ): Promise<{ ok: true } | { ok: false; reason: string; code: string }> {
   // 1) Trading hours gate — disabled by default (24h trading, Claude decides).
   // Opt in via SCHEDULE_ENABLED=true env var to restore a restricted window.
@@ -199,12 +201,39 @@ async function checkGuardrails(
     return { ok: false, code: 'pending_exists', reason: `pending ${pendingSame.direction} limit @ ${pendingSame.limitPrice}` };
   }
 
-  // 7) Per-subaccount DD kill-switch (via RiskEngine.snapshot, which enforces
-  //    4% daily / 8% total soft kill before 5%/10% HyroTrader hard limit).
+  // 7) Per-subaccount DD kill-switch + margin + notional (HyroTrader inviolable).
+  //    Margin: position IM = notional / leverage must be ≤ 25% of current equity.
+  //    Notional: qty × entry must be ≤ 2× initial balance.
+  //    Both applied per-account (each sub checked independently).
+  const slDist = Math.abs(entry - sl);
+  const leverage = config.trade.leverage;
+  const maxMarginPct = config.trade.maxMarginPct;
+  const maxNotionalMult = config.trade.maxNotionalMult;
   for (const sub of gctx.mgr.getAllSubAccounts()) {
     const assessment = await gctx.risk.snapshot(sub);
     if (assessment.status === 'kill' || assessment.status === 'halt') {
       return { ok: false, code: 'dd_kill', reason: `${sub.label}: ${assessment.reason}` };
+    }
+    // Per-account risk-based qty: risk_usd / sl_distance = qty
+    const riskUsd = (riskPct / 100) * assessment.equity;
+    const qty = riskUsd / slDist;
+    const notional = qty * entry;
+    const marginReq = notional / leverage;
+    const marginPct = marginReq / assessment.equity;
+    const notionalMult = notional / assessment.initial;
+    if (marginPct > maxMarginPct) {
+      return {
+        ok: false,
+        code: 'margin_exceeded',
+        reason: `${sub.label}: margin ${(marginPct * 100).toFixed(1)}% > ${(maxMarginPct * 100).toFixed(0)}% (notional $${notional.toFixed(0)} / leverage ${leverage}x / equity $${assessment.equity.toFixed(0)}). Raise LEVERAGE to >= ${Math.ceil(notional / (maxMarginPct * assessment.equity))}x or reduce risk_pct.`,
+      };
+    }
+    if (notionalMult > maxNotionalMult) {
+      return {
+        ok: false,
+        code: 'notional_exceeded',
+        reason: `${sub.label}: notional ${notionalMult.toFixed(2)}x initial > ${maxNotionalMult}x cap ($${notional.toFixed(0)} / $${assessment.initial.toFixed(0)}). Reduce risk_pct or widen SL.`,
+      };
     }
   }
 
@@ -312,7 +341,7 @@ async function actionOpen(args: Record<string, string>, useLimit: boolean): Prom
   const telegram = new TelegramNotifier(config.telegram.token, config.telegram.chatId);
 
   // Guardrails
-  const g = await checkGuardrails({ bybit, risk, mgr }, symbol, direction, riskPct);
+  const g = await checkGuardrails({ bybit, risk, mgr }, symbol, direction, riskPct, entry, sl);
   if (!g.ok) {
     console.log(JSON.stringify({
       ok: false,

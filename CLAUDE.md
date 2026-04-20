@@ -73,11 +73,23 @@ src/
 | Rule | Value |
 |---|---|
 | Max risk per trade | **1.5%** default, 3% absolute cap |
+| **Max margin per position** | **25% of current balance** — liquidation/exposure cap |
+| **Max notional per position** | **2× initial balance** — exposure cap |
+| **Min leverage** | **8×** (config `LEVERAGE=10` recommended) — required so max-notional fits in max-margin |
 | Mandatory Stop-Loss | Server-side within **5 min** of open — NO EXCEPTIONS |
 | SL can be moved but NEVER removed | Edit-never-cancel |
 | Max simultaneous positions | **5** (3 base + 2 for A+) |
 | Max hold time | **48 hours** (prefer intraday) |
 | Max total heat (sum of open risks) | **5%** |
+
+**Margin + notional math** (both must hold simultaneously):
+```
+margin_required = notional / leverage ≤ 0.25 × equity
+notional ≤ 2 × initial_balance
+→ minimum leverage = 8× (so 2x-notional fits inside 25% margin)
+```
+
+At `LEVERAGE=3` (legacy default), any trade with notional > 0.75× equity violates margin rule. Config must be ≥ 8x. Recommended: **10x with buffer**.
 
 ## Prohibited
 

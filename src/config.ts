@@ -70,8 +70,18 @@ export const config = {
     /** Grace period (min) after opening before Claude can proactively close a position.
      *  Prevents 2–3 min whipsaw exits. Surfaced to Claude via scan-data.ts grace_remaining_min. */
     earlyExitGraceMin: num('EARLY_EXIT_GRACE_MIN', 9),
-    /** Fixed leverage applied to every position. Keep low — risk is controlled by qty, not leverage. */
-    leverage: num('LEVERAGE', 3),
+    /**
+     * Fixed leverage applied to every position.
+     * Minimum 8× required to satisfy HyroTrader margin+notional rules simultaneously:
+     *   margin = notional / leverage ≤ 25% equity AND notional ≤ 2× initial
+     *   → leverage ≥ 8×
+     * Default 10× provides a buffer. Risk is controlled by qty/SL, leverage just sets margin requirement.
+     */
+    leverage: num('LEVERAGE', 10),
+    /** HyroTrader inviolable: max margin per position as fraction of equity. */
+    maxMarginPct: num('MAX_MARGIN_PCT', 0.25),
+    /** HyroTrader inviolable: max notional per position as multiple of INITIAL balance. */
+    maxNotionalMult: num('MAX_NOTIONAL_MULT', 2.0),
   },
 
   risk: {
