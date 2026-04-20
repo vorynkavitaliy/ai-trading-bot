@@ -277,16 +277,16 @@ These rules are **absolute**. Violation = permanent account loss. No exceptions.
 | # | Factor | LONG scoring | SHORT scoring |
 |---|--------|--------------|---------------|
 | 1 | **SMC / Structure** | sweep of low + reclaim + OB tap (STRONG=2), OR bullish BOS (weak=1) | sweep of high + rejection + OB tap (STRONG=2), OR bearish BOS (weak=1) |
-| 2 | **Classic Technical** | RSI capitulation (<30) or bullish divergence, MACD hist turning positive, EMA21>EMA55 | RSI overbought (>70) or bearish divergence, MACD hist turning negative, EMA21<EMA55 |
+| 2 | **Classic Technical (tiebreaker)** | RSI<30 or bullish div, EMA21>EMA55 | RSI>70 or bearish div, EMA21<EMA55 |
 | 3 | **Volume Profile** | OBV bullish (slope up or bullish div), volume spike with green close, price above VWAP | OBV bearish, volume spike with red close, price below VWAP |
 | 4 | **Multi-TF alignment** (pair-only, excludes BTC) | 4H trend up + 1H not strongly down + 15M supportive | 4H trend down + 1H not strongly up + 15M supportive |
 | 5 | **BTC Correlation** (altcoins only; = 1 for BTCUSDT) | BTC Bull regime OR Range with 1H RSI slope ≥ 0 | BTC Bear regime OR Range with 1H RSI slope ≤ 0. **Never auto-0 for SHORT when BTC 1H up — only if BTC is in full Bull with slope >2.** |
 | 6 | **Regime fit** | Bull OR Range (not Bear) | Bear OR Range (not Bull) |
 | 7 | **News / Macro** | bias neutral or risk-on | bias neutral or risk-off |
-| 8 | **Momentum** | ADX > 20, +DI > -DI, RSI slope positive | ADX > 20, -DI > +DI, RSI slope negative |
+| 8 | **Momentum** | ADX>20 + PDI>MDI, AND (rsi_slope_accel_1h > 0 OR stoch_15m k>d with k<50) | ADX>20 + MDI>PDI, AND (rsi_slope_accel_1h < 0 OR stoch_15m k<d with k>50) |
 | 9 | **Volatility** | ATR within 10th-85th percentile (not dead, not spiking) | same |
 | 10 | **Liquidation clusters** | major short-liq cluster above price (magnet target) OR far from long-liq below | major long-liq cluster below price (magnet target) OR far from short-liq above |
-| 11 | **Funding / OI** | funding rate negative or declining (shorts over-loaded) OR OI rising with price | funding rate extreme positive (longs over-loaded) OR OI rising with price decline |
+| 11 | **Funding / OI deltas** | funding_delta_1h negative (shorts unwinding) OR oi_delta_1h_pct > +2% with price flat/up (accumulation) | funding_delta_1h positive (shorts building) OR oi_delta_1h_pct > +2% with price down (new shorts) |
 | 12 | **Session + Time** | in London/NY/Overlap, ≥ 15 min to next funding window, quality ≥ 1.0 | same |
 
 ### Entry thresholds (symmetric — same for LONG and SHORT)

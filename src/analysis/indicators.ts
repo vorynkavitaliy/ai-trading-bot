@@ -151,6 +151,18 @@ export const Indicators = {
     return (recent[recent.length - 1] - recent[0]) / lookback;
   },
 
+  /** RSI slope acceleration: (slope now) - (slope `shift` bars ago). Positive = turning more bullish. */
+  rsiSlopeAcceleration(c: Candle[], rsiPeriod = 14, lookback = 5, shift = 3): number | undefined {
+    if (c.length < rsiPeriod + lookback + shift + 1) return undefined;
+    const rsi = RSI.calculate({ values: closes(c), period: rsiPeriod });
+    if (rsi.length < lookback + shift) return undefined;
+    const nowWin = rsi.slice(-lookback);
+    const slopeNow = (nowWin[nowWin.length - 1] - nowWin[0]) / lookback;
+    const priorWin = rsi.slice(-(lookback + shift), -shift);
+    const slopePrior = (priorWin[priorWin.length - 1] - priorWin[0]) / lookback;
+    return slopeNow - slopePrior;
+  },
+
   /** ATR percentile: where current ATR sits vs last N ATR values (0-100) */
   atrPercentile(c: Candle[], atrPeriod = 14, lookback = 100): number | undefined {
     if (c.length < atrPeriod + lookback) return undefined;

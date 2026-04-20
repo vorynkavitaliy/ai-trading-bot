@@ -266,6 +266,44 @@ export class Cache {
     await this.client.del(KEYS.recentClose(symbol, direction));
   }
 
+  // ─── Time-series snapshots (funding/OI deltas, generic) ───
+  // Stored as Redis hash `ts:${symbol}` — field = timestamp (ms), value = JSON payload.
+  // Callers append via tsAppend, read all via tsGetAll, trim old entries via tsTrim.
+
+  async tsAppend(symbol: string, data: unknown, timestampMs: number = Date.now()): Promise<void> {
+    await this.client.hset(`ts:${symbol}`, String(timestampMs), JSON.stringify(data));
+  }
+
+  async tsGetAll<T = any>(symbol: string): Promise<Array<{ ts: number; data: T }>> {
+    const raw = await this.client.hgetall(`ts:${symbol}`);
+    const out: Array<{ ts: number; data: T }> = [];
+    for (const [k, v] of Object.entries(raw)) {
+      const ts = Number(k);
+      if (!Number.isFinite(ts)) continue;
+      try {
+        out.push({ ts, data: JSON.parse(v) as T });
+      } catch {
+        /* skip corrupt */
+      }
+    }
+    out.sort((a, b) => a.ts - b.ts);
+    return out;
+  }
+
+  async tsTrim(symbol: string, maxAgeMs: number, nowMs: number = Date.now()): Promise<number> {
+    const raw = await this.client.hgetall(`ts:${symbol}`);
+    let removed = 0;
+    const cutoff = nowMs - maxAgeMs;
+    for (const k of Object.keys(raw)) {
+      const ts = Number(k);
+      if (!Number.isFinite(ts) || ts < cutoff) {
+        await this.client.hdel(`ts:${symbol}`, k);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
   // ─── Telegram rate limits ───
 
   async getLastFullReport(): Promise<number | null> {

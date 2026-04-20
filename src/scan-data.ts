@@ -98,6 +98,8 @@ function indicatorSummary(c4h: Candle[], c1h: Candle[], c15m: Candle[], c3m: Can
   const macd1h = Indicators.macd(c1h);
   const adx1h = Indicators.adx(c1h, 14);
   const obvSeries1h = Indicators.obv(c1h);
+  const stoch15m = Indicators.stoch(c15m);
+  const rsiSlopeAccel1h = Indicators.rsiSlopeAcceleration(c1h, 14, 5, 3);
 
   // Quick MACD histogram direction — recompute short history from emaSeries if available
   const obvLast = obvSeries1h[obvSeries1h.length - 1];
@@ -111,6 +113,10 @@ function indicatorSummary(c4h: Candle[], c1h: Candle[], c15m: Candle[], c3m: Can
       '3m': Indicators.rsi(c3m, 14),
     },
     rsi_slope_1h: Indicators.rsiSlope(c1h, 14, 5),
+    rsi_slope_accel_1h: rsiSlopeAccel1h !== undefined ? +rsiSlopeAccel1h.toFixed(4) : null,
+    stoch_15m: stoch15m
+      ? { k: +stoch15m.k.toFixed(2), d: +stoch15m.d.toFixed(2) }
+      : null,
     ema: {
       '4h_21': ema21_4h,
       '1h_21': ema21_1h,
@@ -131,6 +137,82 @@ function indicatorSummary(c4h: Candle[], c1h: Candle[], c15m: Candle[], c3m: Can
     },
     rsi_div_1h: Indicators.rsiDivergence(c1h, 30),
     obv_div_1h: Indicators.obvDivergence(c1h, 30),
+  };
+}
+
+/**
+ * Funding rate + open interest with 1h deltas.
+ * Snapshots are persisted in Redis hash `ts:${symbol}` (see cache.tsAppend).
+ * Delta computed from prior snapshot closest to 60 min ago within ±15 min tolerance.
+ * Trim entries older than 150 min each cycle to keep hash small.
+ */
+async function fundingOiSummary(bybit: BybitClient, symbol: string) {
+  const WINDOW_MS = 60 * 60 * 1000;
+  const TOLERANCE_MS = 15 * 60 * 1000;
+  const TRIM_MS = 150 * 60 * 1000;
+  const nowMs = Date.now();
+
+  let fundingRate: number | null = null;
+  let openInterest: number | null = null;
+  try {
+    const t = await bybit.getPrice(symbol);
+    fundingRate = t.fundingRate !== undefined && t.fundingRate !== '' ? Number(t.fundingRate) : null;
+    openInterest = t.openInterest !== undefined && t.openInterest !== '' ? Number(t.openInterest) : null;
+  } catch (err: any) {
+    return {
+      funding_rate: null,
+      funding_delta_1h: null,
+      open_interest: null,
+      oi_delta_1h_pct: null,
+      error: err?.message ?? String(err),
+    };
+  }
+
+  // Read prior snapshots, find one closest to nowMs - WINDOW_MS within tolerance
+  let fundingDelta: number | null = null;
+  let oiDeltaPct: number | null = null;
+  try {
+    const series = await cache.tsGetAll<{ funding: number | null; oi: number | null }>(symbol);
+    const targetTs = nowMs - WINDOW_MS;
+    let best: { ts: number; data: { funding: number | null; oi: number | null } } | null = null;
+    let bestDiff = Infinity;
+    for (const entry of series) {
+      const diff = Math.abs(entry.ts - targetTs);
+      if (diff <= TOLERANCE_MS && diff < bestDiff) {
+        best = entry;
+        bestDiff = diff;
+      }
+    }
+    if (best) {
+      if (fundingRate !== null && best.data.funding !== null && best.data.funding !== undefined) {
+        fundingDelta = +(fundingRate - best.data.funding).toFixed(6);
+      }
+      if (
+        openInterest !== null &&
+        best.data.oi !== null &&
+        best.data.oi !== undefined &&
+        best.data.oi !== 0
+      ) {
+        oiDeltaPct = +(((openInterest - best.data.oi) / best.data.oi) * 100).toFixed(3);
+      }
+    }
+  } catch {
+    /* treat as no prior */
+  }
+
+  // Append current snapshot + trim old (best-effort)
+  try {
+    await cache.tsAppend(symbol, { funding: fundingRate, oi: openInterest }, nowMs);
+    await cache.tsTrim(symbol, TRIM_MS, nowMs);
+  } catch {
+    /* non-fatal */
+  }
+
+  return {
+    funding_rate: fundingRate,
+    funding_delta_1h: fundingDelta,
+    open_interest: openInterest,
+    oi_delta_1h_pct: oiDeltaPct,
   };
 }
 
@@ -159,8 +241,11 @@ async function getOrderbookSummary(bybit: BybitClient, symbol: string, price: nu
   }
 }
 
-function marketStructureSummary(c1h: Candle[], c15m: Candle[]) {
+function marketStructureSummary(c1h: Candle[], c15m: Candle[], c3m: Candle[]) {
   const bos_1h = Structure.bos(c1h);
+  // Faster-TF BOS for intraday responsiveness (1H BOS lags up to 60 min, 15M lags up to 15 min, 3M lags up to 3 min)
+  const bos_15m = Structure.bos(c15m);
+  const bos_3m = Structure.bos(c3m);
   // Sweep detection: look for wicks beyond last 20-bar swing on 15m
   const recent = c15m.slice(-25);
   let sweep: { direction: 'high' | 'low'; level: number; bars_ago: number } | null = null;
@@ -188,8 +273,24 @@ function marketStructureSummary(c1h: Candle[], c15m: Candle[]) {
   const lastPrice = c1h[c1h.length - 1].close;
   const resistanceCands = highs.filter((h) => h > lastPrice).sort((a, b) => a - b);
   const supportCands = lows.filter((l) => l < lastPrice).sort((a, b) => b - a);
+  // Close vs prior swing low/high on 15M — "implicit" breakdown/breakout signal
+  // that fires the same cycle price breaks, without waiting for pivot confirmation.
+  // This is tighter than Structure.bos() which requires a confirmed swing pivot.
+  let close_vs_swing_15m: 'below_prior_low' | 'above_prior_high' | 'inside' = 'inside';
+  if (c15m.length >= 22) {
+    const priorWindow = c15m.slice(-21, -1);
+    const priorLow = Math.min(...priorWindow.map((k) => k.low));
+    const priorHigh = Math.max(...priorWindow.map((k) => k.high));
+    const curClose = c15m[c15m.length - 1].close;
+    if (curClose < priorLow) close_vs_swing_15m = 'below_prior_low';
+    else if (curClose > priorHigh) close_vs_swing_15m = 'above_prior_high';
+  }
+
   return {
     bos_1h,
+    bos_15m,
+    bos_3m,
+    close_vs_swing_15m,
     sweep,
     key_levels: {
       nearest_resistance: resistanceCands[0] ?? null,
@@ -221,7 +322,8 @@ async function gatherForSymbol(
 
   const orderbook = await getOrderbookSummary(bybit, symbol, price);
   const indicators = indicatorSummary(c4h as Candle[], c1h as Candle[], c15m as Candle[], c3m as Candle[]);
-  const marketStructure = marketStructureSummary(c1h as Candle[], c15m as Candle[]);
+  const marketStructure = marketStructureSummary(c1h as Candle[], c15m as Candle[], c3m as Candle[]);
+  const fundingOi = await fundingOiSummary(bybit, symbol);
 
   const session = detectSession();
   const minToFunding = minutesToNextFunding();
@@ -302,20 +404,22 @@ async function gatherForSymbol(
       triggers: news.triggers,
       headlines: news.items.slice(0, 5).map((i: any) => i.title ?? i.headline),
     },
+    funding_oi: fundingOi,
     open_positions: openPositions,
     pending_orders: pendingOrders,
-    _note: 'Claude: use MCP Bybit tools for funding rate / open interest / liquidations if needed',
   };
 }
 
 async function getBtcContext(bybit: BybitClient): Promise<any> {
   try {
-    const [c4h, c1h] = await Promise.all([
+    const [c4h, c1h, c15m] = await Promise.all([
       bybit.getKlines('BTCUSDT', '240', 100),
       bybit.getKlines('BTCUSDT', '60', 100),
+      bybit.getKlines('BTCUSDT', '15', 100),
     ]);
     const c4hArr = c4h as Candle[];
     const c1hArr = c1h as Candle[];
+    const c15mArr = c15m as Candle[];
     const price = c1hArr[c1hArr.length - 1].close;
     const rsi1h = Indicators.rsi(c1hArr, 14);
     const rsi1hPrev = Indicators.rsi(c1hArr.slice(0, -3), 14);
@@ -326,14 +430,39 @@ async function getBtcContext(bybit: BybitClient): Promise<any> {
     // Regime: very rough 4h trend
     const chg50_4h = ((c4hArr[c4hArr.length - 1].close - c4hArr[c4hArr.length - 50].close) / c4hArr[c4hArr.length - 50].close) * 100;
     const regime = chg50_4h > 3 ? 'Bull' : chg50_4h < -3 ? 'Bear' : 'Range';
+
+    // === Intraday-responsive signals (don't wait for 4H or 1H close) ===
+    // 5-bar 15M % change: catches sharp intraday moves (5×15=75 min)
+    const chg5_15m =
+      c15mArr.length >= 6
+        ? ((price - c15mArr[c15mArr.length - 6].close) / c15mArr[c15mArr.length - 6].close) * 100
+        : 0;
+    // 3-bar 1H slope: RSI delta across last 3 1H bars (already have rsiSlope — same thing)
+    // slope1h as used in pair-scope is RSI change per bar; here we replicate for parity
+    const slope1h = +(rsiSlope / 3).toFixed(2);
+
+    // effective_regime: faster than formal `regime` (which uses 4H close).
+    // Fires the SAME CYCLE price breaks, no waiting for 4H/1H confirmation.
+    // Triggers:
+    //   bear: chg5_15m < -0.5% OR (trend1h=down AND slope1h < -0.3)
+    //   bull: chg5_15m > +0.5% OR (trend1h=up AND slope1h > +0.3)
+    //   range: else
+    // These thresholds tuned for BTC; alts use the same BTC context for correlation factor.
+    let effective_regime: 'bull' | 'bear' | 'range' = 'range';
+    if (chg5_15m < -0.5 || (trend1h === 'down' && slope1h < -0.3)) effective_regime = 'bear';
+    else if (chg5_15m > 0.5 || (trend1h === 'up' && slope1h > 0.3)) effective_regime = 'bull';
+
     return {
       price,
       regime,
+      effective_regime,
       trend1h,
       rsi1h: rsi1h !== undefined ? +rsi1h.toFixed(1) : null,
       rsi_slope_3bars: +rsiSlope.toFixed(2),
+      slope1h,
       chg_50_4h_pct: +chg50_4h.toFixed(2),
       chg_20_1h_pct: +chg20.toFixed(2),
+      chg_5_15m_pct: +chg5_15m.toFixed(2),
     };
   } catch {
     return null;
@@ -407,9 +536,54 @@ async function main() {
     }
   }
 
+  // === Cross-pair structure aggregator (Variant 2: implicit BOS) ===
+  // Counts pairs where current 15M close has broken prior 15M swing low/high.
+  // Fires SAME cycle as price breaks — no waiting for scanner's pivot confirmation.
+  // Effective regime change triggered when ≥5/8 pairs align.
+  const breakdownPairs: string[] = [];
+  const breakoutPairs: string[] = [];
+  const bos15mBearish: string[] = [];
+  const bos15mBullish: string[] = [];
+  const bos1hBearish: string[] = [];
+  const bos1hBullish: string[] = [];
+  for (const s of data) {
+    if (s.error || !s.market_structure) continue;
+    const ms = s.market_structure;
+    if (ms.close_vs_swing_15m === 'below_prior_low') breakdownPairs.push(s.symbol);
+    if (ms.close_vs_swing_15m === 'above_prior_high') breakoutPairs.push(s.symbol);
+    if (ms.bos_15m === 'bearish') bos15mBearish.push(s.symbol);
+    if (ms.bos_15m === 'bullish') bos15mBullish.push(s.symbol);
+    if (ms.bos_1h === 'bearish') bos1hBearish.push(s.symbol);
+    if (ms.bos_1h === 'bullish') bos1hBullish.push(s.symbol);
+  }
+  const totalPairs = data.filter((s) => !s.error).length;
+  const cross_pair_structure = {
+    total_pairs: totalPairs,
+    // Fastest: close below/above prior 20-bar 15M swing (same-cycle)
+    breakdown_count: breakdownPairs.length,
+    breakdown_pairs: breakdownPairs,
+    breakout_count: breakoutPairs.length,
+    breakout_pairs: breakoutPairs,
+    // Medium: BOS on 15M (up to 15 min lag)
+    bos_15m_bearish_count: bos15mBearish.length,
+    bos_15m_bearish_pairs: bos15mBearish,
+    bos_15m_bullish_count: bos15mBullish.length,
+    bos_15m_bullish_pairs: bos15mBullish,
+    // Slowest: BOS on 1H (up to 60 min lag)
+    bos_1h_bearish_count: bos1hBearish.length,
+    bos_1h_bullish_count: bos1hBullish.length,
+    // Effective regime flags — triggered when ≥5/8 OR ≥60% of pairs align.
+    // Any of three independent signals can fire; Claude picks which to trust per context.
+    effective_bearish:
+      breakdownPairs.length >= 5 || bos15mBearish.length >= 4 || bos1hBearish.length >= 5,
+    effective_bullish:
+      breakoutPairs.length >= 5 || bos15mBullish.length >= 4 || bos1hBullish.length >= 5,
+  };
+
   const output = {
     generated_at: new Date().toISOString(),
     global_risk: riskSnapshots,
+    cross_pair_structure,
     symbols: data,
   };
 
