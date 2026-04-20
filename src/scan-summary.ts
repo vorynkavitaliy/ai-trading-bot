@@ -260,10 +260,28 @@ for (const d of sd) {
   console.log(
     `  sweep=${ms.sweep ? JSON.stringify(ms.sweep) : "none"} | nearR=${kl.nearest_resistance} nearS=${kl.nearest_support}`,
   );
-  if (btc.regime)
+  if (btc.regime) {
     console.log(
-      `  BTC: regime=${btc.regime} eff_regime=${btc.effective_regime} 1h=${btc.trend1h} rsi1h=${btc.rsi1h} slope3=${btc.rsi_slope_3bars} slope1h=${btc.slope1h} chg1h=${btc.chg_20_1h_pct}% chg5_15m=${btc.chg_5_15m_pct}%`,
+      `  BTC: regime=${btc.regime} 1h=${btc.trend1h} rsi1h=${btc.rsi1h} slope3=${btc.rsi_slope_3bars} slope1h=${btc.slope1h} chg1h=${btc.chg_20_1h_pct}% chg5_15m=${btc.chg_5_15m_pct}%`,
     );
+    if (btc.hmm_regime) {
+      const hr = btc.hmm_regime;
+      const probs = hr.probs || {};
+      // Sort the three state labels by probability descending to show top + next.
+      const entries = (['bull', 'range', 'bear'] as const)
+        .map((s) => ({ s, p: Number(probs[s] ?? 0) }))
+        .sort((a, b) => b.p - a.p);
+      const top = entries[0];
+      const nxt = entries[1];
+      console.log(
+        `  BTC HMM: ${top.s} (${Math.round(top.p * 100)}%) | next-highest: ${nxt.s} (${Math.round(nxt.p * 100)}%) | transitioning: ${hr.transitioning ? 'yes' : 'no'}`,
+      );
+    } else {
+      console.log(
+        `  BTC HMM: (unavailable — run \`npm run train-hmm\` to fit params)`,
+      );
+    }
+  }
   console.log(`  OB imb=${ob.imbalance} spread_bps=${ob.spread_bps}`);
 
   // ZONES line — alert-driven cadence trigger.

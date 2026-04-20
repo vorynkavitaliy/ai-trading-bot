@@ -187,8 +187,8 @@ npx tsx src/execute.ts <args>     # open/close/adjust
 | 2 | **Classic Technical (tiebreaker)** | RSI<30 or bullish div, EMA21>EMA55 | RSI>70 or bearish div, EMA21<EMA55 |
 | 3 | **Volume** | OBV up or bullish div, volume spike + green close, above VWAP | OBV down, volume spike + red close, below VWAP |
 | 4 | **Multi-TF** (pair-only) | 4H up + 1H not strongly down + 15M supportive | 4H down + 1H not strongly up + 15M supportive |
-| 5 | **BTC Correlation** (alts only) | BTC Bull OR Range with rising RSI | BTC Bear OR Range with falling RSI |
-| 6 | **Regime fit** | Bull OR Range | Bear OR Range |
+| 5 | **BTC Correlation** (alts only) | `btc_context.hmm_regime.state=bull` (conf≥0.6) OR `hmm=range` with rising RSI | `hmm_regime.state=bear` (conf≥0.6) OR `hmm=range` with falling RSI |
+| 6 | **Regime fit** | `hmm_regime.state=bull` OR (`hmm=range` AND `transitioning=true` — accept with size ×0.5) | `hmm_regime.state=bear` OR (`hmm=range` AND `transitioning=true` — accept with size ×0.5) |
 | 7 | **News / Macro** | neutral or risk-on | neutral or risk-off |
 | 8 | **Momentum** | ADX>20 + PDI>MDI, AND (rsi_slope_accel_1h > 0 OR stoch_15m k>d with k<50) | ADX>20 + MDI>PDI, AND (rsi_slope_accel_1h < 0 OR stoch_15m k<d with k>50) |
 | 9 | **Volatility** | ATR within 10-85th percentile | same |
@@ -206,7 +206,13 @@ npx tsx src/execute.ts <args>     # open/close/adjust
 
 ## Counter-trend threshold
 
-**10/12 minimum** when trading against regime. Use `btc_context.effective_regime` (real-time, not lagging 4H) as primary regime read. Scanner fields `cross_pair_structure.effective_bearish/bullish`, per-pair `bos_15m`/`bos_3m` provide faster confirmation than `bos_1h`.
+**10/12 minimum** when trading against regime. Use `btc_context.hmm_regime.state` (probabilistic, trained 3-state Gaussian HMM on 1H log-returns + realized vol) as primary regime read. Scanner fields `cross_pair_structure.effective_bearish/bullish`, per-pair `bos_15m`/`bos_3m` provide faster confirmation than `bos_1h`.
+
+## Regime fallback
+
+If `hmm_regime: null` in scan-data (params file missing or infer error), fall back to slow `regime` (4H) field for Factors 5 and 6. Flag in journal: "HMM unavailable — scored on 4H regime only". Re-train via `npm run train-hmm`.
+
+**When HMM signals `transitioning=true`** (confidence < 0.6 OR two states within 0.15): treat as range, halve size. Don't take counter-trend trades during transitions.
 
 ## Early exit
 

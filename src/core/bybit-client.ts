@@ -65,6 +65,35 @@ export class BybitClient {
     }));
   }
 
+  /**
+   * Fetch a single paginated kline slice ending at `endMs` (exclusive upper bound).
+   * Max 1000 bars per call (Bybit V5 limit). Returns chronological order.
+   * Used by training scripts (src/train-hmm.ts) that walk `end` backward in time.
+   */
+  async getKlinesPage(
+    symbol: string,
+    interval: KlineIntervalV3,
+    endMs: number,
+    limit = 1000,
+  ) {
+    const res = await this.publicClient.getKline({
+      category: 'linear',
+      symbol,
+      interval,
+      limit,
+      end: endMs,
+    });
+    return res.result.list.reverse().map((k) => ({
+      timestamp: Number(k[0]),
+      open: Number(k[1]),
+      high: Number(k[2]),
+      low: Number(k[3]),
+      close: Number(k[4]),
+      volume: Number(k[5]),
+      turnover: Number(k[6]),
+    }));
+  }
+
   async getOrderbook(symbol: string, limit = 25) {
     const res = await this.publicClient.getOrderbook({
       category: 'linear',

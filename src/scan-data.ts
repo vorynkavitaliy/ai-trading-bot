@@ -61,6 +61,7 @@
  *   "risk": [{"account": "50k", "status": "ok", "dailyDd": 1.2, "totalDd": 0.7, "equity": 49500}]
  * }
  */
+import * as path from 'node:path';
 import { AccountManager } from './core/account-manager';
 import { BybitClient } from './core/bybit-client';
 import { RiskEngine } from './risk/engine';
@@ -70,7 +71,21 @@ import { Indicators, Candle } from './analysis/indicators';
 import { Structure } from './analysis/structure';
 import { Orderflow } from './analysis/orderflow';
 import { detectSession, isNearFundingWindow } from './analysis/sessions';
+import { RegimeHmm, type HmmParams, type RegimeInference } from './analysis/regime-hmm';
 import { NewsFetcher } from './news/fetcher';
+
+/**
+ * Phase 4: HMM regime params loaded lazily from vault/state/hmm-params.json.
+ * Null if file missing — caller falls back to slow 4H `regime` field.
+ * Retrain via `npm run train-hmm`.
+ */
+const HMM_PARAMS_PATH = path.join(process.cwd(), 'vault/state/hmm-params.json');
+let hmmParams: HmmParams | null = null;
+try {
+  hmmParams = RegimeHmm.load(HMM_PARAMS_PATH);
+} catch {
+  hmmParams = null;
+}
 
 function minutesToNextFunding(now: Date = new Date()): number {
   const h = now.getUTCHours();
@@ -487,21 +502,37 @@ async function getBtcContext(bybit: BybitClient): Promise<any> {
     // slope1h as used in pair-scope is RSI change per bar; here we replicate for parity
     const slope1h = +(rsiSlope / 3).toFixed(2);
 
-    // effective_regime: faster than formal `regime` (which uses 4H close).
-    // Fires the SAME CYCLE price breaks, no waiting for 4H/1H confirmation.
-    // Triggers:
-    //   bear: chg5_15m < -0.5% OR (trend1h=down AND slope1h < -0.3)
-    //   bull: chg5_15m > +0.5% OR (trend1h=up AND slope1h > +0.3)
-    //   range: else
-    // These thresholds tuned for BTC; alts use the same BTC context for correlation factor.
-    let effective_regime: 'bull' | 'bear' | 'range' = 'range';
-    if (chg5_15m < -0.5 || (trend1h === 'down' && slope1h < -0.3)) effective_regime = 'bear';
-    else if (chg5_15m > 0.5 || (trend1h === 'up' && slope1h > 0.3)) effective_regime = 'bull';
+    // === HMM regime inference (Phase 4) ===
+    // Replaces rule-based `effective_regime`. Gaussian HMM on (log_return, realized_vol)
+    // produces probabilistic state + transitioning flag. If params file missing
+    // (training never run) emit null — scoring code falls back to slow `regime` (4H).
+    let hmmRegime: RegimeInference | null = null;
+    if (hmmParams) {
+      try {
+        hmmRegime = RegimeHmm.infer(
+          c1hArr.map((c) => c.close),
+          hmmParams,
+        );
+      } catch {
+        hmmRegime = null;
+      }
+    }
 
     return {
       price,
       regime,
-      effective_regime,
+      hmm_regime: hmmRegime
+        ? {
+            state: hmmRegime.state,
+            probs: {
+              bull: +hmmRegime.probs.bull.toFixed(3),
+              bear: +hmmRegime.probs.bear.toFixed(3),
+              range: +hmmRegime.probs.range.toFixed(3),
+            },
+            confidence: +hmmRegime.confidence.toFixed(2),
+            transitioning: hmmRegime.transitioning,
+          }
+        : null,
       trend1h,
       rsi1h: rsi1h !== undefined ? +rsi1h.toFixed(1) : null,
       rsi_slope_3bars: +rsiSlope.toFixed(2),
