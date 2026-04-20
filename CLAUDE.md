@@ -173,7 +173,70 @@ npx tsx src/execute.ts <args>     # open/close/adjust
 - On close: update frontmatter, write Postmortem within 1 hour
 - If a lesson emerged: append to `lessons-learned.md`
 - Heartbeat to Telegram if >55 min since last
-- **At each 1H candle close** (07:00, 08:00, ..., 22:00 UTC during active session): review `vault/Watchlist/zones.md` — add new zones formed by structure, remove invalidated/expired, move resolved to "Resolved zones" table.
+- **At each 1H candle close** (07:00, 08:00, ..., 22:00 UTC during active session): run the 1H-Close Protocol (below).
+
+---
+
+# 1H-Close Protocol — Zone Maintenance
+
+**Trigger:** first `/loop` cycle where current UTC minute < 3 (top of new hour) AND hour is within 07:00-22:00 active window AND no 1H-review entry in journal for this hour yet.
+
+**Why this matters:** Pre-committed zones (`vault/Watchlist/zones.md`) drive the alert-driven cadence. Stale zones (invalidated, expired, drifted) cause false triggers; missing zones cause missed setups. Review is the only moment Claude **writes** to zones.md — every other cycle only reads.
+
+## Step 1 — Invalidation sweep
+
+For each active zone in each pair:
+
+- **Invalidated?** Check the `invalidation` field against 1H close, structure shifts (BOS flip on 1H), or `hmm_regime` change. If yes → move to "Resolved zones" with `invalidated_at` + reason.
+- **Expired?** If `created_at` > 24h ago AND no recent activity (not swept in last 4 hours, no position leaned on it) → move to Resolved with reason "expired 24h".
+- **Drifted?** If zone level is now > 2% from current price AND not a magnet-type (liq_cluster, round, prior_day_hl) → expire. Far-away zones clutter the file.
+- **Superseded?** If a newer zone of same type covers the same level (within 0.15%) → keep the stronger one (more recent/higher confluence), expire the weaker.
+
+## Step 2 — New zone derivation
+
+Source zones from these rules (order by importance):
+
+| Priority | Type | Source | Invalidation rule |
+|---|---|---|---|
+| 1 | `liq_cluster` | WebSearch CoinGlass liq heatmap OR obvious round stop levels (74000, 75000, 2300, etc.) | swept + no reclaim 15m |
+| 2 | `prior_day_hl` | at 00:00 UTC: record previous UTC-day high/low per pair from klines 1H | 1H close beyond level by >0.5% |
+| 3 | `htf_pivot` | 1H swing high/low from last 20 bars (use `market_structure.key_levels` from scanner) | 1H close beyond by >0.5% AND structural confirmation |
+| 4 | `round` | psychological numbers within ±2% (BTC: 74k/75k/76k; ETH: 2280/2300/2320; alts: pair-specific) | never expires on price alone; only on superseded |
+| 5 | `ob` | last opposite-colored candle before a confirmed 1H BOS | opposite 1H BOS AND cvd flip |
+| 6 | `ema21_1h` / `ema55_1h` | add ONLY if 1H trend aligned (ADX>20 + DI dominant) | price closes through EMA with CVD confirmation |
+| 7 | `poc` | (future — when volume profile wired in) | session reset |
+
+**Zone cap:** max 8 active zones per pair. If adding would exceed, prune oldest non-magnet (never prune round or liq_cluster).
+
+## Step 3 — Write zones.md (full rewrite)
+
+Use Edit tool. Update frontmatter `updated:` timestamp. Preserve structure:
+- "How this file works" + "Zone types" sections (never touch)
+- "Active zones" per pair table (rewrite)
+- "Resolved zones (last 24h)" table (append invalidated, trim entries >24h old)
+
+## Step 4 — Journal entry
+
+Append to `vault/Journal/{TODAY}.md`:
+```
+### [HH:00] — Zone review (1H close)
+
+**Invalidated/expired:** {N} ({pair:type level reason}, ...)
+**New:** {N} ({pair:type level source}, ...)
+**Active total:** {per-pair counts}
+**HMM state:** {state} conf {X}%, transitioning={Y}
+```
+
+## Step 5 — Trigger reschedule
+
+If `hmm_regime.state` changed vs last hour OR `hmm_regime.transitioning` flipped → flag next cycle as "regime shift" and rescan all 8 pairs full rubric even without zone activity. Document in journal block above.
+
+## What NOT to do
+
+- **Don't add zones on 3m/15m noise.** This protocol runs on 1H close only.
+- **Don't micro-manage.** Review takes 2-3 min max. If you're rewriting >10 zones per hour, rules above are being misapplied.
+- **Don't delete Resolved rows < 24h old.** They're audit trail.
+- **Don't add zones just-in-case.** Each zone must have clear invalidation. "Watch 75200 maybe" is not a zone.
 
 ---
 

@@ -257,7 +257,15 @@ EVERY CYCLE (every 3 min):
   Phase 3: WebSearch if triggers fire (on eligible pairs only)
   Phase 4: think — 12-factor scoring for eligible pairs only (zone-active OR positioned)
   Phase 5: execute if deciding to act (open/close/cancel/move-sl)
-  Phase 6: vault writes (journal one-liner even on heartbeat cycles; at 1H close, review zones.md)
+  Phase 6: vault writes (journal one-liner even on heartbeat cycles)
+
+AT TOP-OF-HOUR (mm<3, 07:00-22:00 UTC active):
+  Run 1H-Close Protocol (CLAUDE.md § 1H-Close Protocol — Zone Maintenance):
+    - Invalidation sweep of active zones (per-pair)
+    - Derive new zones: liq_cluster, prior_day_hl, htf_pivot, round, ob, ema21/55_1h
+    - Rewrite vault/Watchlist/zones.md (Edit tool, preserve frontmatter + Resolved table)
+    - Journal block: "[HH:00] — Zone review (1H close)" with counts + HMM state
+    - If hmm_regime state changed → flag next cycle as regime shift, full rubric all 8 pairs
 
 EVERY SESSION TRANSITION (07:00, 13:00, 17:00, 22:00 UTC):
   Phase 1 adds: session-playbook.md
