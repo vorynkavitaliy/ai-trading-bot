@@ -49,7 +49,7 @@ I score BOTH long and short every cycle. The higher-scoring direction is my cand
 | # | Factor | Long (bull case) | Short (bear case) |
 |---|--------|-----------------|-------------------|
 | 1 | **SMC / Structure** | sweep + OB tap (STRONG = 2pts), weak BOS = 1pt | mirror for shorts |
-| 2 | **Technical** | RSI < 30 or bull div, MACD hist turning up | RSI > 70 / bear div, MACD turning down |
+| 2 | **Technical (tiebreaker)** | RSI < 30 or bull div, EMA21 > EMA55 (MACD hist = tiebreaker only, not primary) | RSI > 70 / bear div, EMA21 < EMA55 (MACD hist = tiebreaker only) |
 | 3 | **Volume** | OBV bullish, green vol spike, price > VWAP | OBV bearish div, declining vol |
 | 4 | **Multi-TF + BTC** | 4H→1H→15M→3M + BTC 1H aligned up | all aligned down |
 | 5 | **Regime + BTC** | Bull / Range + BTC aligned | Bear regime + BTC bear |

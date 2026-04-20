@@ -39,11 +39,12 @@ Read in this order (parallel where independent):
 
 1. **`vault/Playbook/00-trader-identity.md`** — re-anchor WHO you are
 2. **`vault/Playbook/lessons-learned.md`** — skim. Every line cost P&L to earn
-3. **`vault/Thesis/*.md`** — current views:
+3. **`vault/Watchlist/zones.md`** — pre-committed target + invalidation zones (written at 1H close)
+4. **`vault/Thesis/*.md`** — current views:
    - Single pair mode (`$ARGUMENTS` = one symbol) → read only `vault/Thesis/{SYMBOL}.md`
    - Batch mode (`$ARGUMENTS` = `all`) → read **all 8 Thesis files** in parallel
-4. **`vault/Watchlist/active.md`** — setups being hunted
-5. **`vault/Journal/{TODAY}.md`** — today's narrative. If missing, note it (create in Phase 5)
+5. **`vault/Watchlist/active.md`** — setups being hunted
+6. **`vault/Journal/{TODAY}.md`** — today's narrative. If missing, note it (create in Phase 5)
 
 On-demand (not every cycle):
 - `vault/Playbook/entry-rules.md` — before considering a new open
@@ -97,11 +98,13 @@ For each symbol, for both LONG and SHORT, manually score all 12 factors 0/1 (fac
 
 #### Batch Mode (`all`) — Portfolio-Level Decision Making
 
-When called with `all`, you see the whole market at once. This is your **strategic advantage** — use it:
+When called with `all`, you see the whole market at once. This is your **strategic advantage** — use it, but **gated by zone activity** (Phase 2 refactor):
 
-**Step 1: Quick-scan all 8 pairs** — for each symbol, compute a fast score (top 3 factors: SMC, Multi-TF, Regime) to filter out junk. Pairs scoring < 5/12 on quick-scan → skip to position-management only, don't waste time scoring all 12.
+**Step 0 — Zone gate:** parse the `ZONES:` line per pair. Pairs with `in_zone=true` OR `zone_swept_15m=true` OR an open position/pending order are the **eligible set**. Pairs with no zone activity and no position → skip scoring entirely this cycle. If the eligible set is empty → heartbeat-only cycle, one-line journal note, next.
 
-**Step 2: Full-score survivors** — for pairs passing quick-scan (≥ 5/12), score all 12 factors symmetrically LONG+SHORT. Aim for 2-4 deep-scores per cycle, not 8.
+**Step 1: Quick-scan the eligible set** — for each eligible symbol, compute a fast score (top 3 factors: SMC, Multi-TF, Regime) to filter out junk. Pairs scoring < 5/12 on quick-scan → position-management only, don't waste time scoring all 12.
+
+**Step 2: Full-score survivors** — for pairs passing quick-scan (≥ 5/12), score all 12 factors symmetrically LONG+SHORT. Aim for 2-4 deep-scores per cycle, never 8.
 
 **Step 3: Portfolio view before acting**
 - **Correlation check**: 3 altcoin-LONG signals = effectively 1 BTC-correlated trade × 3 exposure. Reject weakest two unless regime clearly decorrelates them.
@@ -247,12 +250,13 @@ Based on Phase 4–5 decisions:
 ```
 EVERY CYCLE (every 3 min):
   Phase 0: npm run reconcile (BLOCKING)
-  Phase 1: read vault
-  Phase 2: npx tsx src/scan-data.ts $ARGUMENTS
-  Phase 3: WebSearch if triggers fire
-  Phase 4: think — 12-factor scoring, decisions
+  Phase 1: read vault (incl. Watchlist/zones.md)
+  Phase 2: npx tsx src/scan-summary.ts $ARGUMENTS   # parse ZONES: line
+           If no pair is in-zone / swept, and no open positions → heartbeat, skip Phases 3–5
+  Phase 3: WebSearch if triggers fire (on eligible pairs only)
+  Phase 4: think — 12-factor scoring for eligible pairs only (zone-active OR positioned)
   Phase 5: execute if deciding to act (open/close/cancel/move-sl)
-  Phase 6: vault writes
+  Phase 6: vault writes (journal one-liner even on heartbeat cycles; at 1H close, review zones.md)
 
 EVERY SESSION TRANSITION (07:00, 13:00, 17:00, 22:00 UTC):
   Phase 1 adds: session-playbook.md

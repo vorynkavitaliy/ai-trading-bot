@@ -5,8 +5,15 @@
  *
  * Usage: npx tsx src/scan-summary.ts            (all pairs)
  *        npx tsx src/scan-summary.ts BTCUSDT    (single pair)
+ *
+ * Phase 2 addition: parses vault/Watchlist/zones.md and emits a ZONES: line
+ * per symbol with in_zone / swept_15m / nearby-zone info. This drives the
+ * alert-driven cadence — /loop 3m fires the full rubric only when price is
+ * inside a pre-committed zone or a zone was swept in the last 15m candles.
  */
 import { execSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 const arg = process.argv[2] || "all";
 
@@ -43,7 +50,139 @@ if (cps) {
   );
 }
 
+// === Zones loader — reads vault/Watchlist/zones.md tolerantly ===
+type Zone = {
+  type: string;
+  level: number;
+  side: string;
+  created_at: string;
+  invalidation: string;
+  notes: string;
+};
+
+function loadZones(): Map<string, Zone[]> {
+  const zonesBySymbol = new Map<string, Zone[]>();
+  const zonesPath = path.join(
+    process.cwd(),
+    "vault",
+    "Watchlist",
+    "zones.md",
+  );
+  let text: string;
+  try {
+    text = fs.readFileSync(zonesPath, "utf8");
+  } catch {
+    return zonesBySymbol; // missing file → empty map, scan still runs
+  }
+
+  // Drop everything below "## Resolved zones" (only keep active zones).
+  const activeCut = text.search(/^##\s+Resolved zones/im);
+  const activeText = activeCut > 0 ? text.slice(0, activeCut) : text;
+
+  // Split into "### SYMBOL" sections under "## Active zones".
+  const activeStart = activeText.search(/^##\s+Active zones/im);
+  const sectionText = activeStart >= 0 ? activeText.slice(activeStart) : activeText;
+
+  const sectionRe = /^###\s+([A-Z0-9]+)\s*$/gm;
+  const matches: Array<{ symbol: string; offset: number }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = sectionRe.exec(sectionText)) !== null) {
+    matches.push({ symbol: m[1], offset: m.index + m[0].length });
+  }
+  for (let i = 0; i < matches.length; i++) {
+    const { symbol, offset } = matches[i];
+    const end = i + 1 < matches.length ? matches[i + 1].offset : sectionText.length;
+    const block = sectionText.slice(offset, end);
+    const zones: Zone[] = [];
+    for (const line of block.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("|")) continue;
+      if (trimmed.startsWith("|---") || trimmed.startsWith("| ---")) continue;
+      // Header row has "| type |"
+      const cells = trimmed
+        .split("|")
+        .slice(1, -1)
+        .map((c) => c.trim());
+      if (cells.length < 5) continue;
+      if (cells[0] === "type") continue; // header row
+      const level = parseFloat(cells[1]);
+      if (!isFinite(level)) continue;
+      zones.push({
+        type: cells[0],
+        level,
+        side: cells[2],
+        created_at: cells[3] || "",
+        invalidation: cells[4] || "",
+        notes: cells[5] || "",
+      });
+    }
+    if (zones.length) zonesBySymbol.set(symbol, zones);
+  }
+  return zonesBySymbol;
+}
+
+const zonesBySymbol = loadZones();
+
+// Zone activity detection per symbol.
+// in_zone  — any zone within 0.2% of current price (tight touch)
+// near_zones — zones within 0.5% of price, sorted by proximity
+// swept_15m — any zone was crossed + rejected (wick beyond, close back) in last 15m bars
+function detectZoneActivity(
+  symbol: string,
+  price: number,
+  klines15m: Array<[number, number, number, number, number, number]>,
+): {
+  in_zone: Array<Zone & { distance_pct: number }>;
+  near: Array<Zone & { distance_pct: number }>;
+  swept: Array<Zone & { swept_bars_ago: number }>;
+  has_any: boolean;
+} {
+  const zones = zonesBySymbol.get(symbol) || [];
+  if (!zones.length || !isFinite(price) || price <= 0) {
+    return { in_zone: [], near: [], swept: [], has_any: false };
+  }
+  const in_zone: Array<Zone & { distance_pct: number }> = [];
+  const near: Array<Zone & { distance_pct: number }> = [];
+  const swept: Array<Zone & { swept_bars_ago: number }> = [];
+
+  // Recent 15m bars for sweep check (use last up to 4 bars = ~1h window).
+  const recent = (klines15m || []).slice(-4);
+
+  for (const z of zones) {
+    const distPct = Math.abs(price - z.level) / z.level * 100;
+    const enriched = { ...z, distance_pct: Number(distPct.toFixed(3)) };
+    if (distPct <= 0.2) in_zone.push(enriched);
+    if (distPct <= 0.5) near.push(enriched);
+
+    // Sweep: within last N 15m bars, wick crossed the level but close returned
+    // to the pre-zone side. Bullish sweep of support: low < level, close > level.
+    // Bearish sweep of resistance: high > level, close < level.
+    for (let i = 0; i < recent.length; i++) {
+      const bar = recent[i];
+      if (!bar || bar.length < 5) continue;
+      const high = bar[2];
+      const low = bar[3];
+      const close = bar[4];
+      const sweptBullish = low < z.level && close > z.level;
+      const sweptBearish = high > z.level && close < z.level;
+      if (sweptBullish || sweptBearish) {
+        swept.push({ ...z, swept_bars_ago: recent.length - 1 - i });
+        break;
+      }
+    }
+  }
+  near.sort((a, b) => a.distance_pct - b.distance_pct);
+  return {
+    in_zone,
+    near,
+    swept,
+    has_any: in_zone.length > 0 || swept.length > 0,
+  };
+}
+
 const sd = json.symbols || [];
+let anyZoneActivity = false;
+const pairsWithActivity: string[] = [];
 
 for (const d of sd) {
   if (!d || !d.indicators) continue;
@@ -99,6 +238,42 @@ for (const d of sd) {
       `  BTC: regime=${btc.regime} eff_regime=${btc.effective_regime} 1h=${btc.trend1h} rsi1h=${btc.rsi1h} slope3=${btc.rsi_slope_3bars} slope1h=${btc.slope1h} chg1h=${btc.chg_20_1h_pct}% chg5_15m=${btc.chg_5_15m_pct}%`,
     );
   console.log(`  OB imb=${ob.imbalance} spread_bps=${ob.spread_bps}`);
+
+  // ZONES line — alert-driven cadence trigger.
+  const price = Number(d.price);
+  const klines15m = (d.klines && d.klines["15m"] && d.klines["15m"].last) || [];
+  if (!zonesBySymbol.has(d.symbol)) {
+    console.log(`  ZONES: (no zones defined)`);
+  } else {
+    const z = detectZoneActivity(d.symbol, price, klines15m);
+    if (z.has_any) {
+      anyZoneActivity = true;
+      pairsWithActivity.push(d.symbol);
+    }
+    const inZoneStr = z.in_zone.length
+      ? z.in_zone
+          .map((x) => `${x.type} ${x.level} | ${x.distance_pct}% away | ${x.side}`)
+          .join("; ")
+      : "none";
+    const sweptStr = z.swept.length
+      ? z.swept
+          .map((x) => `${x.type} ${x.level} (${x.swept_bars_ago}b ago)`)
+          .join("; ")
+      : "false";
+    const nearStr = z.near.length
+      ? z.near
+          .slice(0, 3)
+          .map((x) => {
+            const sign = x.level >= price ? "+" : "-";
+            return `${x.type} ${x.level} (${sign}${x.distance_pct}%)`;
+          })
+          .join(", ")
+      : "none";
+    console.log(
+      `  ZONES: in_zone=${z.in_zone.length ? "true" : "false"}${z.in_zone.length ? ` (${inZoneStr})` : ""} | swept_15m=${z.swept.length ? "true" : "false"}${z.swept.length ? ` (${sweptStr})` : ""} | near: ${nearStr}`,
+    );
+  }
+
   const pos = d.open_positions || [];
   const pen = d.pending_orders || [];
   if (pos.length) console.log(`  POS:`, JSON.stringify(pos));
@@ -119,3 +294,21 @@ if (first?.news)
     }),
   );
 console.log("=== global_risk ===", JSON.stringify(json.global_risk));
+
+// === Action hint — conditional on zone activity or open positions ===
+const openPairs: string[] = [];
+for (const d of sd) {
+  if ((d.open_positions || []).length || (d.pending_orders || []).length) {
+    openPairs.push(d.symbol);
+  }
+}
+if (openPairs.length || anyZoneActivity) {
+  const reasons: string[] = [];
+  if (openPairs.length) reasons.push(`open positions/orders on [${openPairs.join(",")}]`);
+  if (anyZoneActivity) reasons.push(`zone activity on [${pairsWithActivity.join(",")}]`);
+  console.log(`\nACTION: run 12-factor rubric — ${reasons.join(" + ")}`);
+} else {
+  console.log(
+    `\nACTION: no zone activity, no open positions — heartbeat only, skip rubric (log one-line journal entry).`,
+  );
+}
