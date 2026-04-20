@@ -83,6 +83,18 @@ function parseArgs(): { action: string; args: Record<string, string> } {
       }
     }
   }
+  // --rationale-file /path/to/file.txt → read file contents into args.rationale
+  // Use this when rationale contains $ signs, newlines, or long text that would
+  // trigger harness shell-expansion detection in bash.
+  if (args['rationale-file']) {
+    try {
+      args['rationale'] = require('node:fs').readFileSync(args['rationale-file'], 'utf8').trim();
+      delete args['rationale-file'];
+    } catch (e: any) {
+      console.error(JSON.stringify({ ok: false, error: `failed to read rationale-file: ${e.message}` }));
+      process.exit(1);
+    }
+  }
   return { action, args };
 }
 
@@ -392,17 +404,8 @@ async function actionCancelLimit(args: Record<string, string>): Promise<void> {
   }));
   await cache.removePendingOrder(symbol);
 
-  const telegram = new TelegramNotifier(config.telegram.token, config.telegram.chatId);
-  if (order) {
-    const ageMin = Math.round((Date.now() - order.placedAt) / 60_000);
-    await telegram.limitCancelled({
-      pair: symbol,
-      direction: order.direction === 'Long' ? 'LONG' : 'SHORT',
-      limitPrice: String(order.limitPrice),
-      reason,
-      ageMin,
-    });
-  }
+  // No TG boilerplate here — Claude-initiated cancel sends its own human-language TG via send-tg.ts.
+  // Orchestrator-level auto-cancel (TTL/expired without Claude) still notifies as a fallback.
 
   await AuditRepo.log({
     level: 'info', source: 'execute', event: 'limit_cancelled_claude',

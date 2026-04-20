@@ -210,20 +210,8 @@ export async function executeAcrossAccounts(ctx: ExecuteContext): Promise<Execut
   if (ctx.telegram && succeeded.length > 0) {
     const totalRisk = succeeded.reduce((s, r) => s + r.riskUsd, 0);
     if (ctx.plan.limitEntry) {
-      // Limit order placed — position NOT yet filled. Use less-prominent notification.
-      // Real "tradeOpened" will fire from monitorPendingOrders when fill detected.
-      await ctx.telegram.limitPlaced({
-        pair: ctx.plan.symbol,
-        direction: ctx.plan.direction === 'Long' ? 'LONG' : 'SHORT',
-        limitPrice: fmtPrice(ctx.plan.limitEntry, ctx.instrument.tickSize),
-        sl: fmtPrice(ctx.plan.stopLoss, ctx.instrument.tickSize),
-        tp: fmtPrice(ctx.plan.takeProfit, ctx.instrument.tickSize),
-        rr: ctx.plan.rr.toFixed(2),
-        confluence: `${ctx.signal.confluence}/8`,
-        regime: ctx.regimeLabel,
-        accounts: succeeded.length,
-        maxAgeMin: 45,
-      });
+      // Limit placed by Claude — Claude sends its own human-language TG via send-tg.ts.
+      // No boilerplate here (would be a duplicate). Real "tradeOpened" still fires on fill.
     } else {
       // Market order — fill is immediate, position is real.
       await ctx.telegram.tradeOpened({
