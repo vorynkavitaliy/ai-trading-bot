@@ -2,7 +2,8 @@
 name: crypto-trade-planner
 description: >
   Plan a complete trade with entry, stop-loss, take-profit, position size, and risk assessment.
-  Use when you have a signal and need to build a full trade plan before execution.
+  Anchored to pre-committed zones and flow confirmation per the 12-factor rubric.
+  Use when you have a valid signal (≥9/12) and need to build a full trade plan before execution.
   Triggers: "trade plan", "plan entry", "setup trade", "where to enter", "SL/TP"
 user_invocable: true
 arguments:
@@ -16,120 +17,153 @@ arguments:
 
 # Crypto Trade Planner
 
-Converts analysis signals into executable trade plans with precise levels, sizing, and risk management.
+Converts a valid 12-factor signal into an executable trade plan: entry, SL, TP, size, rationale. You call `execute.ts` with the result.
 
 ## When to Use
 
-- After technical analysis identifies a setup
-- When signal generator produces a confluence signal
-- Before any trade execution
+- After crypto-signal-generator produces a ≥ 9/12 signal with all hard gates passing.
+- Before any `execute.ts open` or `execute.ts place-limit` call.
 
 ## Research Foundation
 
-- `docs/research/swing-trading-methodology.md` — Entry/exit mechanics
-- `docs/research/execution-algorithms-johnson.md` — Limit order placement, OBI
-- `docs/research/stop-hunting-market-traps.md` — SL placement to avoid hunting
-- `docs/research/demand-supply-dynamics.md` — Zone-based entry
-- `docs/research/support-resistance-mastery.md` — Level-based TP
+- `docs/research/swing-trading-methodology.md` — entry/exit mechanics
+- `docs/research/execution-algorithms-johnson.md` — limit placement, OBI
+- `docs/research/stop-hunting-market-traps.md` — SL placement beyond liquidity
+- `docs/research/demand-supply-dynamics.md` — zone-based entry
+- `docs/research/support-resistance-mastery.md` — TP at next major level
 
-## Workflow
-
-### Step 1: Validate Setup
+## Step 1 — Validate setup (hard gates)
 
 Before planning, confirm:
-1. Confluence score >= 3/4 (from signal generator or manual analysis)
-2. Risk manager returns CLEAR status
-3. 4H trend aligns with trade direction
-4. No major macro event within 30 minutes
+1. **Confluence score ≥ 9/12** (standard), ≥ 10/12 (counter-trend), or 8/12 with STRONG Factor 1 + Factor 4 = 1.
+2. **Risk manager CLEAR** — daily DD < 4%, total DD < 8%.
+3. **Factor 1 has flow confirmation** — BOS aligned with cvd_5m (or cvd_1m for STRONG).
+4. **No macro catalyst within 30 min** — check `vault/Watchlist/catalysts.md`.
+5. **Slot available** — open + pending < 5 (3 base, 5 A+).
+6. **Total heat + proposed risk < 5%**.
+7. **Session allows entry** — not dead zone (22-00 UTC), not ±10 min to funding window (00/08/16 UTC).
 
-If any check fails → **NO TRADE**
+Any fail → **NO TRADE**. Log reason in Journal.
 
-### Step 2: Determine Entry
+## Step 2 — Zones as entry anchor
 
-**Preferred: Limit order** (maker fee 0.02% vs taker 0.055%)
+Entries are **anchored to pre-committed zones** from `vault/Watchlist/zones.md` (rewritten at each 1H close). Three entry modes:
 
-Entry placement strategy:
-- **LONG**: Place limit at demand zone upper boundary or nearest support + 0.1% buffer
-- **SHORT**: Place limit at supply zone lower boundary or nearest resistance - 0.1% buffer
-- **Aggressive**: If momentum is strong and price is pulling back, enter at current price - 0.5x ATR
+- **At zone tap (limit):** price hasn't reached the zone yet → place limit at zone edge + 0.1% buffer.
+- **At zone sweep + reclaim (market):** `zone_swept_15m=true` + reclaim confirmed by CVD → market entry.
+- **Momentum pullback (market):** trending regime, price pulled back to EMA21 or prior S/R with flow intact → market entry at current with tight SL.
 
-Order expiry: Cancel unfilled limit orders after **15 minutes**
+**Never enter outside a zone.** Trading outside zones = chasing.
 
-### Step 3: Determine Stop-Loss
+## Step 3 — Entry placement
 
-**SL must be placed WITHIN 5 MINUTES of entry — this is inviolable.**
+**Limit-order distance rules (from CLAUDE.md § "Limit Order Rules"):**
 
-SL placement rules:
-- **LONG**: Below the demand zone / support level minus 1.5x ATR(14) on 15M
-- **SHORT**: Above the supply zone / resistance level plus 1.5x ATR(14) on 15M
-- Place SL **beyond liquidity pools** (below equal lows for longs, above equal highs for shorts) to avoid stop-hunting
-- Minimum SL distance: 0.5x ATR (avoid getting stopped by noise)
-- Maximum SL distance: 3% of entry price (HyroTrader max risk constraint)
+| Condition | Max limit distance |
+|---|---|
+| ADX>25 + dominant DI (trend) | **≤ 0.3%** from price |
+| ADX<20 (range) | ≤ 0.5% acceptable |
+| Never limit > 0.6% from price | unless at major structural level |
 
-### Step 4: Determine Take-Profit
+**Cancel a limit when:**
+- Price drifted > 0.3% away from limit
+- ADX climbed > 5 pts (momentum shifted)
+- Structure invalidated (BOS flip confirmed by CVD)
+- Don't wait for 45-min maxAge
 
-Multi-target approach:
-- **TP1** (50% of position): **2:1 R:R** — nearest significant resistance/support
-- **TP2** (30% of position): **3:1 R:R** — next major level
-- **TP3** (20% of position): **trailing stop** — 1x ATR trail after 3:1 is hit
+## Step 4 — Stop-loss (WITHIN 5 MIN — INVIOLABLE)
 
-Minimum R:R for any trade: **2:1** — if TP1 doesn't reach 2:1, reject the trade.
+Structural placement + ATR buffer:
+- **LONG:** below the swept low / demand zone / OB base − 0.5× ATR(1H)
+- **SHORT:** above the swept high / supply zone / OB top + 0.5× ATR(1H)
+- Place **beyond liquidity pools** (equal lows for LONG, equal highs for SHORT).
 
-### Step 5: Calculate Position Size
+**Distance caps** (executor rejects otherwise):
+- BTC: max 2% from entry
+- Alts: max 3% from entry
+- Min: 0.5× ATR (avoid noise stops)
 
-Use crypto-position-sizer skill logic:
-- Determine risk % (1% standard, 1.5% A+)
-- Calculate from SL distance
-- Validate all HyroTrader constraints
+## Step 5 — Take-profit
 
-### Step 6: Trailing Stop Rules
+TP = **next major structural level** (1H OB, 4H pivot, prior-day H/L, liq-cluster magnet). NOT micro nearS/nearR.
 
-- Activate trailing at **1.5R** profit
-- Trail distance: **1x ATR(14)** on the entry timeframe (15M)
-- Move to breakeven at **1R** profit (move SL to entry price)
+| Rule | Value |
+|---|---|
+| Minimum R:R | 1.5 |
+| Preferred R:R | 2.0+ |
+| Single TP (default) | next major level |
+| Multi-TP (A+ only, 11+/12) | 50% at 1R, 50% trailed |
 
-### Step 7: Output Trade Plan
+If next major level gives R:R < 1.5 → **reject trade** (shallow TP in trend = underscoring the move).
+
+## Step 6 — Size
+
+From confluence score:
+
+| Score | Risk % |
+|---|---|
+| 12/12 (A+) | 1.0% |
+| 10-11/12 (A) | 0.75% |
+| 9/12 (B+) | 0.5% |
+| 8/12 (structural only) | 0.5% |
+
+**News multipliers stack:**
+- High-impact news (3+ triggers active) → ×0.25
+- Medium-impact (1-2 triggers) → ×0.5
+- F&G ≤15 → additional ×0.5
+
+**Regime transitioning** (`hmm_regime.transitioning=true`) → ×0.5.
+
+Delegate math to **crypto-position-sizer**: size_usdt = risk_usd / (sl_distance_pct).
+
+## Step 7 — Peak-protection cascade (post-entry)
+
+Managed automatically by the trailing logic in executor + `vault/Playbook/exit-rules.md`:
+
+- **At +1.5R:** SL moves to breakeven, 1× ATR(1H) trail activates.
+- **< 1R profit + OPPOSITE score ≥ 8/12 after 9-min grace:** proactive exit via `execute.ts close`.
+- **OPPOSITE ≥ 10/12 at any profit < 1R:** force exit.
+- **Profit > 1R:** let the trail handle it. Never exit early.
+
+## Step 8 — Output (for the execute.ts call)
 
 ```
-## TRADE PLAN: {PAIR} {LONG/SHORT}
-### Date: {timestamp}
+## TRADE PLAN: {PAIR} {LONG/SHORT} — {timestamp}
 
 ### Signal
-- Confluence: {score}/4 — {conditions met}
-- 4H Trend: {direction}
-- Regime: {bull/bear/range}
+- Confluence: {score}/12 — {A+/A/B+/Structural}
+- Factor 1 flow: {cvd_5m / cvd_1m confirmation}
+- HMM regime: {state} @ {confidence}
+- Zone: {zone-id from zones.md}
 
 ### Levels
-- Entry: {price} (limit order)
-- Stop-Loss: {price} ({distance_pct}%, ${dollar_risk})
-- TP1 (50%): {price} ({rr}:1 R:R)
-- TP2 (30%): {price} ({rr}:1 R:R)
-- TP3 (20%): Trailing at {trail_distance}
+- Entry: {price} ({market / limit})
+- Stop-Loss: {price} ({distance_pct}%, structural + 0.5×ATR)
+- Take-Profit: {price} ({R:R})
+- R:R: {ratio}
 
 ### Sizing
-- Risk: {risk_pct}% = ${dollar_risk}
-- Position: {contracts} contracts (${notional})
-- Leverage: {leverage}x
-- Margin: ${margin}
+- Risk: {risk_pct}% × {news_mult} × {regime_mult} = {effective}% = ${dollar_risk}
+- Notional: ${notional}
+- Contracts: {qty}
 
-### Risk Check
-- Daily DD after max loss: {projected}% / 5%
-- Total DD after max loss: {projected}% / 10%
-- Portfolio heat after entry: {projected}% / 5%
+### Execute command
+npx tsx src/execute.ts open \
+  --symbol {pair} --direction {Long/Short} \
+  --entry {entry} --sl {sl} --tp {tp} \
+  --risk-pct {pct} --confluence {score}/12 \
+  --rationale-file /tmp/rationale.txt
 
-### Validity
-- Order expires: {timestamp + 15min}
-- Cancel if: {invalidation_condition}
-
-### Rationale
-{Brief explanation of why this trade, what confluence exists, what macro context}
+### Rationale (goes in --rationale-file)
+{2-3 sentences: what confluence, which flow signal, why this zone, what invalidates}
 ```
 
 ## Key Principles
 
-1. **No plan, no trade** — every trade must have a complete plan before execution
-2. **SL within 5 minutes** — absolute HyroTrader requirement
-3. **Minimum 2:1 R:R** — never accept less
-4. **Limit orders preferred** — save on fees, better fills
-5. **Beyond liquidity pools** — SL placement avoids stop-hunting
-6. **Multi-target exit** — lock profits progressively
+1. **No plan, no trade.** Every open has a complete plan persisted to Trade file.
+2. **Zones anchor entries.** Trading outside zones = chasing.
+3. **SL within 5 min — inviolable.** Move only tighter, never wider.
+4. **Minimum 1.5 R:R.** Prefer 2.0. Shallow TP in a trending move = underscoring.
+5. **Flow confirms structure.** No CVD → no STRONG Factor 1.
+6. **Limit distance is tight in trends.** ≤ 0.3% at ADX>25, cancel early when drifted.
+7. **News/regime multipliers stack.** Apply before sizing.

@@ -38,21 +38,30 @@ Calculate position size respecting HyroTrader risk limits, using ATR-based and f
 
 ## HyroTrader Constraints (INVIOLABLE)
 
-- Max risk per trade: **3%** of initial balance
-- Default risk: **1%** (standard setup), **1.5%** (A+ setup with 4/4 confluence)
+- Max risk per trade: **3%** absolute cap (default **1.5%**)
+- Default risk ladder by 12-factor confluence (see CLAUDE.md § "Entry thresholds")
 - Max total margin: **25%** of current balance
 - Max notional exposure: **2x** initial balance
 - Total portfolio heat (sum of all position risks): **< 5%**
+- Max simultaneous positions: **5** (3 base + 2 for A+)
 
 ## Workflow
 
-### Step 1: Determine Risk Percentage
+### Step 1: Determine Risk Percentage (12-factor rubric)
 
 | Setup Quality | Confluence Score | Risk % |
 |---|---|---|
-| Standard | 3/4 | 1.0% |
-| A+ Setup | 4/4 | 1.5% |
-| Weak/Uncertain | 2/4 or less | **NO TRADE** |
+| A+ | 12/12 | 1.0% |
+| A | 10-11/12 | 0.75% |
+| B+ Standard | 9/12 | **0.5% — minimum entry** |
+| Structural | 8/12 (only with STRONG Factor 1 + Factor 4 = 1) | 0.5% |
+| Counter-trend | 10/12 min (HMM opposes direction, conf ≥ 0.6) | as per score |
+| Below threshold | < 8/12 | **NO TRADE** |
+
+**Multipliers stack** before sizing:
+- News: high-impact ×0.25, medium ×0.5
+- F&G ≤15: additional ×0.5
+- Regime transitioning (`hmm_regime.transitioning=true`): ×0.5
 
 ### Step 2: Calculate Dollar Risk
 

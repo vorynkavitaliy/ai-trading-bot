@@ -36,7 +36,7 @@ Systematic post-trade analysis to identify patterns in wins/losses and improve s
 | **True Positive** | Signal fired, trade taken, profit target hit |
 | **Partial Win** | Signal correct but exited early (SL moved to BE, trailing) |
 | **False Positive** | Signal fired, trade taken, SL hit |
-| **Missed Opportunity** | Signal was close (2/4 confluence) but setup worked anyway |
+| **Missed Opportunity** | Signal was close (7-8/12 confluence, just under threshold) but setup worked anyway |
 | **Regime Mismatch** | Signal valid technically but regime was wrong |
 | **Filter Save** | Signal rejected by filter, would have been a loss |
 
@@ -64,11 +64,13 @@ For each completed trade:
 - R achieved: {R_multiple}
 
 ### Signal Quality
-- Confluence at entry: {score}/4
-- Which dimensions hit: {list}
-- Which dimensions missed: {list}
-- Regime at entry: {regime}
-- News context: {any events}
+- Confluence at entry: {score}/12
+- Factor-by-factor breakdown at entry: { #1 SMC+Flow, #2 Tech, #3 Vol, #4 MTF, #5 BTC, #6 Regime, #7 News, #8 Mom, #9 Vol, #10 LiqCl, #11 Funding/OI, #12 Session }
+- **Which factors actually predicted the outcome** (leading): {list — usually #1 flow, #8 momentum, #11 funding deltas}
+- **Which factors lagged / gave false confirmation** (lagging): {list — often #2 MACD, #7 stale news}
+- HMM regime at entry: {state, confidence, transitioning}
+- Zone anchor: {from zones.md or ad-hoc}
+- News context: {catalysts.md active events, 2-cycle status}
 
 ### What Worked
 {analysis of positive factors}
@@ -96,8 +98,21 @@ For each completed trade:
 ### By Confluence Score
 | Score | Trades | Win Rate | Avg R |
 |---|---|---|---|
-| 4/4 | {n} | {pct}% | {R} |
-| 3/4 | {n} | {pct}% | {R} |
+| 12/12 | {n} | {pct}% | {R} |
+| 10-11/12 | {n} | {pct}% | {R} |
+| 9/12 | {n} | {pct}% | {R} |
+| 8/12 (structural) | {n} | {pct}% | {R} |
+
+### Factor Predictive Power
+| Factor | Hit rate when present | Hit rate when absent | Delta |
+|---|---|---|---|
+| 1. SMC+Flow STRONG (2) | {pct}% | {pct}% | {delta} |
+| 1. SMC+Flow (1) | {pct}% | {pct}% | {delta} |
+| 8. Momentum | {pct}% | {pct}% | {delta} |
+| 11. Funding/OI deltas | {pct}% | {pct}% | {delta} |
+| ... other factors ... | | | |
+
+**Use this table to tune which factors deserve more weight.** If Factor 2 MACD contributes near-zero delta → confirm MACD stays tiebreaker only.
 
 ### By Pair
 | Pair | Trades | Win Rate | PnL |

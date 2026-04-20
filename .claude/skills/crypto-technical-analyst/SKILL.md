@@ -1,7 +1,8 @@
 ---
 name: crypto-technical-analyst
 description: >
-  Multi-timeframe technical analysis for crypto perpetual futures on Bybit.
+  Multi-timeframe technical analysis for crypto perpetual futures on Bybit. Leading indicators
+  (CVD, stoch_15m, RSI slope accel, funding/OI deltas) primary; MACD demoted to tiebreaker.
   Use when analyzing a trading pair, evaluating chart setup, checking trend,
   identifying support/resistance, or assessing entry/exit timing.
   Triggers: "analyze", "chart", "technical analysis", "TA", "setup", "what does the chart say"
@@ -14,146 +15,136 @@ arguments:
 
 # Crypto Technical Analyst
 
-Systematic 6-dimension technical analysis for crypto perpetual futures, producing probability-weighted scenarios with actionable trade levels.
+Multi-timeframe TA for crypto perps on Bybit, built around the Phase 1/3 leading indicators added in the refactor. Primary data source is **scan-summary output** — you do not recompute EMAs/RSI/ATR manually; the scanner already did.
 
 ## When to Use
 
-- Evaluating a trading pair for potential entry
-- Checking current market structure and trend
-- Identifying key support/resistance levels
-- Assessing momentum, volume, and volatility conditions
-- Multi-timeframe alignment check before trade execution
+- Evaluating a pair that passed the zone gate for a potential entry.
+- Checking if an open position's thesis still holds.
+- Multi-TF alignment check as part of Factor 4 in the 12-factor rubric.
 
 ## Research Foundation
 
-This skill draws from these research documents (read as needed):
-- `docs/research/technical-analysis-murphy.md` — Comprehensive TA reference
-- `docs/research/rsi-advanced-strategies.md` — RSI divergence, failure swings, range rules
-- `docs/research/volume-analysis-deep.md` — VPA, VSA, OBV, VWAP, CVD
-- `docs/research/support-resistance-mastery.md` — S/R levels, institutional levels
-- `docs/research/candlestick-charting-morris.md` — Pattern recognition
-- `docs/research/demand-supply-dynamics.md` — Supply/demand zones, order blocks
-- `docs/research/market-trend-analysis.md` — Structure, breakouts, trend identification
+- `docs/research/technical-analysis-murphy.md` — TA reference
+- `docs/research/rsi-advanced-strategies.md` — RSI slope, divergence, failure swings
+- `docs/research/volume-analysis-deep.md` — OBV, VWAP, **CVD** (now primary)
+- `docs/research/support-resistance-mastery.md` — S/R levels
+- `docs/research/demand-supply-dynamics.md` — supply/demand zones, order blocks
+- `docs/research/market-trend-analysis.md` — structure, BOS, CHoCH
 - `docs/research/volatility-analysis-natenberg.md` — ATR, volatility regimes
-- `docs/research/cycle-analytics-ehlers.md` — Cycle analysis, dominant cycles
-- `docs/research/momentum-trading-clenow.md` — Momentum anomalies
+- `docs/research/momentum-trading-clenow.md` — momentum anomalies
+- `docs/research/crypto-market-microstructure.md` — funding, OI, orderbook imbalance
+
+## Data source
+
+`npx tsx src/scan-summary.ts <pair>` — the scanner computes indicators. You read, you do not recompute.
+
+Fields you consume (per pair):
+- `klines{4h,1h,15m,3m}` — last N candles + ATR
+- `indicators{rsi, ema, macd1h, adx1h, obv1h, rsi_div_1h, obv_div_1h, rsi_slope_1h, rsi_slope_accel_1h, stoch_15m}`
+- `orderflow{cvd_1m, cvd_5m, obi_top5}` — **leading** (Phase 3)
+- `orderbook{bid_depth_5pct_usd, ask_depth_5pct_usd, imbalance, spread_bps}`
+- `market_structure{bos_1h, bos_15m, bos_3m, close_vs_swing_15m, sweep, key_levels}`
+- `btc_context{hmm_regime, ...}` — for alts
+- `funding_delta_1h`, `oi_delta_1h_pct` — Phase 1 leading
+
+## Leading vs lagging hierarchy (post-refactor)
+
+**Leading (primary):**
+1. **CVD** (`cvd_1m`, `cvd_5m`) — confirms or invalidates BOS. A BOS without CVD alignment is NOT a valid structural break.
+2. **Orderbook imbalance** (`obi_top5`) — directional pressure at top-5 levels.
+3. **Stoch 15M K/D** — entry timing, cross from extreme.
+4. **RSI slope + acceleration** (`rsi_slope_1h`, `rsi_slope_accel_1h`) — momentum turn ahead of price.
+5. **Funding delta 1h** — positioning unwind signal.
+6. **OI delta 1h** — fresh money in/out vs price.
+
+**Confirming:**
+- EMA21/55 alignment (trend context)
+- RSI level (overbought/oversold context, not signal)
+- OBV trend
+- VWAP position
+- ATR percentile
+
+**Tiebreaker only:**
+- **MACD.** Lagging; used only inside Factor 2 when RSI + EMA + stoch are split. Never a primary trigger.
 
 ## Workflow
 
-### Step 1: Gather Data
+### Step 1 — Trend (4H)
+From scan output: EMA21/55/200 alignment, higher-highs/lows structure, ADX > 25 = trending. Classify: Strong Up / Up / Range / Down / Strong Down.
 
-Fetch kline data for the pair across 3 timeframes using Bybit MCP or API:
-- **4H** — Last 200 candles (bias/trend direction)
-- **1H** — Last 200 candles (market structure)
-- **15M** — Last 200 candles (entry timing)
+### Step 2 — Structure (1H)
+Key levels from `market_structure.key_levels`. BOS direction (`bos_1h`). Sweep flag. Order blocks near price. Liquidity pools (equal highs/lows).
 
-Also fetch:
-- Current orderbook (depth)
-- 24h ticker (volume, price change)
-- Open interest
-- Funding rate
+### Step 3 — Flow (primary entry gate)
+- `cvd_5m` sign and magnitude vs BOS direction.
+- `cvd_1m` for strong confirmation on sweep+reclaim+OB tap.
+- `obi_top5` — if BOS direction matches OBI sign, flow supports it.
 
-### Step 2: Trend Analysis (4H)
+**Decision rule:** structural setup without CVD alignment = **downgrade to 0 on Factor 1**, no matter how clean the chart looks.
 
-1. **EMA alignment**: Calculate EMA 20, 50, 200
-   - Bullish: Price > EMA20 > EMA50 > EMA200
-   - Bearish: Price < EMA20 < EMA50 < EMA200
-   - Ranging: EMAs intertwined or flat
-2. **Higher highs / Higher lows** — Identify structural trend
-3. **ADX** — Trend strength (>25 = trending, <20 = ranging)
-4. **Classify**: Strong Uptrend / Uptrend / Range / Downtrend / Strong Downtrend
+### Step 4 — Timing (15M)
+`stoch_15m` K cross up from <20 (LONG) or down from >80 (SHORT). `rsi_slope_accel_1h > 0` with price at support = entry edge.
 
-### Step 3: Support & Resistance (1H)
+### Step 5 — Volatility
+ATR percentile from scan. <10th → vol squeeze, breakout incoming. >85th → reduce size, widen SL buffer.
 
-1. Identify **key horizontal levels** from swing highs/lows
-2. Map **demand zones** (Rally-Base-Rally, Drop-Base-Rally patterns)
-3. Map **supply zones** (Rally-Base-Drop, Drop-Base-Drop patterns)
-4. Score zone quality: freshness, departure strength, base duration, number of touches
-5. Identify **EMA confluence** with horizontal levels
-6. Mark **liquidity pools** — clusters of equal highs/lows (stop-hunting targets)
+### Step 6 — Regime
+Read `btc_context.hmm_regime` (state + confidence + transitioning). Do not recompute. For BTCUSDT itself, use self-trend from klines.
 
-### Step 4: Momentum & Oscillators
-
-1. **RSI(14)** on 1H:
-   - Check for regular divergence (price vs RSI)
-   - Check for hidden divergence (trend continuation)
-   - Apply range rules: Bull market RSI 40-80, Bear market RSI 20-60
-   - Failure swings (Wilder's preferred signal)
-2. **MACD(12,26,9)** on 1H:
-   - Histogram direction and acceleration
-   - Signal line crossovers
-   - Zero-line position
-3. **Stochastic RSI** on 15M for timing
-
-### Step 5: Volume Analysis
-
-1. **OBV** — Trend confirmation/divergence
-2. **Volume Profile** — High volume nodes (support/resistance), low volume nodes (fast moves)
-3. **VWAP** — Institutional fair value reference
-4. **Directional Volume Ratio** — Buy vs sell volume
-5. **Climactic volume** — Exhaustion signals (volume > 3x average)
-
-### Step 6: Volatility Assessment
-
-1. **ATR(14)** — Current volatility level
-2. **Bollinger Bands** — Squeeze (low vol → breakout incoming) vs expansion
-3. **Volatility percentile** — Compare current ATR to 90-day range
-4. **Funding rate** — Positive = longs paying, negative = shorts paying (crowding indicator)
-
-### Step 7: Synthesis & Scenarios
-
-Produce a structured analysis:
+### Step 7 — Synthesis
 
 ```
-## Analysis: {PAIR} — {DATE}
+## Analysis: {PAIR} — {timestamp}
 
-### Bias: {BULLISH/BEARISH/NEUTRAL}
-### Confidence: {HIGH/MEDIUM/LOW}
+### Bias: {BULLISH / BEARISH / NEUTRAL}
+### Confidence: {HIGH / MED / LOW}
+
+### Structure (1H)
+- BOS: {bos_1h direction} {confirmed-by-cvd / unconfirmed}
+- Key levels: R {R1, R2}; S {S1, S2}
+- Sweep: {yes/no}; OB: {yes/no at level}
+
+### Flow (LEADING)
+- cvd_5m: {sign, magnitude}
+- cvd_1m: {sign, magnitude}
+- OBI top5: {value} ({bid-loaded / ask-loaded})
 
 ### Trend (4H)
-- Direction: {trend}
 - EMA alignment: {alignment}
-- ADX: {value} ({interpretation})
+- ADX: {value} ({trending / ranging})
+- HMM regime: {state} @ {confidence} {transitioning?}
 
-### Key Levels (1H)
-- Resistance: {R1}, {R2}, {R3}
-- Support: {S1}, {S2}, {S3}
-- Demand zones: {zones with quality scores}
-- Supply zones: {zones with quality scores}
-- Liquidity pools: {levels}
+### Timing (15M)
+- Stoch K/D: {values} ({cross-up / cross-down / neutral})
+- RSI slope accel: {value}
 
-### Momentum
-- RSI: {value} — {divergence status}
-- MACD: {histogram direction, crossover status}
-- Stoch RSI (15M): {overbought/oversold/neutral}
+### Momentum / Oscillators
+- RSI 1H: {value}, slope {slope}, divergence {regular / hidden / none}
+- MACD: {tiebreaker only — noted if it breaks a tie on Factor 2}
 
 ### Volume
-- OBV trend: {confirming/diverging}
-- VWAP: price {above/below}
-- Volume profile: {key nodes}
+- OBV trend: {confirming / diverging}
+- VWAP: price {above / below}
 
 ### Volatility
-- ATR: {value} ({percentile}th percentile)
-- BB: {squeeze/normal/expansion}
-- Funding: {rate} ({interpretation})
+- ATR: {value} ({percentile}th)
+- Funding delta 1h: {value}
+- OI delta 1h: {pct}
 
-### Scenarios
-**Base case ({probability}%):** {description}
-**Bull case ({probability}%):** {description}
-**Bear case ({probability}%):** {description}
-
-### Actionable Levels
-- Long entry zone: {price range}
-- Short entry zone: {price range}
+### Actionable levels
+- Long entry zone: {range}
+- Short entry zone: {range}
 - Invalidation: {level}
 ```
 
 ## Key Principles
 
-1. **Multi-timeframe confluence is mandatory** — never trade on a single timeframe
-2. **Volume confirms price** — moves without volume are suspect
-3. **Trend is your friend** — trade with the 4H trend, not against it
-4. **Fresh zones are stronger** — first test of a demand/supply zone is highest probability
-5. **Funding rate is a crowding indicator** — extreme funding = mean reversion setup
-6. **Always identify where you're wrong** — invalidation level defines risk
-7. **Probability-weighted scenarios** — never commit to one outcome
+1. **Flow confirms structure.** BOS without CVD alignment is not a valid break.
+2. **MACD is lagging.** Tiebreaker only; never a primary trigger.
+3. **Multi-TF is mandatory** — Factor 4 requires alignment.
+4. **Fresh zones > retested zones** — first test has highest fill probability.
+5. **HMM regime, not EMA heuristics.** Read `btc_context.hmm_regime`.
+6. **Stoch + rsi_slope_accel = timing edge** — leading indicators of momentum turn.
+7. **Null data = neutral, not bearish** — LiqCl, funding with nulls score 0 neutrally.
+8. **Invalidation before entry** — always know where you're wrong.
