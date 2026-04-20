@@ -65,7 +65,8 @@ Scanner returns **raw JSON** — no scoring, no decisions. Shape per symbol:
 - `price`, `klines{4h,1h,15m,3m}` (last N candles + ATR)
 - `indicators{rsi, ema, macd1h, adx1h, obv1h, rsi_div_1h, obv_div_1h, rsi_slope_1h}`
 - `orderbook{bid_depth_5pct_usd, ask_depth_5pct_usd, imbalance, spread_bps}`
-- `market_structure{bos_1h, sweep, key_levels}`
+- `market_structure{bos_1h, bos_15m, bos_3m, close_vs_swing_15m, sweep, key_levels}`
+- `orderflow{cvd_1m, cvd_5m, obi_top5}` — **Phase 3 leading signal.** CVD confirms (or invalidates) BOS; see Factor 1 scoring.
 - `btc_context{price, regime, trend1h, rsi1h, rsi_slope_3bars, chg_50_4h_pct, chg_20_1h_pct}` (null for BTCUSDT itself)
 - `session{name, quality, allow_entry, near_funding_window, min_to_next_funding}`
 - `news{bias, impact, risk_multiplier, triggers, headlines}` (headlines in English; translate inline for Telegram)
@@ -102,7 +103,7 @@ When called with `all`, you see the whole market at once. This is your **strateg
 
 **Step 0 — Zone gate:** parse the `ZONES:` line per pair. Pairs with `in_zone=true` OR `zone_swept_15m=true` OR an open position/pending order are the **eligible set**. Pairs with no zone activity and no position → skip scoring entirely this cycle. If the eligible set is empty → heartbeat-only cycle, one-line journal note, next.
 
-**Step 1: Quick-scan the eligible set** — for each eligible symbol, compute a fast score (top 3 factors: SMC, Multi-TF, Regime) to filter out junk. Pairs scoring < 5/12 on quick-scan → position-management only, don't waste time scoring all 12.
+**Step 1: Quick-scan the eligible set** — for each eligible symbol, compute a fast score (top 3 factors: SMC+Flow, Multi-TF, Regime). SMC+Flow = structure AND cvd alignment — a BOS without CVD confirmation scores 0, not 1. Pairs scoring < 5/12 on quick-scan → position-management only, don't waste time scoring all 12.
 
 **Step 2: Full-score survivors** — for pairs passing quick-scan (≥ 5/12), score all 12 factors symmetrically LONG+SHORT. Aim for 2-4 deep-scores per cycle, never 8.
 
@@ -125,7 +126,7 @@ When called with `all`, you see the whole market at once. This is your **strateg
 
 **Step 6: Pending limits review** — iterate `pending_orders[]`:
 - If age approaching maxAge (e.g., 40/45 min) and structure still valid → let it cook
-- If structure invalidated (BOS against your direction) → `cancel-limit` with reason `invalidated`
+- If structure invalidated (BOS against your direction confirmed by CVD, OR cvd_5m flipped hard against position) → `cancel-limit` with reason `invalidated`
 - If age > maxAge or thesis no longer holds → `cancel-limit` with reason `expired`
 
 **Expected batch-mode cycle time**: 20-60 seconds for full analysis of 8 pairs + execute. If you exceed 90 seconds → you're over-thinking. Cut 12-factor deep-scoring to top 2-3 candidates only.
@@ -134,7 +135,7 @@ Example structure:
 ```
 SYMBOL: ETHUSDT, current $2450
   LONG scoring:
-    1. SMC/Structure: 1 (bullish BOS on 1H, no OB tap)
+    1. SMC/Structure + Flow: 1 (bullish BOS on 1H confirmed by cvd_5m +$1.2M; no OB tap yet = not STRONG)
     2. Classic Tech: 0 (RSI 48, MACD flat)
     3. Volume: 1 (OBV rising 10-bar slope +)
     4. Multi-TF: 1 (4H up, 1H range, 15M supportive)
@@ -183,7 +184,7 @@ npx tsx src/execute.ts open \
   --symbol BTCUSDT --direction Long \
   --entry 76200 --sl 75700 --tp 77200 \
   --risk-pct 0.5 --confluence 9/12 \
-  --rationale "Bullish BOS 1H + OBV slope + session NY overlap. BTC Range with slope -0.3, non-blocking."
+  --rationale "Bullish BOS 1H confirmed by cvd_5m +$1.8M + OBV slope + NY overlap. BTC Range with slope -0.3, non-blocking."
 ```
 
 **Place a limit order at OB level:**
@@ -310,7 +311,7 @@ PHASE 3: WebSearch triggers
 
 PHASE 4: Score 12 factors
   LONG:
-    1. SMC: 1 (sweep+reclaim detected, bullish structure but no OB tap yet = weak)
+    1. SMC + Flow: 1 (sweep+reclaim detected with cvd_5m positive — bullish structure confirmed by flow, but no OB tap yet = weak, not STRONG)
     2. Tech: 1 (RSI 48 normal, MACD hist turning positive)
     3. Volume: 1 (OBV slope positive)
     4. Multi-TF: 1 (4H range but 1H reclaiming, 15M supportive)
@@ -325,7 +326,7 @@ PHASE 4: Score 12 factors
   → LONG: 10/12 — A-setup
 
   SHORT:
-    1. SMC: 0 (no sweep of low, no bearish BOS)
+    1. SMC + Flow: 0 (no sweep of low, no bearish BOS; cvd_5m positive — wrong direction)
     2. Tech: 0 (MACD turning up)
     ... rest low
   → SHORT: 3/12 — skip

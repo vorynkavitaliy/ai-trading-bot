@@ -226,6 +226,33 @@ for (const d of sd) {
   console.log(
     `  LEAD: funding=${fPct} Δ1h=${fDelta} | OI Δ1h=${oiDelta} | stoch15m k=${st.k ?? "null"}/d=${st.d ?? "null"} | rsi_accel1h=${accel}`,
   );
+
+  // FLOW line — CVD + top-5 orderbook imbalance (Phase 3 leading signal).
+  // CVD > 0 / divergence=bullish = net taker-buy absorption; leads price.
+  const of = d.orderflow;
+  if (!of) {
+    console.log(`  FLOW: (unavailable)`);
+  } else {
+    // Signed USD formatter: "+$420k" / "-$1.80M". For unsigned (book depth), strip sign.
+    const fmtSigned = (n: number) => {
+      const abs = Math.abs(n);
+      const sign = n >= 0 ? "+" : "-";
+      if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`;
+      if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(0)}k`;
+      return `${sign}$${abs.toFixed(0)}`;
+    };
+    const fmtAbs = (n: number) => fmtSigned(n).replace(/^[+-]/, "");
+    const c1 = of.cvd_1m;
+    const c5 = of.cvd_5m;
+    const ob5 = of.obi_top5;
+    const obStr = ob5
+      ? `OBI5 ${ob5.obi >= 0 ? "+" : ""}${ob5.obi} (bid ${fmtAbs(ob5.bid_usd)} / ask ${fmtAbs(ob5.ask_usd)})`
+      : "OBI5 n/a";
+    console.log(
+      `  FLOW: CVD1m ${fmtSigned(c1.cvd_usd)} (div: ${c1.divergence}, ${c1.trades}t) | CVD5m ${fmtSigned(c5.cvd_usd)} (div: ${c5.divergence}) | ${obStr}`,
+    );
+  }
+
   // Expanded BOS line: 1h / 15m / 3m + close_vs_swing_15m
   console.log(
     `  BOS 1h=${ms.bos_1h} 15m=${ms.bos_15m} 3m=${ms.bos_3m} | close_vs_swing_15m=${ms.close_vs_swing_15m}`,

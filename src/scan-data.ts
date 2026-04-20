@@ -32,6 +32,11 @@
  *     "imbalance": 0.605, // bids / (bids + asks)
  *     "spread_bps": 1.2
  *   },
+ *   "orderflow": {  // Phase 3 — CVD + top-5 OBI; leading signals
+ *     "cvd_1m": {"cvd_usd": 420000, "divergence": "none", "trades": 310, "price_change_pct": 0.08},
+ *     "cvd_5m": {"cvd_usd": 1800000, "divergence": "bullish", "trades": 1600, "price_change_pct": -0.12},
+ *     "obi_top5": {"obi": 0.23, "obi_usd": 0.21, "bid_usd": 2100000, "ask_usd": 1300000}
+ *   },
  *   "marketStructure": {
  *     "bos_1h": "bullish" | "bearish" | null,
  *     "choch_1h": null,
@@ -63,6 +68,7 @@ import { cache } from './cache';
 import { config } from './config';
 import { Indicators, Candle } from './analysis/indicators';
 import { Structure } from './analysis/structure';
+import { Orderflow } from './analysis/orderflow';
 import { detectSession, isNearFundingWindow } from './analysis/sessions';
 import { NewsFetcher } from './news/fetcher';
 
@@ -325,6 +331,45 @@ async function gatherForSymbol(
   const marketStructure = marketStructureSummary(c1h as Candle[], c15m as Candle[], c3m as Candle[]);
   const fundingOi = await fundingOiSummary(bybit, symbol);
 
+  // === Orderflow block (Phase 3) — CVD windows + top-N orderbook imbalance ===
+  // CVD leads price by 30-120s on fresh flow (per 2025 crypto LOB research).
+  // Wrapped in catch: a single-pair rate-limit OR timeout degrades to null
+  // rather than blowing the scan.
+  let orderflow: any = null;
+  try {
+    const trades = await Orderflow.fetchRecentTrades(bybit, symbol, 1000);
+    const rawOb = await bybit.getOrderbook(symbol, 50).catch(() => null);
+    const cvd_1m = Orderflow.cvdWindow(trades, 60_000);
+    const cvd_5m = Orderflow.cvdWindow(trades, 300_000);
+    const obi_top5 = rawOb
+      ? Orderflow.imbalanceFromOrderbook(rawOb.bids, rawOb.asks, 5)
+      : null;
+    orderflow = {
+      cvd_1m: {
+        cvd_usd: cvd_1m.cvd_usd,
+        divergence: cvd_1m.divergence,
+        trades: cvd_1m.trades_count,
+        price_change_pct: cvd_1m.price_change_pct,
+      },
+      cvd_5m: {
+        cvd_usd: cvd_5m.cvd_usd,
+        divergence: cvd_5m.divergence,
+        trades: cvd_5m.trades_count,
+        price_change_pct: cvd_5m.price_change_pct,
+      },
+      obi_top5: obi_top5
+        ? {
+            obi: obi_top5.obi,
+            obi_usd: obi_top5.obi_usd,
+            bid_usd: obi_top5.bid_size_usd,
+            ask_usd: obi_top5.ask_size_usd,
+          }
+        : null,
+    };
+  } catch {
+    orderflow = null;
+  }
+
   const session = detectSession();
   const minToFunding = minutesToNextFunding();
 
@@ -405,6 +450,7 @@ async function gatherForSymbol(
       headlines: news.items.slice(0, 5).map((i: any) => i.title ?? i.headline),
     },
     funding_oi: fundingOi,
+    orderflow,
     open_positions: openPositions,
     pending_orders: pendingOrders,
   };

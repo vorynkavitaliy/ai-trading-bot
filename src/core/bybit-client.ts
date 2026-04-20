@@ -78,6 +78,21 @@ export class BybitClient {
     };
   }
 
+  /**
+   * Fetch recent public trades (aggregator of taker prints).
+   * Bybit V5 `/v5/market/recent-trade` — max limit 1000 for linear.
+   * Returns raw `list` entries (time/price/size/side in string form).
+   * Callers (see `analysis/orderflow.ts`) map to numeric + typed aggressor side.
+   */
+  async getRecentTrades(symbol: string, limit = 1000) {
+    const res = await this.publicClient.getPublicTradingHistory({
+      category: 'linear',
+      symbol,
+      limit,
+    });
+    return res.result.list;
+  }
+
   async getInstrumentInfo(symbol: string) {
     const res = await this.publicClient.getInstrumentsInfo({
       category: 'linear',

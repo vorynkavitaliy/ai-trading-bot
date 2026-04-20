@@ -183,7 +183,7 @@ npx tsx src/execute.ts <args>     # open/close/adjust
 
 | # | Factor | LONG scoring | SHORT scoring |
 |---|--------|--------------|---------------|
-| 1 | **SMC / Structure** | sweep low + reclaim + OB tap = 2 (STRONG), OR bullish BOS on any TF = 1 | sweep high + rejection + OB tap = 2, OR bearish BOS on any TF = 1 |
+| 1 | **SMC / Structure + Flow** | (sweep low + reclaim + OB tap) AND cvd_1m > 0 = 2 (STRONG), OR bullish BOS + cvd_5m > 0 (or divergence=bullish) = 1, OR bullish BOS WITHOUT CVD confirmation = 0 | (sweep high + rejection + OB tap) AND cvd_1m < 0 = 2, OR bearish BOS + cvd_5m < 0 (or divergence=bearish) = 1, OR bearish BOS WITHOUT CVD confirmation = 0 |
 | 2 | **Classic Technical (tiebreaker)** | RSI<30 or bullish div, EMA21>EMA55 | RSI>70 or bearish div, EMA21<EMA55 |
 | 3 | **Volume** | OBV up or bullish div, volume spike + green close, above VWAP | OBV down, volume spike + red close, below VWAP |
 | 4 | **Multi-TF** (pair-only) | 4H up + 1H not strongly down + 15M supportive | 4H down + 1H not strongly up + 15M supportive |
@@ -224,6 +224,13 @@ npx tsx src/execute.ts <args>     # open/close/adjust
 - **Daily audit:** if LONG:SHORT entries >3:1 without strongly one-sided regime → directional bias failure, flag in journal.
 
 Full lessons on scoring discipline: `vault/Playbook/lessons-learned.md`.
+
+## Flow confirmation discipline (from Phase 3 — CVD as leading signal)
+
+- **BOS without CVD confirmation = noise.** 2025 crypto LOB research shows order-flow imbalance leads price; a BOS without aggressor-side volume is often a sweep that reverses.
+- **CVD divergence at structural level = strongest setup.** Price making lower low BUT cvd_5m positive = hidden accumulation → LONG bias. Symmetric for SHORT.
+- **OBI top-5 > +0.3 or < -0.3** = meaningful directional pressure in immediate book. Use as tiebreaker when rubric borderline (8-9/12).
+- **Don't trade against CVD even on high rubric.** If rubric says SHORT 10/12 but cvd_5m = +$2M bullish on that pair, wait for CVD to flip OR reduce size ×0.5.
 
 ---
 
