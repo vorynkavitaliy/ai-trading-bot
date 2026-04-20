@@ -173,13 +173,13 @@ npx tsx src/execute.ts <args>     # open/close/adjust
 - On close: update frontmatter, write Postmortem within 1 hour
 - If a lesson emerged: append to `lessons-learned.md`
 - Heartbeat to Telegram if >55 min since last
-- **At each 1H candle close** (07:00, 08:00, ..., 22:00 UTC during active session): run the 1H-Close Protocol (below).
+- **At each 1H candle close** (every hour, 24h): run the 1H-Close Protocol (below).
 
 ---
 
 # 1H-Close Protocol — Zone Maintenance
 
-**Trigger:** first `/loop` cycle where current UTC minute < 3 (top of new hour) AND hour is within 07:00-22:00 active window AND no 1H-review entry in journal for this hour yet.
+**Trigger:** first `/loop` cycle where current UTC minute < 3 (top of new hour) AND no 1H-review entry in journal for this hour yet. Runs 24h.
 
 **Why this matters:** Pre-committed zones (`vault/Watchlist/zones.md`) drive the alert-driven cadence. Stale zones (invalidated, expired, drifted) cause false triggers; missing zones cause missed setups. Review is the only moment Claude **writes** to zones.md — every other cycle only reads.
 
@@ -393,10 +393,12 @@ Key rules:
 | London | 07:00-13:00 | ×1.0 | Manipulation phase, stop hunts |
 | NY+London overlap | 13:00-17:00 | **×1.1** | Best quality, institutional flow |
 | New York | 17:00-22:00 | ×1.0 | Distribution |
-| Dead zone | 22:00-00:00 | ×0.7 | **No new entries** |
+| Dead zone | 22:00-00:00 | ×0.7 | Thin liquidity — higher bar + smaller size |
 
-- Trading schedule: 07:00–22:00 UTC
-- **No entries ±10 min around funding windows** (00:00 / 08:00 / 16:00 UTC)
+- **Trading window: 24h — Claude decides when to trade** based on session quality, zone activity, HMM regime, spread/depth, news. No hardcoded hour block.
+- **Dead-zone discipline** (22:00-00:00 UTC): raise minimum confluence by +1 factor (standard 10/12, counter-trend 11/12) AND apply size ×0.7. Reason: thin books, liquidation cascades more likely, slippage wider.
+- **Asian session** (00:00-07:00 UTC): use quality ×0.85 as sizing multiplier; false-breakout risk higher — prefer limit entries at zones over market.
+- **No entries ±10 min around funding windows** (00:00 / 08:00 / 16:00 UTC) — HARD block, anomalous volume mechanics.
 
 ---
 

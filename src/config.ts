@@ -89,11 +89,16 @@ export const config = {
     'XRPUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT',
   ]),
 
-  /** Trading schedule — UTC hours. Outside these hours the bot skips cycles. */
+  /**
+   * Trading schedule — UTC hour gate. Default: DISABLED (24h trading, Claude decides).
+   * Set SCHEDULE_ENABLED=true to opt back into a restricted window (legacy behaviour).
+   * Quality multiplier + dead-zone discipline (+1 confluence, size ×0.7) enforce session
+   * awareness without a hard block. Funding-window block is separate (see guardrails).
+   */
   schedule: {
-    startHourUTC: num('SCHEDULE_START_UTC', 7),   // 10:00 Kyiv (UTC+3)
-    endHourUTC: num('SCHEDULE_END_UTC', 22),       // 01:00 Kyiv (UTC+3)
-    enabled: process.env.SCHEDULE_ENABLED !== 'false',
+    startHourUTC: num('SCHEDULE_START_UTC', 0),
+    endHourUTC: num('SCHEDULE_END_UTC', 24),
+    enabled: process.env.SCHEDULE_ENABLED === 'true',
   },
 
   news: {

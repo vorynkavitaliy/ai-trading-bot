@@ -259,7 +259,7 @@ EVERY CYCLE (every 3 min):
   Phase 5: execute if deciding to act (open/close/cancel/move-sl)
   Phase 6: vault writes (journal one-liner even on heartbeat cycles)
 
-AT TOP-OF-HOUR (mm<3, 07:00-22:00 UTC active):
+AT TOP-OF-HOUR (mm<3, 24h):
   Run 1H-Close Protocol (CLAUDE.md § 1H-Close Protocol — Zone Maintenance):
     - Invalidation sweep of active zones (per-pair)
     - Derive new zones: liq_cluster, prior_day_hl, htf_pivot, round, ob, ema21/55_1h
@@ -271,11 +271,12 @@ EVERY SESSION TRANSITION (07:00, 13:00, 17:00, 22:00 UTC):
   Phase 1 adds: session-playbook.md
   Phase 6 adds: session summary in Journal
 
-DAILY (22:00 UTC — dead zone starts):
-  Journal: end-of-day summary (see _template.md)
+DAILY (00:00 UTC — new UTC day):
+  Journal: end-of-day summary for prior day (see _template.md)
   Archive completed trades
   Clean Watchlist
   Codify lessons earned during the day
+  Snapshot `pnl-day.ts --snapshot` for new-day baseline
 ```
 
 ---

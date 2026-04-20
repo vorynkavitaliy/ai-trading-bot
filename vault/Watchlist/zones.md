@@ -5,7 +5,7 @@ updated: 2026-04-20T14:15:00Z
 ---
 
 ## How this file works
-- Written by Claude at each 1H candle close during active session (07:00-22:00 UTC).
+- Written by Claude at each 1H candle close (24h).
 - Each zone = specific price level with type, side, invalidation.
 - /loop 3m fires full 12-factor rubric ONLY when price is in-zone or zone was swept last 15m.
 - Zones expire 24h after created_at OR on invalidation.

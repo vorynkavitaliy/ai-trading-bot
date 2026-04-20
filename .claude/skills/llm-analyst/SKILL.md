@@ -2,7 +2,7 @@
 name: LLM Market Analyst
 description: >
   Hourly deep market review — portfolio-level thinking, thesis validation, narrative check.
-  Aligned with the 1H-Close Protocol (runs at top-of-hour during active session 07-22 UTC),
+  Aligned with the 1H-Close Protocol (runs at top-of-hour, 24h),
   complementary to the per-cycle /trade-scan. NOT a per-cycle duplicate — Claude is already
   the primary analyst every 3 min.
 model: opus

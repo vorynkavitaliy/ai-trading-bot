@@ -8,6 +8,11 @@
  *   NY:        17:00 – 22:00  (distribution phase)
  *   Dead:      22:00 – 00:00  (low liquidity)
  *
+ * ALL hours are allowed for entry — Claude decides based on session quality,
+ * zone activity, HMM regime, and liquidity. `allowEntry` is always true;
+ * sizing/threshold adjustments are applied via `qualityMultiplier`.
+ * The only hard block remains `isNearFundingWindow` (±10 min around 00/08/16 UTC).
+ *
  * Research refs:
  *   - stop-hunting-market-traps.md: AMD framework (Asian=Accumulation, London=Manipulation, NY=Distribution)
  *   - volume-analysis-deep.md: 13:00-17:00 UTC is the real institutional window
@@ -55,7 +60,9 @@ export function detectSession(now?: Date): SessionInfo {
     name: current.name,
     label: current.label,
     qualityMultiplier: current.quality,
-    allowEntry: current.name !== 'dead',
+    // 24h trading — Claude decides based on quality + conditions.
+    // Funding-window block is separate (isNearFundingWindow).
+    allowEntry: true,
     nextSession: next.label,
     hoursUntilNext,
   };

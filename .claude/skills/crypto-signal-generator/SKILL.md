@@ -77,7 +77,7 @@ Score LONG and SHORT independently from the same data. Symmetric — no bias.
 1. Daily DD < 4% AND Total DD < 8% (CLEAR from risk manager).
 2. Slot available (open + pending < 5).
 3. Total portfolio heat + proposed risk < 5%.
-4. Session allows entry (not dead zone 22-00, not ±10 min to funding).
+4. Not within ±10 min of a funding window (00/08/16 UTC) — hard block. Otherwise 24h; dead zone (22-00) allowed with +1 confluence requirement and size ×0.7.
 5. Session quality ≥ 0.85 (weights apply to score but don't veto).
 6. Macro catalyst not within 30 min (check `vault/Watchlist/catalysts.md`; see 2-cycle rule).
 

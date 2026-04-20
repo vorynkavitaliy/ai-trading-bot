@@ -129,7 +129,8 @@ async function checkGuardrails(
   direction: Direction,
   riskPct: number,
 ): Promise<{ ok: true } | { ok: false; reason: string; code: string }> {
-  // 1) Trading hours (07:00-22:00 UTC)
+  // 1) Trading hours gate — disabled by default (24h trading, Claude decides).
+  // Opt in via SCHEDULE_ENABLED=true env var to restore a restricted window.
   if (config.schedule.enabled) {
     const hour = new Date().getUTCHours();
     const { startHourUTC, endHourUTC } = config.schedule;

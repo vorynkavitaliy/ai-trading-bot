@@ -20,11 +20,16 @@ last_revised: 2026-04-17
 | **London** | 07:00–13:00 | 10:00–16:00 | × 1.0 |
 | **NY + London overlap** | 13:00–17:00 | 16:00–20:00 | **× 1.1 (best)** |
 | **New York** | 17:00–22:00 | 20:00–01:00 | × 1.0 |
-| **Dead zone** | 22:00–00:00 | 01:00–03:00 | × 0.7 — **no entries** |
+| **Dead zone** | 22:00–00:00 | 01:00–03:00 | × 0.7 — higher bar, smaller size |
 
-**My trading window: 07:00 – 22:00 UTC (10:00 – 01:00 Kyiv).** Outside this window: monitoring only, no new entries. Existing positions manage themselves via server-side SL/TP.
+**24h trading — I decide when to trade.** Session quality multiplier drives sizing and confluence threshold, not a hard gate. In each session the character differs:
+- **Asian** ×0.85 — accumulation, false-breakout risk. Prefer limit entries at zones, not market chase.
+- **London** ×1.0 — manipulation phase, stop hunts. Best structural setups.
+- **NY + London overlap** ×1.1 — institutional flow, cleanest trends.
+- **NY** ×1.0 — distribution. Continuations only in first 2 hours.
+- **Dead zone** ×0.7 — thin books, cascade risk. Raise minimum confluence by +1 factor (standard 10/12, counter-trend 11/12) AND size ×0.7. Trade only A-quality + strong flow. Skip marginal setups.
 
-**No-entry micro-windows within the trading window:**
+**Hard-block micro-windows:**
 - ±10 min around funding (00:00, 08:00, 16:00 UTC) — funding rebalancing distorts order flow
 - First 15 min after major scheduled macro prints (FOMC, CPI, NFP)
 
@@ -120,31 +125,34 @@ last_revised: 2026-04-17
 - **Quality multiplier 1.0.**
 - **Trend continuations** from overlap still work in first 2 hours.
 - **Reduce new entries after 20:00 UTC.** Volume thins, slippage increases.
-- **No new entries after 21:30 UTC.** Dead zone approaches; setups triggered then have no one to follow through.
+- **After 21:30 UTC:** only A-quality (10/12+) with strong flow confirmation. Dead zone approaches; marginal setups have no follow-through.
 
 ### What I avoid in NY
-- Counter-trend plays late in the session (no follow-through in dead zone to close the trade)
-- Opening positions that require multi-hour holds late in NY (48h clock is ticking with no liquidity to work against)
+- Counter-trend plays late in the session without +1 confluence
+- Opening positions that require multi-hour holds late in NY (48h clock is ticking, fewer institutional hands to work the move)
 
 ---
 
-## DEAD ZONE (22:00–00:00 UTC) — NO ENTRIES
+## DEAD ZONE (22:00–00:00 UTC) — HIGHER BAR, NOT A BAN
 
 ### Character
 - **Lowest volume of the 24-hour cycle.**
 - Institutional desks closed. Asian desks not yet in.
-- **Wide spreads, thin books, manipulation risk.**
+- **Wide spreads, thin books, manipulation + cascade risk.**
 
 ### Rule
-**NO new entries in the dead zone.** Period.
-
-Exception: none.
+**24h trading allowed — but dead zone demands discipline:**
+- Minimum confluence **+1 factor** (standard 10/12, counter-trend 11/12).
+- Size **×0.7** automatic.
+- Require STRONG Factor 1 (sweep+reclaim+OB tap with CVD confirmation) — no weak BOS-only entries.
+- Watch spread: if `spread_bps > 3` on the pair, skip (slippage eats edge).
+- Prefer shorter holds: if I can close within 2 hours, good. Overnight only if A+ 12/12.
 
 ### What I do
+- Take only A-grade setups meeting dead-zone bar
 - Monitor existing positions via server-side orders
-- Plan next session
-- Write Journal entry for the day
-- Update Thesis files based on the day's action
+- Plan next session / update Thesis if structure shifted
+- Write Journal entry for the UTC day as 22:00 approaches
 
 ---
 

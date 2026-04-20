@@ -41,7 +41,7 @@ Before planning, confirm:
 4. **No macro catalyst within 30 min** — check `vault/Watchlist/catalysts.md`.
 5. **Slot available** — open + pending < 5 (3 base, 5 A+).
 6. **Total heat + proposed risk < 5%**.
-7. **Session allows entry** — not dead zone (22-00 UTC), not ±10 min to funding window (00/08/16 UTC).
+7. **Not within funding window** (±10 min around 00/08/16 UTC) — hard block. 24h trading otherwise; in dead zone (22-00 UTC) require +1 confluence and apply size ×0.7.
 
 Any fail → **NO TRADE**. Log reason in Journal.
 

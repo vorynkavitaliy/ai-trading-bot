@@ -36,7 +36,8 @@ Pairs with no zone activity and no position → skip 12-factor scoring, heartbea
 - Max **1.5% risk per trade** default (3% absolute cap), sized by confluence.
 - Max **5 simultaneous positions** (3 base + 2 for A+), max total heat **5%**.
 - No martingale, no news-only entries, no cross-account hedging, no SL removal.
-- **No new entries ±10 min around funding windows** (00/08/16 UTC) or in the dead zone (22-00 UTC).
+- **No new entries ±10 min around funding windows** (00/08/16 UTC) — hard block, anomalous volume.
+- **24h trading allowed.** Claude decides when based on session quality multiplier (×0.85 Asian, ×1.0 London/NY, ×1.1 overlap, ×0.7 dead zone), zone activity, HMM regime, spread/depth. Dead zone (22-00 UTC) adds +1 confluence requirement and size ×0.7 — not a ban.
 
 ## Cycle protocol — one /loop fire
 
