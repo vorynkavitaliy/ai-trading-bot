@@ -362,6 +362,7 @@ Routine factor oscillation (MACD, RSI, OBV slope, bos_3m) is noise at sub-15m ca
 | Execute trade | `npx tsx src/execute.ts <args>` |
 | Execute w/ long rationale | `npx tsx src/execute.ts <args> --rationale-file /tmp/r.txt` (Write tool creates file; use when rationale has `$` / newlines / long text) |
 | Cancel limits | `npx tsx src/cancel-all-entries.ts <symbol>` |
+| Move TP (after race-condition restore) | `npx tsx src/execute.ts move-tp --symbol X --new-tp N --rationale "..."` |
 | Force close | `npx tsx src/close-now.ts <symbol> <side>` |
 | Daily P&L | `npx tsx src/pnl-day.ts` (baseline at 00:00 UTC) |
 | Take P&L snapshot | `npx tsx src/pnl-day.ts --snapshot` |

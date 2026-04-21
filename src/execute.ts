@@ -425,6 +425,30 @@ async function actionCancelLimit(args: Record<string, string>): Promise<void> {
   const pending = await cache.getAllPendingOrders();
   const order = pending.find((p) => p.symbol === symbol);
 
+  // RACE-CONDITION GUARD (added 2026-04-21 after trade #3 incident):
+  // Between our decision to cancel and the cancel actually reaching Bybit, the limit
+  // may have already filled. If we issue cancelAllOrders on a symbol with an OPEN
+  // position, we'll kill the linked SL + TP orders and leave a naked position.
+  // Check position state first — if any account has a live position on this symbol,
+  // refuse the cancel and instruct Claude to use close/move-sl instead.
+  const bybit = new BybitClient(mgr);
+  const positionsPerAccount = await bybit.getAllPositions(symbol);
+  const accountsWithOpenPosition = positionsPerAccount
+    .filter((acc) => acc.positions.some((p: any) => Number(p.size ?? 0) > 0))
+    .map((acc) => acc.sub.label);
+  if (accountsWithOpenPosition.length > 0) {
+    console.log(JSON.stringify({
+      ok: false,
+      action: 'cancel-limit',
+      symbol,
+      rejected_by: 'limit_already_filled',
+      reason: `position open on ${accountsWithOpenPosition.join(', ')} — limit already filled. Use 'close' or 'move-sl'/'move-tp' instead.`,
+      accounts_with_position: accountsWithOpenPosition,
+    }, null, 2));
+    await cache.removePendingOrder(symbol); // clear stale pending record
+    process.exit(1);
+  }
+
   await Promise.all(subs.map(async (sub) => {
     try {
       await sub.client.cancelAllOrders({ category: 'linear', symbol });
@@ -501,6 +525,59 @@ async function actionMoveSl(args: Record<string, string>): Promise<void> {
   process.exit(0);
 }
 
+async function actionMoveTp(args: Record<string, string>): Promise<void> {
+  const symbol = req(args, 'symbol').toUpperCase();
+  const newTp = num(args, 'new-tp');
+  const rationale = args['rationale'] ?? '(no rationale)';
+
+  const mgr = new AccountManager();
+  const subs = mgr.getAllSubAccounts();
+
+  // Set or modify take-profit on existing position. Added 2026-04-21 after race-condition
+  // incident (trade #3) where cancel-limit killed the TP leg of the orderLinkGroup and
+  // there was no way to restore it. Symmetric with move-sl.
+  const results = await Promise.all(subs.map(async (sub) => {
+    try {
+      const posList = await sub.client.getPositionInfo({ category: 'linear', symbol });
+      const p = posList.result?.list?.find((x: any) => Number(x.size) > 0);
+      if (!p) return { account: sub.label, success: false, reason: 'no position' };
+
+      const isLong = p.side === 'Buy';
+      const entry = Number(p.avgPrice);
+      // Sanity: TP must be on the profit side of entry
+      if (isLong && newTp <= entry) {
+        return { account: sub.label, success: false, reason: `TP ${newTp} <= entry ${entry} for LONG` };
+      }
+      if (!isLong && newTp >= entry) {
+        return { account: sub.label, success: false, reason: `TP ${newTp} >= entry ${entry} for SHORT` };
+      }
+
+      const currentTp = Number(p.takeProfit);
+      await sub.client.setTradingStop({
+        category: 'linear', symbol, positionIdx: 0,
+        takeProfit: String(newTp), tpslMode: 'Full',
+      });
+      return { account: sub.label, success: true, old_tp: currentTp, new_tp: newTp };
+    } catch (err: any) {
+      return { account: sub.label, success: false, reason: err.message };
+    }
+  }));
+
+  await AuditRepo.log({
+    level: 'info', source: 'execute', event: 'tp_moved_claude',
+    symbol,
+    message: `Claude move TP ${symbol} → ${newTp}: ${rationale}`,
+  });
+
+  console.log(JSON.stringify({
+    ok: results.some((r) => r.success),
+    action: 'move-tp',
+    symbol, new_tp: newTp, rationale,
+    accounts: results,
+  }, null, 2));
+  process.exit(0);
+}
+
 // --- main ---------------------------------------------------------------
 async function main() {
   const { action, args } = parseArgs();
@@ -518,6 +595,9 @@ async function main() {
     case 'cancel-limit':
       await actionCancelLimit(args);
       break;
+    case 'move-tp':
+      await actionMoveTp(args);
+      break;
     case 'move-sl':
       await actionMoveSl(args);
       break;
@@ -525,7 +605,7 @@ async function main() {
       console.error(JSON.stringify({
         ok: false,
         error: `unknown action "${action}"`,
-        valid_actions: ['open', 'place-limit', 'close', 'cancel-limit', 'move-sl'],
+        valid_actions: ['open', 'place-limit', 'close', 'cancel-limit', 'move-sl', 'move-tp'],
       }));
       process.exit(1);
   }
