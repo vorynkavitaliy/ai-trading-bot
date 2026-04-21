@@ -52,7 +52,7 @@ On-demand (not every cycle):
 - `vault/Playbook/regime-playbook.md` — when BTC regime unclear
 - `vault/Playbook/session-playbook.md` — at session transitions
 - `vault/Trades/{DATE}_{SYMBOL}_{DIR}.md` — when re-evaluating existing position
-- `vault/Research/{topic}.md` — when a methodology needs verification
+- `.claude/docs/research/{topic}.md` — when a methodology needs verification
 
 ### PHASE 2 — GATHER DATA (TS sensors)
 

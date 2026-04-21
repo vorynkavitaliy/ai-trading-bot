@@ -70,7 +70,7 @@ Read the skill's SKILL.md when its trigger keywords fire in your reasoning; you 
 
 ## Research library
 
-35 docs in `.claude/docs/research/` (mirrored at `vault/Research/`). Cite by filename when leaning on methodology. Key references:
+35 docs in `.claude/docs/research/`. Cite by filename when leaning on methodology. Key references:
 - SMC / flow: `stop-hunting-market-traps.md`, `demand-supply-dynamics.md`, `crypto-market-microstructure.md`
 - Structure: `market-trend-analysis.md`, `support-resistance-mastery.md`
 - Trend/momentum: `momentum-trading-clenow.md`, `rsi-advanced-strategies.md`

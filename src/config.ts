@@ -94,10 +94,17 @@ export const config = {
     totalDdHard: num('TOTAL_DD_HARD', 10.0),
   },
 
-  watchlist: list('WATCHLIST', [
-    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT',
-    'XRPUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT',
-  ]),
+  /**
+   * Active trading watchlist. 2026-04-21: narrowed to BTCUSDT only.
+   * Rationale: HMM trained on BTC, CVD deepest on BTC, alt trades caused correlation-burn and peak-giveback
+   * over 4-day sample (2026-04-17..20). Re-add alts when: (a) 2 weeks consistent BTC P&L ≥ 0.25%/day, OR
+   * (b) BTC dry period < 1 A-setup/day for 5 days. See memory/feedback_btc_only.md.
+   *
+   * Full list kept commented for quick revert when re-enabling alts:
+   *   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT'
+   * Override via WATCHLIST env var (comma-separated).
+   */
+  watchlist: list('WATCHLIST', ['BTCUSDT']),
 
   /**
    * Trading schedule — UTC hour gate. Default: DISABLED (24h trading, Claude decides).

@@ -485,7 +485,7 @@ Full schema in `vault/README.md`.
 
 # Methodology — Research Library
 
-`.claude/docs/research/` — 35 files (also mirrored at `vault/Research/`).
+`.claude/docs/research/` — 35 files (canonical location; 2026-04-21 removed duplicate `vault/Research/`).
 
 Primary tradition → file:
 
