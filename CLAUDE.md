@@ -189,6 +189,66 @@ npx tsx src/execute.ts <args>     # open/close/adjust
 
 ---
 
+# Clear Protocol — Anti-Hallucination (every 40 cycles)
+
+**Problem:** `/loop 3m` conversation context auto-compresses around 200k tokens. After compression, memory of "what just happened" may drift, distort, or get paraphrased — leading to hallucinated state claims and unsafe decisions (2026-04-21 incidents codified this as a recurring risk).
+
+**Solution:** Manual `/clear` every ~40 cycles (~2 hours). `/clear` wipes conversation context. Next `/trade-scan` re-loads CLAUDE.md + memory/*.md + vault/* from scratch via Phase 0-1. Vault is the persistence enabler: if vault reflects reality, post-clear Claude rebuilds context losslessly.
+
+## Trigger
+
+`scan-summary.ts` runs `cycle-counter tick` every cycle. When `since_clear >= 40`, the output shows:
+```
+CYCLE: 127 (42 since last /clear) — 🧹 CLEAR RECOMMENDED (threshold 40)
+```
+
+## Claude's duties when nudge fires
+
+1. **Safety gate** — refuse to recommend /clear if any of:
+   - Open position without matching `vault/Trades/{DATE}_{SYMBOL}_{DIR}.md` file (reconcile first)
+   - Pending limit order without cache entry
+   - Reconcile divergence (`aligned: false`)
+   - Mid-execute flow (waiting on executor response)
+2. **Write state checkpoint to journal** — explicit block:
+   ```
+   [HH:MM UTC] CYCLE 127 — 🧹 CLEAR RECOMMENDED
+     Positions: FLAT (or list)
+     Pending: none (or list with SL/TP)
+     Day P&L: ±$X
+     Open zones: {summary}
+     Next eligible setup: {description or "none"}
+     HMM: {state} conf {X}%
+   ```
+3. **Send TG nudge** (`vault/Playbook/telegram-templates.md` template 8) — operator-facing.
+4. **Continue normal cycle** — /clear is operator action, not Claude's. Keep trading safely until operator clears.
+
+## Operator's duties
+
+When you see `🧹 CLEAR RECOMMENDED` in scan output or Telegram:
+1. Wait for a safe window (FLAT or after a trade just closed).
+2. Run `/clear` in the terminal.
+3. Resume `/loop 3m /trade-scan BTCUSDT`.
+4. **First cycle after /clear:** Claude must run `npx tsx src/cycle-counter.ts reset` in Phase 0 to reset `since_clear` to 0. Signal: if `since_clear > threshold` AND Claude has no prior conversation context in current cycle, call reset.
+
+## What /clear does NOT erase
+
+- `CLAUDE.md` (re-read automatically)
+- `.claude/skills/*` and `.claude/agents/*` (re-read)
+- `memory/*.md` (auto-memory system reloads)
+- `vault/*` (file-based, untouched)
+- Cycle counter state (`vault/state/cycle-counter.json`)
+
+## What /clear DOES erase
+
+- In-session conversation history (prior /loop cycle results, scan outputs, my own reasoning narrative)
+- In-progress multi-step operations (why we gate on "not mid-execute")
+
+## Why this is critical
+
+Per `memory/feedback_anti_hallucination.md`: compressed memory = ground for wrong claims about state. The 2026-04-21 trade #3 race-condition partly stemmed from context-decay in a long session. Every /clear is a hard anchor back to canonical sources.
+
+---
+
 # 1H-Close Protocol — Zone Maintenance
 
 **Trigger:** first `/loop` cycle where current UTC minute < 3 (top of new hour) AND no 1H-review entry in journal for this hour yet. Runs 24h.

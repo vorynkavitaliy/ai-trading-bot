@@ -14,8 +14,13 @@
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { tick as cycleTick, nudgeDue } from "./cycle-counter";
 
 const arg = process.argv[2] || "all";
+
+// Tick cycle counter FIRST — anti-hallucination /clear nudge mechanism.
+// See CLAUDE.md § Clear Protocol. Threshold 40 cycles (~2h at /loop 3m).
+const cycle = cycleTick();
 
 const raw = execSync(`npx tsx src/scan-data.ts ${arg}`, {
   encoding: "utf8",
@@ -25,6 +30,15 @@ const start = raw.indexOf("{");
 const json = JSON.parse(raw.slice(start));
 
 console.log("generated_at:", json.generated_at);
+if (nudgeDue(cycle)) {
+  console.log(
+    `CYCLE: ${cycle.total} (${cycle.since_clear} since last /clear) — 🧹 CLEAR RECOMMENDED (threshold ${cycle.nudge_threshold})`,
+  );
+} else {
+  console.log(
+    `CYCLE: ${cycle.total} (${cycle.since_clear}/${cycle.nudge_threshold} since last /clear)`,
+  );
+}
 
 // === Cross-pair structure aggregator (Variant 2: implicit BOS) ===
 const cps = json.cross_pair_structure;
