@@ -101,9 +101,35 @@ For each symbol, for both LONG and SHORT, manually score all 12 factors 0/1 (fac
 
 When called with `all`, you see the whole market at once. This is your **strategic advantage** — use it, but **gated by zone activity** (Phase 2 refactor):
 
-**Step 0 — Zone gate:** parse the `ZONES:` line per pair. Pairs with `in_zone=true` OR `zone_swept_15m=true` OR an open position/pending order are the **eligible set**. Pairs with no zone activity and no position → skip scoring entirely this cycle. If the eligible set is empty → heartbeat-only cycle, one-line journal note, next.
+**Step 0 — MANDATORY 8-pair snapshot (HARD-ENFORCED, no exceptions).**
 
-**Step 1: Quick-scan the eligible set** — for each eligible symbol, compute a fast score (top 3 factors: SMC+Flow, Multi-TF, Regime). SMC+Flow = structure AND cvd alignment — a BOS without CVD confirmation scores 0, not 1. Pairs scoring < 5/12 on quick-scan → position-management only, don't waste time scoring all 12.
+Before any reasoning about specific pairs or setups, produce this table in the journal entry. **This is non-negotiable** — previous cycles repeatedly narrowed attention to BTC and missed alt shifts (2026-04-20 C629, 2026-04-21). The table forces breadth.
+
+Template (fill EVERY row from scan-summary output):
+
+```
+| PAIR | price | in_zone | swept_15m | HMM | CVD5m | BOS1h | quick_score L/S |
+|---|---|---|---|---|---|---|---|
+| BTCUSDT | xxxxx | y/n | y/n | bull/range/bear | ±$Xk | bull/bear/none | N/N |
+| ETHUSDT | ...   | ... | ... | ...             | ...  | ...              | ... |
+| SOLUSDT | ... |
+| BNBUSDT | ... |
+| XRPUSDT | ... |
+| DOGEUSDT | ... |
+| AVAXUSDT | ... |
+| LINKUSDT | ... |
+```
+
+Quick-score = count of {in_zone, cvd_confirms_direction, hmm_aligned} factors — 0 to 3, fast proxy. Separate LONG vs SHORT.
+
+**Eligibility for Step 2 (full rubric):** 
+- `in_zone=true` OR `swept_15m=true`, OR
+- Open position/pending order on the pair, OR
+- Quick-score ≥ 2/3 in either direction (even outside zones — catches emerging setups zones might miss)
+
+**If operator-style bias audit fails** (eligible set is only BTC for 3+ consecutive cycles while alt cluster shows structure changes) → treat as warning sign; explicitly explain why I'm skipping alt setups.
+
+**Step 1: Quick-scan eligible set** — for each eligible symbol, compute a mid-depth score (top 5 factors: SMC+Flow, Multi-TF, Regime, Momentum, Volume). Pairs scoring < 5/12 → position-management only.
 
 **Step 2: Full-score survivors** — for pairs passing quick-scan (≥ 5/12), score all 12 factors symmetrically LONG+SHORT. Aim for 2-4 deep-scores per cycle, never 8.
 
@@ -225,12 +251,25 @@ npx tsx src/execute.ts move-sl \
 Based on Phase 4–5 decisions:
 
 **Always — append to Journal:**
+
+First, the **mandatory 8-pair snapshot** from Step 0 (the table). This is the bias audit — if I can't show I looked at all 8, the entry is incomplete.
+
+Then the decision block:
 ```
-[HH:MM UTC] {SYMBOL} — {decision}
-  Scoring: LONG 9/12 | SHORT 5/12
-  {Why in 1-2 sentences, cite structure + research source}
-  Action: {opened/skipped/closed/...}
+[HH:MM UTC] Cycle C### — {decision summary}
+
+Pairs scanned: 8/8 | Eligible (zone or position): {N}
+{8-row table from Step 0}
+
+Focus: {SYMBOL(s) considered for action}
+  Scoring: LONG 9/12 | SHORT 5/12  (full factor breakdown if ≥5/12)
+  {Why in 1-2 sentences, cite structure + research}
+  Action: {opened/skipped/closed/held/limit-placed/limit-cancelled}
+
+Pair-bias audit: Last 3 cycles focus = {BTC×3 | BTC×2+ETH×1 | mixed}. {Flag if BTC-only streak >= 3.}
 ```
+
+`Pairs scanned: 8/8` is the enforcement field. If I wrote anything less I failed the bias audit and the rest of the entry is suspect.
 
 **On thesis change** → rewrite `vault/Thesis/{SYMBOL}.md`, update `updated:` frontmatter.
 
