@@ -4,7 +4,7 @@ import { TradePlan, fmtPrice, InstrumentSpec } from './types';
 import { sizePosition, SizingResult } from '../risk/sizing';
 import { RiskEngine } from '../risk/engine';
 import { TelegramNotifier } from '../notifications/telegram';
-import { TradeRepo, AuditRepo, SignalRepo } from '../db/repositories';
+import { TradeRepo, AuditRepo } from '../db/repositories';
 import { cache } from '../cache';
 import { Signal } from '../signal/types';
 import { config } from '../config';
@@ -178,17 +178,9 @@ export async function executeAcrossAccounts(ctx: ExecuteContext): Promise<Execut
     }
   }));
 
-  // Telegram + signal log (single message regardless of account count)
+  // Telegram + audit log (single message regardless of account count).
+  // v2: signal audit rolled into AuditRepo.log calls above; SignalRepo dropped.
   const succeeded = reports.filter((r) => r.success);
-  await SignalRepo.insert({
-    symbol: ctx.plan.symbol,
-    direction: ctx.plan.direction,
-    confluence: ctx.signal.confluence,
-    regime: ctx.regimeLabel,
-    scores: { long: ctx.signal.long, short: ctx.signal.short },
-    executed: succeeded.length > 0,
-    rejectReason: succeeded.length === 0 ? reports.map((r) => r.reason).filter(Boolean).join('; ') : undefined,
-  });
 
   // Register pending limit orders for monitoring (cancel if stale)
   if (ctx.plan.limitEntry && succeeded.length > 0) {

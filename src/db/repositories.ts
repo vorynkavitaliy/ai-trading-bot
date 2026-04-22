@@ -170,16 +170,5 @@ export interface SignalRecord {
   rejectReason?: string;
 }
 
-export const SignalRepo = {
-  async insert(s: SignalRecord) {
-    await db.query(
-      `INSERT INTO signals (symbol, direction, confluence, regime, scores, executed, reject_reason)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [
-        s.symbol, s.direction, s.confluence,
-        s.regime ?? null, s.scores ? JSON.stringify(s.scores) : null,
-        s.executed, s.rejectReason ?? null,
-      ]
-    );
-  },
-};
+// SignalRepo removed 2026-04-22 — audit rolled into AuditRepo.log.
+// The `signals` DB table is kept for historical v1 records; no new writes.
