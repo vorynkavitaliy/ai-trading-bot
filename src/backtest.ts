@@ -24,7 +24,8 @@ import { AccountManager } from './core/account-manager.js';
 import { Candle } from './analysis/indicators.js';
 import { BollingerBands, ATR, RSI, ADX, SMA, EMA } from 'technicalindicators';
 
-const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
+const SYMBOLS = (process.env.BT_SYMBOLS?.split(',').map(s => s.trim()).filter(Boolean))
+  ?? ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
 const INTERVAL = '60' as const; // 1H
 const DAYS = Number(process.env.BT_DAYS) || 365;
 const FEE_ROUND_TRIP = 0.0011; // 0.055% × 2
