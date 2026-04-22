@@ -1,5 +1,5 @@
 ---
-description: "Claude-driven trading cycle v2. Regime-gated Playbook A+B on BTC/ETH/SOL. Run via /loop 3m /trade-scan all."
+description: "Claude-driven trading cycle v2. Regime-gated Playbook A+B on BTC/ETH/SOL. Run via /loop 5m /trade-scan all."
 argument-hint: "<PAIR|all> (e.g., BTCUSDT or all — default all)"
 ---
 

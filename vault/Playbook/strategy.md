@@ -205,17 +205,18 @@ Hard cap: 1.0% risk per trade даже с scalar.
 
 ## Cadence (операционный ритм)
 
-### 3m loop — TRIGGER ENGINE only
+### 5m loop — TRIGGER ENGINE only
 
 - Проверить: есть ли новый tap BB edge / sweep?
 - Если да — поднять флаг, пустить scoring на следующем 15m close.
-- **Не запускать rubric на 3m.** Noise layer.
+- **Не запускать rubric на 5m.** Ниже 15m — noise layer (arxiv 1512.06159: sub-5min requires specialized noise-robust estimators; наивный signal extraction → biased).
+- Переход 3m → 5m сделан 2026-04-22: 3m давал слишком много micro-signals которые Claude интерпретировал как разворот. 5m ближе к 15m close и синхронизируется с ним (3 фазы 5m на один 15m close).
 
 ### 15m close — ENTRY/EXIT timing
 
 - Re-score open positions (proactive exit check).
 - Re-check pending limit orders (cancel-if-stale rule: limit > 15 мин без fill → cancel).
-- If trigger flag raised by 3m — выполнить entry check.
+- If trigger flag raised by 5m — выполнить entry check.
 
 ### 1H close — REGIME + zones refresh
 

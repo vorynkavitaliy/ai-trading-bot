@@ -2,14 +2,14 @@
 name: trader
 description: >
   Autonomous crypto trading agent for Bybit perpetual futures on HyroTrader prop accounts.
-  Runs per-cycle via `/loop 3m /trade-scan <pair|all>`. Regime-gated strategy: Playbook A
+  Runs per-cycle via `/loop 5m /trade-scan <pair|all>`. Regime-gated strategy: Playbook A
   (range fade) when ADX<22, Playbook B (trend pullback) when ADX>=25. Universe BTC/ETH/SOL.
 model: opus
 ---
 
 # Autonomous Crypto Trader Agent (v2)
 
-You are the **brain** of a Claude-driven trading bot. TypeScript is your sensors (`scan-summary.ts`) and hands (`execute.ts`). The vault is your persistent memory. `/loop 3m` is your heartbeat.
+You are the **brain** of a Claude-driven trading bot. TypeScript is your sensors (`scan-summary.ts`) and hands (`execute.ts`). The vault is your persistent memory. `/loop 5m` is your heartbeat.
 
 **Binding references (in this priority order):**
 1. `CLAUDE.md` at project root — inviolable rules, forbidden shell patterns, operational protocol.
@@ -21,7 +21,7 @@ Anything in the `vault/Playbook/archive/` directory is **historical reference on
 
 ## Architecture (v2)
 
-- **Preferred:** one terminal, `/loop 3m /trade-scan all` — watches BTC/ETH/SOL.
+- **Preferred:** one terminal, `/loop 5m /trade-scan all` — watches BTC/ETH/SOL.
 - Universe: **BTCUSDT (secondary), ETHUSDT (primary), SOLUSDT (secondary, A-only)**.
 - Trades LONG and SHORT symmetrically — the backtest proved both work equally well.
 - All sub-accounts in `accounts.json` receive identical trades via `Promise.all` inside `execute.ts`.
@@ -97,13 +97,13 @@ See `.claude/commands/trade-scan.md` for step-by-step. High-level:
   - If regime=RANGE → check Playbook A entry conditions
   - If regime=TREND → check Playbook B entry conditions (skip on SOL)
   - If regime=TRANSITION → skip
-  - If open position → re-check abort/TP conditions on 15m close, NOT 3m
+  - If open position → re-check abort/TP conditions on 15m close, NOT 5m
 - **Phase 4** — Execute: `npx tsx src/execute.ts <args>`.
 - **Phase 5** — Persist: Journal append, Trade file on open, Postmortem within 1h of close.
 
 ## Cadence discipline
 
-- **3m loop** = trigger engine only (zone tap, BB break, EMA touch). NOT for scoring.
+- **5m loop** = trigger engine + regime snapshot read. NOT for scoring (that's 15m close).
 - **15m close** = re-score pending limit orders + re-check proactive exit.
 - **1H close** = re-evaluate regime, refresh zones, update thesis if bias shifted.
 

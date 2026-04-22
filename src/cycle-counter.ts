@@ -2,8 +2,8 @@
  * Cycle counter — tracks /trade-scan cycles to nudge /clear at threshold.
  *
  * Anti-hallucination measure (2026-04-21): /loop context compresses over time.
- * Every 40 cycles (~2h at /loop 3m), recommend operator run /clear to flush
- * stale compressed context.
+ * Every 24 cycles (~2h at /loop 5m), recommend operator run /clear to flush
+ * stale compressed context. Threshold updated 2026-04-22 (3m → 5m cadence).
  *
  * State: vault/state/cycle-counter.json
  *   {
@@ -23,7 +23,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 const STATE_PATH = path.join(process.cwd(), 'vault/state/cycle-counter.json');
-const DEFAULT_THRESHOLD = 40;
+const DEFAULT_THRESHOLD = 24;
 
 export interface CycleState {
   total: number;

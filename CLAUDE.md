@@ -2,7 +2,7 @@
 
 Autonomous crypto trading bot for Bybit perpetual futures on HyroTrader prop accounts.
 
-**Roles:** Claude = brain (decisions). TypeScript = sensors (data) + hands (execution). `/loop 3m` = heartbeat.
+**Roles:** Claude = brain (decisions). TypeScript = sensors (data) + hands (execution). `/loop 5m` = heartbeat.
 
 **Strategy:** `vault/Playbook/strategy.md` — THE source of truth (Playbook A + B, regime-gated). Validated by `src/backtest.ts` walk-forward OOS.
 
@@ -11,16 +11,16 @@ Autonomous crypto trading bot for Bybit perpetual futures on HyroTrader prop acc
 **Preferred — one terminal, all pairs:**
 ```
 claude
-/loop 3m /trade-scan all
+/loop 5m /trade-scan all
 ```
 
 One agent watches BTC + ETH + SOL. Regime check on each 1H close: `ADX<22 → Playbook A` (range fade), `ADX≥25 + EMA aligned → Playbook B` (trend pullback), `22-25 → skip`. Both long and short, symmetrically.
 
 **Alternative — one terminal per pair** (isolated blast radius):
 ```
-Terminal 1: /loop 3m /trade-scan BTCUSDT
-Terminal 2: /loop 3m /trade-scan ETHUSDT
-Terminal 3: /loop 3m /trade-scan SOLUSDT
+Terminal 1: /loop 5m /trade-scan BTCUSDT
+Terminal 2: /loop 5m /trade-scan ETHUSDT
+Terminal 3: /loop 5m /trade-scan SOLUSDT
 ```
 
 ---
@@ -121,7 +121,7 @@ Identity manifesto: `vault/Playbook/00-trader-identity.md` — read start of eve
 
 ---
 
-# Cycle Protocol (every `/loop 3m` fire)
+# Cycle Protocol (every `/loop 5m` fire)
 
 ### Phase 0 — RECONCILE (blocking)
 
