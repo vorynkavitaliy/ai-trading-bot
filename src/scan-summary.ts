@@ -197,6 +197,7 @@ function detectZoneActivity(
 const sd = json.symbols || [];
 let anyZoneActivity = false;
 const pairsWithActivity: string[] = [];
+const pairsTriggered: string[] = [];
 
 for (const d of sd) {
   if (!d || !d.indicators) continue;
@@ -206,17 +207,48 @@ for (const d of sd) {
   const adx = ind.adx1h || {};
   const obv = ind.obv1h || {};
   const ema = ind.ema || {};
+  const bb = ind.bb_1h || {};
+  const v2 = d.v2_strategy;
   const ms = d.market_structure || {};
   const kl = ms.key_levels || {};
   const btc = d.btc_context || {};
   const ob = d.orderbook || {};
 
   console.log(`\n[${d.symbol}] px=${d.price}`);
+
+  // === V2 STRATEGY CONTEXT (primary decision driver) ===
+  if (v2) {
+    const pb = v2.active_playbook;
+    const emoji = pb === 'A' ? '📉' : pb === 'B' ? '📈' : '⏸';
+    console.log(
+      `  ${emoji} V2: regime=${v2.regime} | playbook=${pb} | stack=${v2.ema_stack_1h} (${v2.di_dominant}) | ATR ${v2.atr_pct}% (scalar ×${v2.vol_scalar})`,
+    );
+    if (v2.active_playbook === 'A') {
+      const a = v2.playbook_a;
+      const trigL = a.long_trigger ? '🟢LONG' : '—';
+      const trigS = a.short_trigger ? '🔴SHORT' : '—';
+      console.log(
+        `  A-triggers: ${trigL} ${trigS} | BB ${bb.lower}/${bb.middle}/${bb.upper} | SL L=${a.sl_long} (${a.sl_dist_long_pct}%) S=${a.sl_short} (${a.sl_dist_short_pct}%)`,
+      );
+      if (a.long_trigger || a.short_trigger) pairsTriggered.push(d.symbol);
+    } else if (v2.active_playbook === 'B') {
+      const b = v2.playbook_b;
+      const trigL = b.long_trigger ? '🟢LONG' : '—';
+      const trigS = b.short_trigger ? '🔴SHORT' : '—';
+      console.log(
+        `  B-triggers: ${trigL} ${trigS} | EMA55 touch=${b.ema55_touch} | SL L=${b.sl_dist_long_pct}% S=${b.sl_dist_short_pct}% | TP1=3R, trail 2.5×ATR`,
+      );
+      if (b.long_trigger || b.short_trigger) pairsTriggered.push(d.symbol);
+    } else {
+      console.log(`  (playbook SKIP — transition zone ADX 22-25 or SOL in trend)`);
+    }
+  }
+
   console.log(
     `  RSI 4h=${r["4h"]} 1h=${r["1h"]} 15m=${r["15m"]} 3m=${r["3m"]} | slope1h=${ind.rsi_slope_1h?.toFixed(2)}`,
   );
   console.log(
-    `  EMA1h 21=${ema["1h_21"]?.toFixed(4)} 55=${ema["1h_55"]?.toFixed(4)}`,
+    `  EMA1h 8=${ema["1h_8"]?.toFixed(2)} 21=${ema["1h_21"]?.toFixed(2)} 55=${ema["1h_55"]?.toFixed(2)} 200=${ema["1h_200"]?.toFixed(2)}`,
   );
   console.log(
     `  ADX=${adx.adx?.toFixed(1)} PDI=${adx.pdi?.toFixed(1)} MDI=${adx.mdi?.toFixed(1)} | MACD1h hist=${macd.histogram} (tiebreaker)`,
@@ -368,13 +400,22 @@ for (const d of sd) {
     openPairs.push(d.symbol);
   }
 }
-if (openPairs.length || anyZoneActivity) {
-  const reasons: string[] = [];
-  if (openPairs.length) reasons.push(`open positions/orders on [${openPairs.join(",")}]`);
-  if (anyZoneActivity) reasons.push(`zone activity on [${pairsWithActivity.join(",")}]`);
-  console.log(`\nACTION: run 12-factor rubric — ${reasons.join(" + ")}`);
+// ACTION hint (v2): driven by Playbook A/B triggers, not pre-committed zones.
+// Zones (manual structural) remain as auxiliary context, not primary trigger.
+if (pairsTriggered.length) {
+  console.log(
+    `\nACTION: 🎯 Playbook trigger on [${pairsTriggered.join(",")}] — evaluate entry per strategy.md`,
+  );
+} else if (openPairs.length) {
+  console.log(
+    `\nACTION: no new triggers; open positions/orders on [${openPairs.join(",")}] — check abort/TP conditions only`,
+  );
+} else if (anyZoneActivity) {
+  console.log(
+    `\nACTION: no Playbook A/B trigger, but zone activity on [${pairsWithActivity.join(",")}] — heartbeat + monitor`,
+  );
 } else {
   console.log(
-    `\nACTION: no zone activity, no open positions — heartbeat only, skip rubric (log one-line journal entry).`,
+    `\nACTION: no triggers, no positions — heartbeat only (one-line journal entry).`,
   );
 }

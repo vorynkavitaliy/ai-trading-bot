@@ -8,7 +8,8 @@
  * audit logs. Claude passes `confluence` as a plain number via execute.ts CLI.
  */
 
-import { Regime } from './regime';
+/** Legacy 4H regime label — kept for DB schema compat (Signal.regime field). */
+export type Regime = 'Bull' | 'Bear' | 'Range' | 'Transitional';
 
 export type Direction = 'Long' | 'Short';
 

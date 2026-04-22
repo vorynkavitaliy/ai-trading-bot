@@ -113,16 +113,25 @@ function summarizeKlines(candles: Candle[], keepLast: number): KlineSummary {
 }
 
 function indicatorSummary(c4h: Candle[], c1h: Candle[], c15m: Candle[], c3m: Candle[]) {
+  // v2 core (strategy.md Playbook A + B)
+  const ema8_1h = Indicators.ema(c1h, 8);
   const ema21_1h = Indicators.ema(c1h, 21);
   const ema55_1h = Indicators.ema(c1h, 55);
+  const ema200_1h = Indicators.ema(c1h, 200);
   const ema21_4h = Indicators.ema(c4h, 21);
+  const bb_1h = Indicators.bb(c1h, 20, 2.0);
+  const atr_1h = Indicators.atr(c1h, 14);
+  const volCurrent_1h = c1h[c1h.length - 1]?.volume;
+  // Manual SMA20 of volume (1H)
+  const vol20 = c1h.slice(-20).reduce((s, k) => s + k.volume, 0) / Math.max(1, Math.min(20, c1h.length));
+  const volSpikeMult_1h = vol20 > 0 && volCurrent_1h !== undefined ? volCurrent_1h / vol20 : null;
+
+  // Legacy/auxiliary (kept for other parts of pipeline + Claude free-form analysis)
   const macd1h = Indicators.macd(c1h);
   const adx1h = Indicators.adx(c1h, 14);
   const obvSeries1h = Indicators.obv(c1h);
   const stoch15m = Indicators.stoch(c15m);
   const rsiSlopeAccel1h = Indicators.rsiSlopeAcceleration(c1h, 14, 5, 3);
-
-  // Quick MACD histogram direction — recompute short history from emaSeries if available
   const obvLast = obvSeries1h[obvSeries1h.length - 1];
   const obvPrev10 = obvSeries1h[obvSeries1h.length - 11] ?? obvSeries1h[0];
 
@@ -140,8 +149,21 @@ function indicatorSummary(c4h: Candle[], c1h: Candle[], c15m: Candle[], c3m: Can
       : null,
     ema: {
       '4h_21': ema21_4h,
+      '1h_8': ema8_1h,
       '1h_21': ema21_1h,
       '1h_55': ema55_1h,
+      '1h_200': ema200_1h,
+    },
+    bb_1h: bb_1h ? {
+      upper: +bb_1h.upper.toFixed(2),
+      middle: +bb_1h.middle.toFixed(2),
+      lower: +bb_1h.lower.toFixed(2),
+    } : null,
+    atr_1h: atr_1h !== undefined ? +atr_1h.toFixed(2) : null,
+    volume_1h: {
+      current: volCurrent_1h !== undefined ? +volCurrent_1h.toFixed(2) : null,
+      sma20: +vol20.toFixed(2),
+      spike_mult: volSpikeMult_1h !== null ? +volSpikeMult_1h.toFixed(2) : null,
     },
     macd1h: macd1h
       ? {
@@ -158,6 +180,101 @@ function indicatorSummary(c4h: Candle[], c1h: Candle[], c15m: Candle[], c3m: Can
     },
     rsi_div_1h: Indicators.rsiDivergence(c1h, 30),
     obv_div_1h: Indicators.obvDivergence(c1h, 30),
+  };
+}
+
+/**
+ * Strategy v2 context: regime gate + active playbook + entry trigger state.
+ *
+ * Mirror of `vault/Playbook/strategy.md` Playbook A/B rules so Claude sees the
+ * binary decision inline — no re-derivation from raw indicators needed.
+ *
+ * For SOL: B is disabled regardless of regime (backtest showed B fails on SOL).
+ */
+function computeV2Context(symbol: string, c1h: Candle[]) {
+  if (c1h.length < 200) return null;
+
+  const ema8 = Indicators.ema(c1h, 8);
+  const ema21 = Indicators.ema(c1h, 21);
+  const ema55 = Indicators.ema(c1h, 55);
+  const ema200 = Indicators.ema(c1h, 200);
+  const adx = Indicators.adx(c1h, 14);
+  const rsi = Indicators.rsi(c1h, 14);
+  const bb = Indicators.bb(c1h, 20, 2.0);
+  const atr = Indicators.atr(c1h, 14);
+  const last = c1h[c1h.length - 1];
+  if (!ema8 || !ema21 || !ema55 || !ema200 || !adx || !rsi || !bb || !atr) return null;
+
+  const vol20 = c1h.slice(-20).reduce((s, k) => s + k.volume, 0) / 20;
+  const volSpike = last.volume / Math.max(vol20, 1e-9);
+
+  const stackBullish = ema8 > ema21 && ema21 > ema55 && ema55 > ema200;
+  const stackBearish = ema8 < ema21 && ema21 < ema55 && ema55 < ema200;
+  const stackAligned = stackBullish || stackBearish;
+  const diDominant = adx.pdi > adx.mdi ? 'pdi' : adx.mdi > adx.pdi ? 'mdi' : 'neutral';
+
+  // Regime gate per strategy.md
+  let regime: 'RANGE' | 'TREND' | 'TRANSITION';
+  if (adx.adx < 22) regime = 'RANGE';
+  else if (adx.adx >= 25 && stackAligned) regime = 'TREND';
+  else regime = 'TRANSITION';
+
+  const isSol = symbol === 'SOLUSDT';
+  const activePlaybook: 'A' | 'B' | 'SKIP' =
+    regime === 'RANGE' ? 'A' :
+    regime === 'TREND' && !isSol ? 'B' :
+    'SKIP';
+
+  // Playbook A entry triggers (1H close state)
+  const a_long_trigger = regime === 'RANGE' && last.close <= bb.lower && rsi < 35 && volSpike >= 1.3;
+  const a_short_trigger = regime === 'RANGE' && last.close >= bb.upper && rsi > 65 && volSpike >= 1.3;
+
+  // Playbook B entry triggers (pullback to EMA55 with close-through)
+  const pullbackTol = 0.005;
+  const ema55Touch = last.low <= ema55 * (1 + pullbackTol) && last.high >= ema55 * (1 - pullbackTol);
+  const b_long_trigger = regime === 'TREND' && !isSol && stackBullish && diDominant === 'pdi'
+    && ema55Touch && last.close > ema55 && rsi > 45;
+  const b_short_trigger = regime === 'TREND' && !isSol && stackBearish && diDominant === 'mdi'
+    && ema55Touch && last.close < ema55 && rsi < 55;
+
+  // Stop distance for the would-be setup (informational, Claude plans actual SL)
+  const slDistA_long = Math.max(last.close - (bb.lower - 0.5 * atr), 0);
+  const slDistA_short = Math.max((bb.upper + 0.5 * atr) - last.close, 0);
+  const slDistB_long = Math.max(last.close - (Math.min(ema55, last.low) - 1.0 * atr), 0);
+  const slDistB_short = Math.max((Math.max(ema55, last.high) + 1.0 * atr) - last.close, 0);
+
+  return {
+    regime,
+    active_playbook: activePlaybook,
+    ema_stack_1h: stackBullish ? 'bullish' : stackBearish ? 'bearish' : 'mixed',
+    di_dominant: diDominant,
+    playbook_a: {
+      long_trigger: a_long_trigger,
+      short_trigger: a_short_trigger,
+      sl_dist_long_pct: +((slDistA_long / last.close) * 100).toFixed(3),
+      sl_dist_short_pct: +((slDistA_short / last.close) * 100).toFixed(3),
+      sl_long: +(bb.lower - 0.5 * atr).toFixed(2),
+      sl_short: +(bb.upper + 0.5 * atr).toFixed(2),
+      tp1_middle: +bb.middle.toFixed(2),
+      tp2_long: +bb.upper.toFixed(2),
+      tp2_short: +bb.lower.toFixed(2),
+    },
+    playbook_b: {
+      enabled: !isSol,
+      long_trigger: b_long_trigger,
+      short_trigger: b_short_trigger,
+      ema55_touch: ema55Touch,
+      sl_dist_long_pct: +((slDistB_long / last.close) * 100).toFixed(3),
+      sl_dist_short_pct: +((slDistB_short / last.close) * 100).toFixed(3),
+    },
+    // Volatility scalar per strategy.md
+    atr_pct: +((atr / last.close) * 100).toFixed(3),
+    vol_scalar: (() => {
+      const p = (atr / last.close) * 100;
+      if (p < 1.5) return 1.2;
+      if (p > 2.5) return 0.7;
+      return 1.0;
+    })(),
   };
 }
 
@@ -361,6 +478,7 @@ async function gatherForSymbol(
   const orderbook = await getOrderbookSummary(bybit, symbol, price);
   const indicators = indicatorSummary(c4h as Candle[], c1h as Candle[], c15m as Candle[], c3m as Candle[]);
   const marketStructure = marketStructureSummary(c1h as Candle[], c15m as Candle[], c3m as Candle[]);
+  const v2Context = computeV2Context(symbol, c1h as Candle[]);
   const fundingOi = await fundingOiSummary(bybit, symbol);
 
   // === Orderflow block (Phase 3) — CVD windows + top-N orderbook imbalance ===
@@ -464,6 +582,7 @@ async function gatherForSymbol(
       '3m': summarizeKlines(c3m as Candle[], 30),
     },
     indicators,
+    v2_strategy: v2Context,
     orderbook,
     market_structure: marketStructure,
     btc_context: symbol === 'BTCUSDT' ? null : btcContext,

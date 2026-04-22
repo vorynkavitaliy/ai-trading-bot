@@ -1,6 +1,6 @@
 import { BybitClient } from '../core/bybit-client';
 import { SubAccount } from '../core/types';
-import { TradePlan, fmtPrice } from './planner';
+import { TradePlan, fmtPrice, InstrumentSpec } from './types';
 import { sizePosition, SizingResult } from '../risk/sizing';
 import { RiskEngine } from '../risk/engine';
 import { TelegramNotifier } from '../notifications/telegram';
@@ -8,7 +8,6 @@ import { TradeRepo, AuditRepo, SignalRepo } from '../db/repositories';
 import { cache } from '../cache';
 import { Signal } from '../signal/types';
 import { config } from '../config';
-import { InstrumentSpec } from './planner';
 import { randomUUID } from 'crypto';
 
 export interface ExecuteContext {

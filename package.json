@@ -5,12 +5,15 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/index.ts",
-    "scan": "tsx src/scan.ts",
+    "typecheck": "tsc --noEmit",
     "reconcile": "tsx src/reconcile.ts",
-    "train-hmm": "tsx src/train-hmm.ts --symbol BTCUSDT --interval 60 --bars 8760 --states 3 --out vault/state/hmm-params.json",
-    "test-client": "tsx src/test-client.ts",
-    "test": "tsx src/test-client.ts"
+    "scan": "tsx src/scan-summary.ts all",
+    "audit": "tsx src/audit.ts",
+    "pnl": "tsx src/pnl-day.ts",
+    "backtest": "BT_DAYS=365 tsx src/backtest.ts --combined",
+    "backtest:walkforward": "BT_DAYS=365 tsx src/backtest.ts --walkforward",
+    "backtest:grid": "BT_DAYS=365 tsx src/backtest.ts",
+    "train-hmm": "tsx src/train-hmm.ts --symbol BTCUSDT --interval 60 --bars 8760 --states 3 --out vault/state/hmm-params.json"
   },
   "keywords": [],
   "author": "",

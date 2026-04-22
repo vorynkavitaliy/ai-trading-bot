@@ -46,7 +46,7 @@ import { cache } from './cache';
 import { config } from './config';
 import { executeAcrossAccounts } from './trade/executor';
 import { Signal } from './signal/types';
-import type { InstrumentSpec, TradePlan } from './trade/planner';
+import type { InstrumentSpec, TradePlan } from './trade/types';
 import type { Direction } from './signal/types';
 
 // --- helpers ------------------------------------------------------------
