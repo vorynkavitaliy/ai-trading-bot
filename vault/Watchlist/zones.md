@@ -26,15 +26,15 @@ Regime state (ADX, EMA alignment, HMM) — обновляется автомат
 
 ## Regime state (auto-updated)
 
-Last refresh: 2026-04-22T11:00:00Z (pending first v2 cycle).
+Last refresh: 2026-04-22T12:10:15Z (first v2 cycle).
 
 | Pair | ADX(1H) | EMA stack | Regime | Active playbook |
 |---|---|---|---|---|
-| BTCUSDT | TBD | TBD | TBD | TBD |
-| ETHUSDT | TBD | TBD | TBD | TBD |
-| SOLUSDT | TBD | TBD | TBD | TBD |
+| BTCUSDT | 33.7 | bullish (8>21>55>200) | TREND | B |
+| ETHUSDT | N/A (no scan) | N/A | N/A | N/A |
+| SOLUSDT | N/A (no scan) | N/A | N/A | N/A |
 
-Values filled by first `/trade-scan all` cycle — `scan-summary.ts` outputs regime + EMA stack ordering.
+Note: scanner outputs only pairs with open positions/triggers; ETH/SOL had neither this cycle.
 
 ---
 

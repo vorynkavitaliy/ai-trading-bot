@@ -120,8 +120,10 @@ export const config = {
 
   news: {
     feeds: list('NEWS_FEEDS', [
-      'https://www.coindesk.com/arc/outboundfeeds/rss/',
-      'https://cointelegraph.com/rss',
+      'https://www.coindesk.com/arc/outboundfeeds/rss/',   // CoinDesk EN
+      'https://cointelegraph.com/rss',                      // CoinTelegraph EN
+      'https://forklog.com/feed/',                          // ForkLog RU (crypto-focused)
+      'https://ru.investing.com/rss/news.rss',              // Investing.com RU (macro)
     ]),
   },
 } as const;

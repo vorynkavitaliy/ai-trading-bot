@@ -3,7 +3,7 @@ name: BTCUSDT Thesis
 description: Current regime + playbook selection for BTCUSDT. Fresh under strategy-v2.
 symbol: BTCUSDT
 role: secondary
-updated: 2026-04-22T11:00:00Z
+updated: 2026-04-22T12:10:15Z
 version: 2.0
 ---
 
@@ -13,13 +13,15 @@ version: 2.0
 
 **Secondary pair.** Walk-forward OOS: +1.92R / 92d, PF 1.17. Edge положительный, но слабее ETH. Держим в universe т.к. это benchmark для режима + часть диверсификации.
 
-## Current regime (fill on first v2 cycle)
+## Current regime (2026-04-22T12:10 UTC — first v2 cycle)
 
-- ADX(1H): TBD
-- EMA stack: TBD
-- Regime: TBD
-- Active playbook: TBD
-- Last 4H bias: TBD
+- ADX(1H): **33.7** (strongly trending)
+- EMA stack: **bullish** (EMA8 77954 > 21 77239 > 55 76435 > 200 75448)
+- Regime: **TREND**
+- Active playbook: **B** (pullback trend-follow)
+- PDI/MDI: 33.8 / 10.5 (bull dominance 3.2×)
+- Price: 78303 (+0.45% от EMA8)
+- Open position: LONG from 78100.3 (pre-v2 entry, structurally matches B criteria)
 
 ## Priors (what's known, not actionable)
 

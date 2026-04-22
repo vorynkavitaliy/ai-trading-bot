@@ -67,11 +67,13 @@ export class NewsFetcher {
     }
 
     const sources = await Promise.all([
-      // RSS feeds from config
+      // RSS feeds from config (CoinDesk EN, CoinTelegraph EN, ForkLog RU, Investing RU)
       ...config.news.feeds.map((url) => this.fetchFeed(url).catch(() => [])),
-      // Google News RSS — broad crypto coverage
+      // Google News EN — broad crypto coverage
       this.fetchFeed('https://news.google.com/rss/search?q=bitcoin+crypto+market&hl=en&gl=US&ceid=US:en').catch(() => []),
       this.fetchFeed('https://news.google.com/rss/search?q=crypto+crash+OR+rally+OR+fed+OR+tariff&hl=en&gl=US&ceid=US:en').catch(() => []),
+      // Google News RU — native Russian headlines (skip translator)
+      this.fetchFeed('https://news.google.com/rss/search?q=%D0%BA%D1%80%D0%B8%D0%BF%D1%82%D0%BE%D0%B2%D0%B0%D0%BB%D1%8E%D1%82%D0%B0+OR+%D0%B1%D0%B8%D1%82%D0%BA%D0%BE%D0%B9%D0%BD&hl=ru&gl=RU&ceid=RU:ru').catch(() => []),
       // CryptoPanic (free public API)
       this.fetchCryptoPanic().catch(() => []),
     ]);
@@ -163,9 +165,29 @@ export class NewsFetcher {
     for (const it of recent) {
       const t = (it.title + ' ' + (it.summary ?? '')).toLowerCase();
       const matchedHigh = HIGH_IMPACT_KEYWORDS.filter((k) => t.includes(k));
-      if (matchedHigh.length) { high++; triggers.push(`${matchedHigh[0]}: ${it.title.slice(0, 80)}`); }
-      if (RISK_OFF_KEYWORDS.some((k) => t.includes(k))) riskOff++;
-      if (RISK_ON_KEYWORDS.some((k) => t.includes(k))) riskOn++;
+      const hasRiskOn = RISK_ON_KEYWORDS.some((k) => t.includes(k));
+      const hasRiskOff = RISK_OFF_KEYWORDS.some((k) => t.includes(k));
+
+      // v2: prefer negative-toned match for trigger label when geopolitical
+      // keyword ('iran', 'war', etc.) appears with positive modifier ('ceasefire',
+      // 'peace'). Prevents false-positive triggers from ceasefire headlines.
+      if (matchedHigh.length) {
+        const negativeMatch = matchedHigh.find((k) =>
+          !['iran', 'china', 'war', 'sanction', 'tariff', 'nuclear', 'missile', 'blockade'].includes(k)
+        );
+        const isBenignGeopolitical = matchedHigh.length > 0
+          && !negativeMatch
+          && hasRiskOn
+          && !hasRiskOff;
+
+        if (!isBenignGeopolitical) {
+          high++;
+          const label = negativeMatch ?? matchedHigh[0];
+          triggers.push(`${label}: ${it.title.slice(0, 80)}`);
+        }
+      }
+      if (hasRiskOff) riskOff++;
+      if (hasRiskOn) riskOn++;
     }
 
     // Fear & Greed adds weight to bias
