@@ -219,10 +219,13 @@ function computeV2Context(symbol: string, c1h: Candle[]) {
   else if (adx.adx >= 25 && stackAligned) regime = 'TREND';
   else regime = 'TRANSITION';
 
-  const isSol = symbol === 'SOLUSDT';
+  // A-only pairs: B playbook failed OOS walk-forward (SOL −4.22R test, BNB −0.27R test).
+  // In TREND regime these pairs skip (don't force B); only trade A on range.
+  const aOnlyPairs = ['SOLUSDT', 'BNBUSDT'];
+  const isAOnly = aOnlyPairs.includes(symbol);
   const activePlaybook: 'A' | 'B' | 'SKIP' =
     regime === 'RANGE' ? 'A' :
-    regime === 'TREND' && !isSol ? 'B' :
+    regime === 'TREND' && !isAOnly ? 'B' :
     'SKIP';
 
   // Playbook A entry triggers (1H close state)
@@ -232,9 +235,9 @@ function computeV2Context(symbol: string, c1h: Candle[]) {
   // Playbook B entry triggers (pullback to EMA55 with close-through)
   const pullbackTol = 0.005;
   const ema55Touch = last.low <= ema55 * (1 + pullbackTol) && last.high >= ema55 * (1 - pullbackTol);
-  const b_long_trigger = regime === 'TREND' && !isSol && stackBullish && diDominant === 'pdi'
+  const b_long_trigger = regime === 'TREND' && !isAOnly && stackBullish && diDominant === 'pdi'
     && ema55Touch && last.close > ema55 && rsi > 45;
-  const b_short_trigger = regime === 'TREND' && !isSol && stackBearish && diDominant === 'mdi'
+  const b_short_trigger = regime === 'TREND' && !isAOnly && stackBearish && diDominant === 'mdi'
     && ema55Touch && last.close < ema55 && rsi < 55;
 
   // Stop distance for the would-be setup (informational, Claude plans actual SL)
@@ -260,7 +263,7 @@ function computeV2Context(symbol: string, c1h: Candle[]) {
       tp2_short: +bb.lower.toFixed(2),
     },
     playbook_b: {
-      enabled: !isSol,
+      enabled: !isAOnly,
       long_trigger: b_long_trigger,
       short_trigger: b_short_trigger,
       ema55_touch: ema55Touch,

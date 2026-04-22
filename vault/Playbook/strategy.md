@@ -27,15 +27,20 @@ validated_by: src/backtest.ts (walk-forward 273d/92d)
 
 ### Активные пары
 
-**BTCUSDT, ETHUSDT, SOLUSDT** — только они. Из backtest walk-forward:
+**BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT** — из backtest walk-forward (273d/92d):
 
-| Пара | Test edge | Роль |
-|---|---|---|
-| ETHUSDT | +12.81R / 92d, PF 1.43 | **Primary** — самая чистая range/trend механика |
-| BTCUSDT | +1.92R / 92d, PF 1.17 | Secondary — ограниченный edge OOS |
-| SOLUSDT | +1.68R / 92d, PF 1.09 | Secondary — B не работает, A компенсирует |
+| Пара | Test edge | Playbook | Роль |
+|---|---|---|---|
+| ETHUSDT | +12.81R / PF 1.43 | A + B | **Primary** — самая чистая range/trend механика |
+| BNBUSDT | +12.03R / PF 3.03 | **A only** | Secondary — сильный OOS, B fails (−0.27R) |
+| BTCUSDT | +1.92R / PF 1.17 | A + B | Secondary — benchmark для режима |
+| SOLUSDT | +1.68R / PF 1.09 | **A only** | Secondary — B проваливается (−4.22R) |
 
-Добавление новых пар — **только после** 180d+ backtest данных и совпадающих OOS метрик.
+**A-only пары (SOL, BNB):** при `regime=TREND` — SKIP, не применять B. B работает только на BTC + ETH.
+
+Добавление новых пар — **только после** 365d backtest + walk-forward с test PF ≥ 1.3 и sumR > 0.
+Тестированные и отклонённые: XRP (test PF 0.74), DOGE (PF 0.74).
+Тестированные кандидаты на будущее: AVAX (+8.73R, PF 1.55), LINK (+8.74R, PF 1.93) — резерв.
 
 ### Таймфреймы
 

@@ -106,7 +106,7 @@ export const config = {
    * Adding pair: requires 180d backtest with PF≥1.3 + walk-forward positive
    * on held-out. Override via WATCHLIST env var (comma-separated).
    */
-  watchlist: list('WATCHLIST', ['BTCUSDT', 'ETHUSDT', 'SOLUSDT']),
+  watchlist: list('WATCHLIST', ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT']),
 
   /**
    * Trading schedule — UTC hour gate. Default: DISABLED (24h trading, Claude decides).
