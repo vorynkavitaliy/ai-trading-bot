@@ -15,13 +15,16 @@ version: 2.0
 
 **Правило:** SOL trades через Playbook A only. Если regime == TREND — **skip SOL**, не применять B.
 
-## Current regime (fill on first v2 cycle)
+## Current regime (2026-04-22T17:24 UTC)
 
-- ADX(1H): TBD
-- EMA stack: TBD
-- Regime: TBD
-- Active playbook: TBD (A only, иначе skip)
-- Last 4H bias: TBD
+- ADX(1H): **33.5** (strong trend)
+- EMA stack: **bullish** (8=88.07 > 21=87.56 > 55=86.66 > 200=86.09)
+- Regime: **TREND**
+- Active playbook: **SKIP** (SOL = A-only по правилу, в trend пропускаем)
+- Price: 87.79 (+0.81% от EMA55) — близко но не торгуем
+- Notable: **CVD5m +$1.14M с bullish divergence** — buyers тихо подбирают
+- Funding +0.006% mild positive
+- Жду ADX<22 для A-fade triggera
 
 ## Priors
 

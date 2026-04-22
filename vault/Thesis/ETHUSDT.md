@@ -13,13 +13,18 @@ version: 2.0
 
 **Primary pair.** Walk-forward OOS: +12.81R / 92d, PF 1.43, 50 trades. **Самая чистая range/trend механика** из 3 пар. Priority для execution — при конфликте сигналов (несколько пар одновременно в зоне) предпочтение ETH.
 
-## Current regime (fill on first v2 cycle)
+## Current regime (2026-04-22T17:24 UTC)
 
-- ADX(1H): TBD
-- EMA stack: TBD
-- Regime: TBD
-- Active playbook: TBD
-- Last 4H bias: TBD
+- ADX(1H): **35.2** (strong trend)
+- EMA stack: **bullish** (8=2393 > 21=2375 > 55=2349 > 200=2342)
+- Regime: **TREND**
+- Active playbook: **B** (pullback trend-follow)
+- PDI/MDI: 25.8 / 12.0 (bull dominance 2.2×)
+- Price: 2387.68 (+1.66% от EMA55)
+- **B-окно EMA55 ±0.5% = 2337-2360**, distance −1.31% (~28pt)
+- Active pullback: slope1h −3.47, rsi_accel1h −3.01, BOS 15m bearish, sweep low 2386.15
+- Funding −0.002% near-neutral
+- News impact LOW/mult 1.0 — full size if B-LONG triggers
 
 ## Priors
 

@@ -95,16 +95,18 @@ export const config = {
   },
 
   /**
-   * Active trading watchlist. 2026-04-21: narrowed to BTCUSDT only.
-   * Rationale: HMM trained on BTC, CVD deepest on BTC, alt trades caused correlation-burn and peak-giveback
-   * over 4-day sample (2026-04-17..20). Re-add alts when: (a) 2 weeks consistent BTC P&L ≥ 0.25%/day, OR
-   * (b) BTC dry period < 1 A-setup/day for 5 days. See memory/feedback_btc_only.md.
+   * Active trading watchlist — strategy-v2 universe (2026-04-22 refactor).
    *
-   * Full list kept commented for quick revert when re-enabling alts:
-   *   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT'
-   * Override via WATCHLIST env var (comma-separated).
+   * BTC/ETH/SOL chosen via walk-forward backtest (273d train / 92d test):
+   *   - ETHUSDT primary: +12.81R OOS, PF 1.43, cleanest range/trend mechanics
+   *   - BTCUSDT secondary: +1.92R OOS, PF 1.17, benchmark for regime
+   *   - SOLUSDT secondary (A-only): +1.68R OOS, B disabled (backtest showed
+   *     B fails on SOL — enforced in scan-data.ts v2 context + thesis)
+   *
+   * Adding pair: requires 180d backtest with PF≥1.3 + walk-forward positive
+   * on held-out. Override via WATCHLIST env var (comma-separated).
    */
-  watchlist: list('WATCHLIST', ['BTCUSDT']),
+  watchlist: list('WATCHLIST', ['BTCUSDT', 'ETHUSDT', 'SOLUSDT']),
 
   /**
    * Trading schedule — UTC hour gate. Default: DISABLED (24h trading, Claude decides).
