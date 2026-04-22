@@ -79,9 +79,10 @@ src/
 | **Min leverage** | **8×** (config `LEVERAGE=10`) |
 | Mandatory Stop-Loss | Server-side within **5 min** of open — NO EXCEPTIONS |
 | SL can be moved but NEVER removed | Edit-never-cancel |
-| Max simultaneous positions | **3** (one per pair in universe) |
+| Max simultaneous positions | **4** (one per pair in universe BTC/ETH/SOL/BNB) |
 | Max hold time | **48 hours** (prefer intraday) |
-| Max total heat | **3%** (sum of open risks, reduced from v1's 5%) |
+| Max total heat | **3%** (sum of open risks — 4 × 0.5% base = 2% safe; with vol scalar cap 4 × 1.0% = 4% hits cap, reduce size) |
+| Same-direction positions | **Allowed** — 4×LONG or 4×SHORT OK if each setup valid per its pair's playbook. No correlation block. Operator accepts correlation risk in exchange for trend-capture across universe. |
 
 **Margin + notional math** (both must hold):
 ```

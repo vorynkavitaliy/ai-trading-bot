@@ -80,7 +80,9 @@ Full rules in `strategy.md § Playbook B`. Summary:
 - Daily DD **5%** trailing (kill at 4%), total DD **10%** static (halt at 8%).
 - Server-side SL within 5 min of open. Edit-never-cancel.
 - Risk **0.5% fixed** per trade. Volatility scalar optional (cap 1.0%).
-- Max **3 simultaneous positions** (one per pair).
+- Max **4 simultaneous positions** (one per pair in 4-pair universe).
+- **Same-direction allowed:** 4×LONG or 4×SHORT is a valid configuration — no automatic correlation block. Each position must independently pass its pair's playbook entry rules.
+- Total heat cap 3% — if 3 positions at 1.0% scalars = 3%, 4th must go 0% (skip) or pair reduced to base 0.5%.
 - No entries ±10 min around funding windows (00/08/16 UTC).
 - Dead zone 22:00-00:00 UTC: **skip completely** (no size reduction, skip).
 - After 2 SL on same pair within UTC day: **disable pair** until next UTC day.

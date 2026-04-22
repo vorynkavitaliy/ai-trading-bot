@@ -92,7 +92,9 @@ else:
 - Dead zone? (22:00-00:00 UTC) → **block all entries**
 - Day equity ≤ −2.5%? → **flat until next UTC day**
 - Pair had 2 SL today? → **disable pair until next UTC day**
-- Open position on pair? → ONLY re-check abort/TP conditions, don't open new
+- Open position on pair? → ONLY re-check abort/TP conditions, don't open new (max 1 position per pair)
+- Total open positions = 4? → no new entries until one closes (hard cap = universe size)
+- Total heat ≥ 3%? → no new entries until realized/closed; do NOT force-reduce existing size
 
 ### PHASE 4 — ENTRY EVALUATION
 

@@ -189,6 +189,22 @@ if atrPct > 2.5  → size × 0.7  (crazy vol, tighten)
 
 Hard cap: 1.0% risk per trade даже с scalar.
 
+### Total heat management (4-pair universe)
+
+- 4 позиции × 0.5% base = **2% total heat** — безопасно в пределах 3% cap.
+- 4 позиции × 1.0% (при low-ATR pair с vol scalar 1.2) = **4% total heat** — превышает cap.
+- Решение при 4 open + scalars high: последняя позиция idет с reduced size чтобы total ≤ 3%.
+- **Правило инициирования 4-й позиции:** если 3 уже открыты и total heat ≥ 2% → новая только 0.5% без scalar up.
+
+### Correlation — no automatic block
+
+Backtest OOS (walk-forward 92d) показал: все 4 пары положительные даже в одну сторону. 4×LONG в bull trend = ожидаемая конфигурация, **не** avoid-pattern.
+
+Оператор осознанно принимает correlation risk ради trend-capture:
+- В strong risk-on: 4×LONG с total heat 2% ≈ один 2% risk trade с 4-path diversification entry timing.
+- В strong risk-off: 4×SHORT аналогично.
+- Max realistic DD при 4× one-way и adverse 2% market move = ~2% equity loss (все SLs). Это в пределах daily DD limit.
+
 ### Leverage
 
 Минимум **8×**, recommended **10×**. Required чтобы max notional 2× initial_balance помещался в max margin 25% equity (HyroTrader rule).
