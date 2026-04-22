@@ -1,44 +1,95 @@
 ---
-name: Pre-committed Zones
-description: Target + invalidation zones marked at 1H close. Decisions trigger only when price enters or sweeps a zone.
-updated: 2026-04-21T03:30:00Z
+name: Zones + Regime State
+description: Dynamic zones are BB(20,2) bands computed live. Manual zones only for exceptional structural levels (liq clusters, round numbers, major pivots). Regime state snapshot per pair.
+updated: 2026-04-22T11:00:00Z
+version: 2.0
 ---
 
-## How this file works
-- Written by Claude at each 1H candle close (24h).
-- Each zone = specific price level with type, side, invalidation.
-- /loop 3m fires full 12-factor rubric ONLY when price is in-zone or zone was swept last 15m.
-- Zones expire 24h after created_at OR on invalidation.
-- **2026-04-21:** Watchlist narrowed to BTCUSDT only. Alt sections removed (history in git). Re-add zones when alts return to watchlist.
+# Zones + Regime State
 
-## Zone types
-- `liq_cluster` — liquidation cluster (Bybit liq heatmap, CoinGlass, whale stops)
-- `poc` — point of control (volume profile, naked POC from prior day)
-- `vah` / `val` — value area high/low (70% volume range edges)
-- `ob` — order block (last opposite candle before BOS)
-- `htf_pivot` — 4H/1H swing high/low
-- `round` — psychological round number
-- `ema21_1h` / `ema55_1h` — moving average retests when 1H trend aligned
-- `prior_day_hl` — previous UTC-day high/low
+## How this file works (v2)
 
-## Active zones
+**Primary zones = dynamic.** BB(20, 2.0) на 1H вычисляются live из `scan-data.ts`. Этот файл их НЕ дублирует — он логирует только **manual overrides**:
+
+- Liquidation clusters (CoinGlass heatmap, обновлять при resolved)
+- Psychological round numbers (78000, 80000, 2500, 200) для reference
+- Major 4H swing highs/lows (1x-3x в неделю update)
+
+Regime state (ADX, EMA alignment, HMM) — обновляется автоматически `scan-summary.ts`.
+
+**Write-cadence:** 1H close при любом из:
+1. Major manual zone invalidated (swept, closed beyond, time-expired >3 days)
+2. New major level formed (4H pivot established, liq cluster identified via WebSearch)
+3. Regime flipped на паре (A → B или B → A)
+
+---
+
+## Regime state (auto-updated)
+
+Last refresh: 2026-04-22T11:00:00Z (pending first v2 cycle).
+
+| Pair | ADX(1H) | EMA stack | Regime | Active playbook |
+|---|---|---|---|---|
+| BTCUSDT | TBD | TBD | TBD | TBD |
+| ETHUSDT | TBD | TBD | TBD | TBD |
+| SOLUSDT | TBD | TBD | TBD | TBD |
+
+Values filled by first `/trade-scan all` cycle — `scan-summary.ts` outputs regime + EMA stack ordering.
+
+---
+
+## Manual zones (exceptional structural levels)
 
 ### BTCUSDT
+
 | type | level | side | created_at | invalidation | notes |
 |---|---|---|---|---|---|
-| round | 75000 | pivot | 2026-04-20T14:15:00Z | never | psychological, tested 3× 2026-04-20 |
-| round | 74000 | pivot | 2026-04-20T14:15:00Z | never | psychological / liq magnet below |
-| round | 77000 | pivot | 2026-04-20T20:00:00Z | never | next psych above |
-| round | 76000 | pivot | 2026-04-21T10:00:00Z | never | psychological, bid zone tested in pullback |
-| htf_pivot | 76500 | support | 2026-04-21T11:00:00Z | 1H close < 76400 | flipped от resistance к support after 10:45 breakout |
-| htf_pivot | 76843 | resistance | 2026-04-21T11:00:00Z | 1H close > 76950 | new session high 10:52 after breakout, minor R |
-| htf_pivot | 76300 | support | 2026-04-21T10:00:00Z | 1H close < 76200 with CVD negative | absorbed selling 09:29-09:37 |
-| htf_pivot | 76150 | support | 2026-04-21T10:00:00Z | 1H close < 76050 | V-bounce low 09:36, bid wall |
-| ema21_1h | 75982 | support | 2026-04-21T12:00:00Z | 1H close < 75800 | EMA21 drift +23 от 11:00 |
-| ema55_1h | 75660 | support | 2026-04-21T12:00:00Z | 1H close < 75500 with CVD negative | EMA55 drift +19 от 11:00 |
-| liq_cluster | 75600 | support | 2026-04-21T06:00:00Z | sweep + no reclaim 15m | absorption zone — $5.7M bid absorbed $6.62M dump at 05:45 UTC |
-| liq_cluster | 73500 | support | 2026-04-20T14:15:00Z | sweep + no reclaim 15m | major stop cluster below 74k |
+| round | 80000 | resistance | — | never, structural psych | mega magnet if approached |
+| round | 75000 | pivot | — | never, structural psych | recent battle level |
+| round | 70000 | support | — | never, structural psych | macro support |
 
-## Resolved zones (last 24h, kept for context)
+### ETHUSDT
 
-_(none yet — file initialized 2026-04-20)_
+| type | level | side | created_at | invalidation | notes |
+|---|---|---|---|---|---|
+| round | 2500 | resistance | — | never, structural psych | major psych barrier |
+| round | 2300 | pivot | — | never, structural psych | recent consolidation midpoint |
+| round | 2000 | support | — | never, structural psych | macro psych support |
+
+### SOLUSDT
+
+| type | level | side | created_at | invalidation | notes |
+|---|---|---|---|---|---|
+| round | 200 | resistance | — | never, structural psych | major psych barrier |
+| round | 180 | pivot | — | never, structural psych | — |
+| round | 150 | support | — | never, structural psych | macro psych support |
+
+---
+
+## Liquidation clusters (update weekly via WebSearch CoinGlass)
+
+### BTCUSDT
+_No cluster tracked yet — add on WebSearch trigger._
+
+### ETHUSDT
+_No cluster tracked yet._
+
+### SOLUSDT
+_No cluster tracked yet._
+
+---
+
+## Resolved zones (last 7 days)
+
+_Empty — fresh start after strategy-v2 refactor._
+
+---
+
+## Zone types (reference)
+
+- `round` — psychological number, never expires on price alone
+- `liq_cluster` — liquidation heatmap density (CoinGlass) — expires when swept + 15m no reclaim
+- `htf_pivot` — 4H swing high/low — expires on 1H close beyond >0.5% + structural confirmation
+- `ob` — order block (last opposite-colored candle before 1H BOS) — expires on opposite 1H BOS
+
+**BB bands, EMA lines, SMA20** — NOT listed here. They are dynamic, computed per cycle from scanner data.
