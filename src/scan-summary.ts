@@ -274,6 +274,13 @@ for (const d of sd) {
   console.log(
     `  sweep=${ms.sweep ? JSON.stringify(ms.sweep) : "none"} | nearR=${kl.nearest_resistance} nearS=${kl.nearest_support}`,
   );
+  if (ms.prior_day_utc) {
+    console.log(
+      `  prior_day_utc(${ms.prior_day_utc.date}): H=${ms.prior_day_utc.high} L=${ms.prior_day_utc.low} (${ms.prior_day_utc.bar_count} bars)`,
+    );
+  } else {
+    console.log(`  prior_day_utc: insufficient 1H history`);
+  }
   if (btc.regime) {
     console.log(
       `  BTC: regime=${btc.regime} 1h=${btc.trend1h} rsi1h=${btc.rsi1h} slope3=${btc.rsi_slope_3bars} slope1h=${btc.slope1h} chg1h=${btc.chg_20_1h_pct}% chg5_15m=${btc.chg_5_15m_pct}%`,

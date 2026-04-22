@@ -307,12 +307,29 @@ function marketStructureSummary(c1h: Candle[], c15m: Candle[], c3m: Candle[]) {
     else if (curClose > priorHigh) close_vs_swing_15m = 'above_prior_high';
   }
 
+  // Prior UTC day high/low — explicit for `prior_day_hl` zone derivation at 1H-Close Protocol.
+  // Computed from the 1H kline bucket covering yesterday 00:00-23:59 UTC.
+  // Added 2026-04-22 so Claude doesn't reach for python3 -c to extract manually (forbidden).
+  const now = new Date();
+  const yStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 0, 0, 0);
+  const yEnd = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0);
+  const yBars = c1h.filter((c) => c.timestamp >= yStart && c.timestamp < yEnd);
+  const prior_day_utc = yBars.length
+    ? {
+        date: new Date(yStart).toISOString().slice(0, 10),
+        high: Math.max(...yBars.map((c) => c.high)),
+        low: Math.min(...yBars.map((c) => c.low)),
+        bar_count: yBars.length,
+      }
+    : null;
+
   return {
     bos_1h,
     bos_15m,
     bos_3m,
     close_vs_swing_15m,
     sweep,
+    prior_day_utc,
     key_levels: {
       nearest_resistance: resistanceCands[0] ?? null,
       nearest_support: supportCands[0] ?? null,
