@@ -1,8 +1,13 @@
 ---
 symbol: BTCUSDT
 direction: long
-status: open
+status: closed
 opened: 2026-04-22T08:13:00Z
+closed: 2026-04-22T12:20:00Z
+closed_reason: external-close-detected
+exit_price: 78500
+realized_r: 1.58
+pnl_usd_combined: 2053.59
 entry: 78120
 sl: 77880
 tp: 78500
@@ -113,3 +118,10 @@ The specifically-defined unlock condition ("BOS 15m + 2-cycle CVD") materialized
 
 ### [08:13 UTC] — Entry
 Executed LONG @ 78120. SL 77880, TP 78500. Risk 0.5% (effective ~0.25% с news mult 0.5). BOS 15m bull + CVD 2-cycle sustained + funding cleared + lesson-based wider SL.
+
+### [~12:14-12:20 UTC] — TP executed server-side (external close)
+
+**Close summary (3 lines):**
+- TP 78500 server-side fill в окне между C536 (12:13 mark 78351 +1.13R) и reconcile C537 (12:45 позиция пропала). BTC после закрытия откатился к 77758.
+- Realized +1.58R (combined +$2053.59 по обоим sub-accounts per pnl-day.ts), trade-math соответствует TP distance 380pt vs risk 240pt.
+- Vault не был обновлён в момент закрытия → reconcile C537 выявил divergence `vault_without_bybit`. Postmortem process_grade: F (процессуальный провал — outcome положительный, но дисциплина вахты нарушена).

@@ -17,6 +17,14 @@ argument-hint: "<PAIR|all> (e.g., BTCUSDT or all — default all)"
 
 ### PHASE 0 — RECONCILE (vault ↔ Bybit) — BLOCKING
 
+**Step 0.0 — /clear detection (self-check):**
+Если это твой **первый отклик в conversation** (нет предыдущих scan-результатов в context выше этого сообщения) — скорее всего оператор только что сделал `/clear`. В этом случае run:
+```
+npx tsx src/cycle-counter.ts reset
+```
+Это обнулит `since_clear`, чтобы nudge не сработал ложно на следующем cycle. Если context есть — пропускай этот step.
+
+**Step 0.1 — Reconcile:**
 ```
 npm run reconcile
 ```

@@ -67,6 +67,16 @@ created: 2026-04-22
 
 <!-- Новые записи добавлять СВЕРХУ (reverse chronological) -->
 
+### [2026-04-22] — Vault-sync discipline при приближении к TP
+
+**Context:** BTCUSDT LONG #3 (entry 78120, TP 78500) вышел на +1.58R через server-side fill в окне между C536 (12:13 mark 78351, +1.13R) и C537 (12:45 reconcile — позиция пропала). Vault не был обновлён в момент TP hit. Outcome +$2053.59 положительный, но reconcile поймал divergence `vault_without_bybit` — audit trail сломан, оператор не получил immediate alert о закрытии.
+**What I did:** Продолжал cycle-by-cycle HOLD с mark-check, не планируя, как обнаружить server-side TP fire в межцикловой паузе. Phase 0 reconcile следующего cycle выявил gap постфактум.
+**What I should have done:** В C536 при +1.13R и distance-to-TP = 149pt (≤0.5×ATR 1H) **pre-flag next cycle** как "audit-first": следующий /loop начинается с `npx tsx src/audit.ts` + `npx tsx src/pnl-day.ts`, а не со scan. Если позиция пропала — сразу закрыть vault, отправить TG, и только потом сканировать новые setup-ы.
+**Why it matters:** Grade F не за outcome, а за audit trail. Оператор смотрит Journal/TG как ground truth; 30-минутный gap между реальным закрытием и vault-update = доверие-долг. Heuristic: `last_known_unrealized_R >= +1.0 AND distance_to_tp <= 0.5 × ATR_1h` → next cycle phase 0 = audit-first, не scan-first.
+**Tags:** `[vault-sync-discipline]` `[process-discipline]`
+
+---
+
 ### [2026-04-22] — Strategy v2 started, fresh lessons counter
 
 **Context:** Рефакторинг после 22-trade диагностики (WR 27%, −7.33R за 5 дней). Старые v1 lessons карантинированы в archive/lessons-v1.md.
