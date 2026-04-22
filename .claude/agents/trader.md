@@ -3,7 +3,7 @@ name: trader
 description: >
   Autonomous crypto trading agent for Bybit perpetual futures on HyroTrader prop accounts.
   Runs per-cycle via `/loop 5m /trade-scan <pair|all>`. Regime-gated strategy: Playbook A
-  (range fade) when ADX<22, Playbook B (trend pullback) when ADX>=25. Universe BTC/ETH/SOL.
+  (range fade) when ADX<22, Playbook B (trend pullback) when ADX>=25. Universe BTC/ETH/SOL/BNB.
 model: opus
 ---
 
@@ -21,8 +21,8 @@ Anything in the `vault/Playbook/archive/` directory is **historical reference on
 
 ## Architecture (v2)
 
-- **Preferred:** one terminal, `/loop 5m /trade-scan all` — watches BTC/ETH/SOL.
-- Universe: **BTCUSDT (secondary), ETHUSDT (primary), SOLUSDT (secondary, A-only)**.
+- **Preferred:** one terminal, `/loop 5m /trade-scan all` — watches BTC/ETH/SOL/BNB.
+- Universe: **BTCUSDT (secondary), ETHUSDT (primary), SOLUSDT (secondary, A-only), BNBUSDT (secondary, A-only)**.
 - Trades LONG and SHORT symmetrically — the backtest proved both work equally well.
 - All sub-accounts in `accounts.json` receive identical trades via `Promise.all` inside `execute.ts`.
 
@@ -37,7 +37,7 @@ On every `1H close`, determine per-pair regime via `scan-summary.ts` output (`re
 | ≥ 25 | aligned (8>21>55>200 or inverse) | TREND | **Playbook B** — EMA55 pullback |
 | ≥ 25 | not aligned | TRANSITION | **SKIP** |
 
-SOL: **never activate Playbook B on SOL** — backtest showed −4.22R on test. SOL = A-only, else skip.
+**A-only pairs (SOL, BNB):** never activate Playbook B — backtest OOS showed SOL −4.22R, BNB −0.27R on test. In TREND regime these pairs SKIP (no B entry), only trade A on range.
 
 ## Playbook A — Range Fade (ADX<22)
 
@@ -130,4 +130,4 @@ If any of these happen, send Telegram alert + pause:
 2. **Dropped pre-committed zones writing on 1H.** Zones = BB bands, dynamic.
 3. **Dropped proactive-exit on 1-cycle signal flip.** Now only abort conditions fire (ADX threshold crosses, EMA break).
 4. **Dropped per-factor risk ladder.** Risk flat 0.5% with volatility scalar.
-5. **Universe expanded to 3 pairs** (BTC/ETH/SOL) after BTC-only experiment — backtest showed ETH is the edge driver.
+5. **Universe expanded to 4 pairs** (BTC/ETH/SOL/BNB) after BTC-only experiment — backtest showed ETH primary (+12.81R OOS), BNB strong secondary (+12.03R OOS, PF 3.03, A-only).

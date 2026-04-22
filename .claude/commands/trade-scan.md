@@ -1,5 +1,5 @@
 ---
-description: "Claude-driven trading cycle v2. Regime-gated Playbook A+B on BTC/ETH/SOL. Run via /loop 5m /trade-scan all."
+description: "Claude-driven trading cycle v2. Regime-gated Playbook A+B on BTC/ETH/SOL/BNB. Run via /loop 5m /trade-scan all."
 argument-hint: "<PAIR|all> (e.g., BTCUSDT or all — default all)"
 ---
 
@@ -49,7 +49,7 @@ Read (parallel where independent):
 3. `vault/Playbook/lessons-learned.md` — v2 paid lessons
 4. `vault/Watchlist/zones.md` — regime state + manual structural levels
 5. `vault/Watchlist/catalysts.md` — forward calendar
-6. `vault/Thesis/BTCUSDT.md`, `ETHUSDT.md`, `SOLUSDT.md` — per-pair state
+6. `vault/Thesis/BTCUSDT.md`, `ETHUSDT.md`, `SOLUSDT.md`, `BNBUSDT.md` — per-pair state
 7. `vault/Journal/{TODAY}.md` — today's story
 
 Skip `archive/` subdirectory — that's strategy v1, **do not apply**.
@@ -156,7 +156,7 @@ Leverage must be ≥ 8× (HyroTrader margin rule) — use `LEVERAGE=10` in confi
 
 Trigger WebSearch when:
 - Price move >2% in 10 min without identified cause
-- Funding rate >+0.05% or <−0.05% on any of BTC/ETH/SOL
+- Funding rate >+0.05% or <−0.05% on any of BTC/ETH/SOL/BNB
 - OI change >5% in 1h with flat price
 - Session transition (07/13/17 UTC) with ambiguous direction
 - Operator Telegram mention of news/coin

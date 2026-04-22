@@ -139,7 +139,7 @@ Read in order:
 3. `Playbook/lessons-learned.md` — v2 paid lessons
 4. `Watchlist/catalysts.md` — forward calendar
 5. `Watchlist/zones.md` — regime state + manual structural levels
-6. `Thesis/BTCUSDT.md`, `ETHUSDT.md`, `SOLUSDT.md` — per-pair state
+6. `Thesis/BTCUSDT.md`, `ETHUSDT.md`, `SOLUSDT.md`, `BNBUSDT.md` — per-pair state
 7. `Journal/{TODAY}.md` — today's story
 
 Skip `Playbook/archive/` — v1 strategy, historical only.
@@ -287,7 +287,7 @@ News **doesn't create setups**. It only adjusts size/skip.
 ## WebSearch — mandatory triggers
 
 1. Any pair moves >2% in 10 min without identified news
-2. Funding rate >+0.05% or <−0.05% on BTC/ETH/SOL
+2. Funding rate >+0.05% or <−0.05% on BTC/ETH/SOL/BNB
 3. OI up >5% in 1h with flat price
 4. Open position >30 min with deteriorating R, chart intact (hidden news)
 5. Session transition 07/13/17 UTC with unclear bias
@@ -304,7 +304,7 @@ News **doesn't create setups**. It only adjusts size/skip.
 
 # Pairs & Timeframes
 
-**Universe:** BTCUSDT (secondary), ETHUSDT (primary), SOLUSDT (secondary, A-only).
+**Universe:** BTCUSDT (secondary), ETHUSDT (primary), SOLUSDT (secondary, A-only), BNBUSDT (secondary, A-only).
 
 **Priority on conflict:** ETH first (best OOS edge), BTC, SOL.
 
@@ -379,7 +379,8 @@ Full schema in `vault/README.md`.
 ## 2026-04-22 — v2.0
 
 - **Dropped:** 12-factor rubric, 1H-Close zone protocol, pre-committed zones writing, proactive-exit-on-1-cycle-flip, BTC-only watchlist.
-- **Introduced:** Playbook A (BB/Z range fade) + Playbook B (EMA55 pullback trend-follow), regime gate by ADX, 3-pair universe (BTC/ETH/SOL with ETH primary), 0.5% flat risk.
+- **Introduced:** Playbook A (BB/Z range fade) + Playbook B (EMA55 pullback trend-follow), regime gate by ADX, initially 3-pair universe (BTC/ETH/SOL with ETH primary), 0.5% flat risk.
+- **2026-04-22 evening:** universe expanded to 4 pairs — added BNBUSDT as A-only (walk-forward +12.03R / PF 3.03 / maxDD 1.17%, B disabled per OOS −0.27R). XRP and DOGE tested and rejected (both failed OOS, PF 0.74).
 - **Validated:** `src/backtest.ts` walk-forward 273d/92d on 365d data, all 3 pairs positive OOS, +16.41R test combined.
 - **Cleaned:** vault/Playbook/archive/ (v1 rules), removed 4 obsolete skills, rewrote trader.md + trade-scan.md.
 

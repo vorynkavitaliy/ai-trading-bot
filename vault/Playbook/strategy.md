@@ -1,6 +1,6 @@
 ---
 name: Strategy v2 — Regime-Aware Range/Trend
-description: Core operational strategy — BB/Z-score range fade (Playbook A) + EMA pullback trend-follow (Playbook B), regime-gated by ADX. Backed by 365d backtest on BTC/ETH/SOL.
+description: Core operational strategy — BB/Z-score range fade (Playbook A) + EMA pullback trend-follow (Playbook B), regime-gated by ADX. Backed by 365d backtest on BTC/ETH/SOL/BNB.
 type: playbook
 priority: 1
 version: 2.0
