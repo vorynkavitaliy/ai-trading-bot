@@ -219,9 +219,12 @@ function computeV2Context(symbol: string, c1h: Candle[]) {
   else if (adx.adx >= 25 && stackAligned) regime = 'TREND';
   else regime = 'TRANSITION';
 
-  // A-only pairs: B playbook failed OOS walk-forward (SOL −4.22R test, BNB −0.27R test).
-  // In TREND regime these pairs skip (don't force B); only trade A on range.
-  const aOnlyPairs = ['SOLUSDT', 'BNBUSDT'];
+  // A-only pairs: B playbook failed OOS walk-forward. In TREND regime these pairs skip
+  // (don't force B); only trade A on range.
+  //   - SOL −4.22R, BNB −0.27R (v2 original pairs)
+  //   - OP/NEAR/AVAX/SUI (added 2026-04-23): B OOS weak (AVAX −2.11R, OP −0.79R,
+  //     SUI +1.20R marginal, NEAR +4.43R on 6 trades only). A-only enforced.
+  const aOnlyPairs = ['SOLUSDT', 'BNBUSDT', 'OPUSDT', 'NEARUSDT', 'AVAXUSDT', 'SUIUSDT'];
   const isAOnly = aOnlyPairs.includes(symbol);
   const activePlaybook: 'A' | 'B' | 'SKIP' =
     regime === 'RANGE' ? 'A' :

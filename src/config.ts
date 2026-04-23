@@ -95,18 +95,27 @@ export const config = {
   },
 
   /**
-   * Active trading watchlist — strategy-v2 universe (2026-04-22 refactor).
+   * Active trading watchlist — strategy-v2 universe.
    *
-   * BTC/ETH/SOL chosen via walk-forward backtest (273d train / 92d test):
-   *   - ETHUSDT primary: +12.81R OOS, PF 1.43, cleanest range/trend mechanics
-   *   - BTCUSDT secondary: +1.92R OOS, PF 1.17, benchmark for regime
-   *   - SOLUSDT secondary (A-only): +1.68R OOS, B disabled (backtest showed
-   *     B fails on SOL — enforced in scan-data.ts v2 context + thesis)
+   * Core (added 2026-04-22):
+   *   - ETHUSDT primary: +12.81R OOS, PF 1.43
+   *   - BTCUSDT secondary: +1.92R OOS, PF 1.17
+   *   - SOLUSDT secondary (A-only): +1.68R OOS, B fails OOS
+   *   - BNBUSDT secondary (A-only): +12.03R OOS, PF 3.03
    *
-   * Adding pair: requires 180d backtest with PF≥1.3 + walk-forward positive
+   * Altcoin expansion (added 2026-04-23) — all A-only per walk-forward 273d/92d:
+   *   - OPUSDT:   +19.18R test, PF 2.76, +9.99% eq (strongest alt)
+   *   - NEARUSDT: +11.23R test, PF 6.24, +5.67% eq
+   *   - AVAXUSDT:  +8.73R test, PF 1.55, +4.47% eq
+   *   - SUIUSDT:   +8.21R test, PF 1.65, +4.06% eq
+   *
+   * Adding pair: requires 365d backtest with PF≥1.3 + walk-forward positive
    * on held-out. Override via WATCHLIST env var (comma-separated).
    */
-  watchlist: list('WATCHLIST', ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT']),
+  watchlist: list('WATCHLIST', [
+    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT',
+    'OPUSDT', 'NEARUSDT', 'AVAXUSDT', 'SUIUSDT',
+  ]),
 
   /**
    * Trading schedule — UTC hour gate. Default: DISABLED (24h trading, Claude decides).

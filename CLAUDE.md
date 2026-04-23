@@ -79,7 +79,7 @@ src/
 | **Min leverage** | **8×** (config `LEVERAGE=10`) |
 | Mandatory Stop-Loss | Server-side within **5 min** of open — NO EXCEPTIONS |
 | SL can be moved but NEVER removed | Edit-never-cancel |
-| Max simultaneous positions | **4** (one per pair in universe BTC/ETH/SOL/BNB) |
+| Max simultaneous positions | **4** (rotating across 8-pair universe BTC/ETH/SOL/BNB/OP/NEAR/AVAX/SUI) |
 | Max hold time | **48 hours** (prefer intraday) |
 | Max total heat | **3%** (sum of open risks — 4 × 0.5% base = 2% safe; with vol scalar cap 4 × 1.0% = 4% hits cap, reduce size) |
 | Same-direction positions | **Allowed** — 4×LONG or 4×SHORT OK if each setup valid per its pair's playbook. No correlation block. Operator accepts correlation risk in exchange for trend-capture across universe. |
@@ -140,7 +140,7 @@ Read in order:
 3. `Playbook/lessons-learned.md` — v2 paid lessons
 4. `Watchlist/catalysts.md` — forward calendar
 5. `Watchlist/zones.md` — regime state + manual structural levels
-6. `Thesis/BTCUSDT.md`, `ETHUSDT.md`, `SOLUSDT.md`, `BNBUSDT.md` — per-pair state
+6. `Thesis/{SYMBOL}.md` for each active pair: BTC, ETH, SOL, BNB, OP, NEAR, AVAX, SUI — per-pair state
 7. `Journal/{TODAY}.md` — today's story
 
 Skip `Playbook/archive/` — v1 strategy, historical only.
@@ -288,7 +288,7 @@ News **doesn't create setups**. It only adjusts size/skip.
 ## WebSearch — mandatory triggers
 
 1. Any pair moves >2% in 10 min without identified news
-2. Funding rate >+0.05% or <−0.05% on BTC/ETH/SOL/BNB
+2. Funding rate >+0.05% or <−0.05% on any pair in universe (BTC/ETH/SOL/BNB/OP/NEAR/AVAX/SUI)
 3. OI up >5% in 1h with flat price
 4. Open position >30 min with deteriorating R, chart intact (hidden news)
 5. Session transition 07/13/17 UTC with unclear bias
@@ -305,7 +305,15 @@ News **doesn't create setups**. It only adjusts size/skip.
 
 # Pairs & Timeframes
 
-**Universe:** BTCUSDT (secondary), ETHUSDT (primary), SOLUSDT (secondary, A-only), BNBUSDT (secondary, A-only).
+**Universe (8 pairs):**
+- ETHUSDT (primary, A+B)
+- BTCUSDT (secondary, A+B)
+- SOLUSDT (secondary, A-only)
+- BNBUSDT (secondary, A-only)
+- OPUSDT (secondary, A-only, added 2026-04-23)
+- NEARUSDT (secondary, A-only, added 2026-04-23)
+- AVAXUSDT (secondary, A-only, added 2026-04-23)
+- SUIUSDT (secondary, A-only, added 2026-04-23)
 
 **Priority on conflict:** ETH first (best OOS edge), BTC, SOL.
 
@@ -382,6 +390,7 @@ Full schema in `vault/README.md`.
 - **Dropped:** 12-factor rubric, 1H-Close zone protocol, pre-committed zones writing, proactive-exit-on-1-cycle-flip, BTC-only watchlist.
 - **Introduced:** Playbook A (BB/Z range fade) + Playbook B (EMA55 pullback trend-follow), regime gate by ADX, initially 3-pair universe (BTC/ETH/SOL with ETH primary), 0.5% flat risk.
 - **2026-04-22 evening:** universe expanded to 4 pairs — added BNBUSDT as A-only (walk-forward +12.03R / PF 3.03 / maxDD 1.17%, B disabled per OOS −0.27R). XRP and DOGE tested and rejected (both failed OOS, PF 0.74).
+- **2026-04-23:** universe expanded to 8 pairs — added OP/NEAR/AVAX/SUI as A-only secondary. Screened 14 candidates on 365d combined; top-6 ran walk-forward (273d/92d). Added (OOS test combined sumR / PF / eq%): OP (+19.18R / 2.76 / +9.99%), NEAR (+11.23R / 6.24 / +5.67%), AVAX (+8.73R / 1.55 / +4.47%), SUI (+8.21R / 1.65 / +4.06%). DOT rejected (failed OOS: −12.56R / PF 0.66 despite strongest in-sample PF — walk-forward caught overfit). APT passed (+10.08R) but excluded pending second pass. B playbook disabled for all 4 new pairs (OOS per-pair B weak/negative: AVAX −2.11R, OP −0.79R, APT −6.76R, SUI +1.20R var, NEAR +4.43R on 6 trades). Also: news classifier fixed — word-boundary regex replaces substring match (cured "stEWARt" → `war:` false positives), tier-2 keywords (hack/exploit/collapse/sec lawsuit) require crypto context, impact threshold raised to 4+ hits for `high`.
 - **Validated:** `src/backtest.ts` walk-forward 273d/92d on 365d data, all 3 pairs positive OOS, +16.41R test combined.
 - **Cleaned:** vault/Playbook/archive/ (v1 rules), removed 4 obsolete skills, rewrote trader.md + trade-scan.md.
 
