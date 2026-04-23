@@ -24,21 +24,42 @@ export interface MacroAssessment {
   items: NewsItem[];
 }
 
-const HIGH_IMPACT_KEYWORDS = [
-  'fed', 'fomc', 'rate decision', 'rate hike', 'rate cut', 'powell',
-  'cpi', 'inflation', 'jobs report', 'nfp', 'unemployment',
-  'blackrock', 'etf approval', 'etf outflow', 'etf inflow', 'sec', 'lawsuit',
-  'hack', 'exploit', 'collapse', 'bankruptcy', 'liquidation',
-  'war', 'sanction', 'china', 'tariff', 'iran', 'blockade',
-  'peace talks', 'ceasefire', 'missile', 'nuclear',
-  'default', 'debt ceiling', 'shutdown',
+// Tier 1 — always count (macro/geopolitical; unambiguously market-moving)
+const KW_MACRO_ALWAYS = [
+  'fomc', 'powell', 'rate decision', 'rate hike', 'rate cut',
+  'cpi', 'jobs report', 'nfp', 'unemployment', 'inflation',
+  'blackrock', 'etf approval', 'etf outflow', 'etf inflow',
+  'tariff', 'nuclear', 'debt ceiling', 'government shutdown',
+  'ceasefire', 'blockade', 'missile', 'peace talks',
+  'hawkish', 'dovish',
+  // Geopolitical (word-boundary will prevent "stewart→war" false positives)
+  'iran', 'china', 'russia', 'ukraine', 'war', 'sanction',
+  // 'fed' is short — still use word boundary
+  'fed',
 ];
+
+// Tier 2 — only count if the headline has explicit crypto context.
+// Prevents "cement cybersecurity" from triggering sec, "insurance collapse" triggering collapse.
+const KW_CRYPTO_GATED = [
+  'hack', 'exploit', 'collapse', 'bankruptcy', 'liquidation', 'lawsuit',
+  'rug pull', 'depeg',
+  'sec lawsuit', 'sec charges', 'sec ruling', 'sec approval',
+  'sec vs', 'sec sues', 'sec rejects', 'sec settles',
+];
+
+// Crypto-context markers (English + Russian). Headline must hit one for Tier-2 triggers.
+const CRYPTO_CONTEXT = new RegExp(
+  '\\b(btc|eth|bitcoin|ethereum|crypto|coin|token|blockchain|defi|dao|' +
+  'exchange|binance|coinbase|bybit|kraken|okx|tether|usdt|usdc|nft|web3|' +
+  'stablecoin|wallet|mining|staking|airdrop|sol|bnb|xrp|ada|avax|dot|link|' +
+  'криптовалют|биткойн|биткоин|эфир|альткоин|блокчейн|токен)\\b', 'i'
+);
 
 const RISK_OFF_KEYWORDS = [
   'hike', 'collapse', 'crash', 'hack', 'exploit', 'lawsuit', 'sanction',
   'war', 'bankruptcy', 'liquidation', 'risk-off', 'outflow', 'sell-off',
   'bear', 'plunge', 'dump', 'fear', 'panic', 'blockade', 'missile',
-  'escalat', 'tariff', 'default', 'shutdown', 'hawkish',
+  'escalation', 'tariff', 'default', 'shutdown', 'hawkish',
 ];
 
 const RISK_ON_KEYWORDS = [
@@ -46,6 +67,12 @@ const RISK_ON_KEYWORDS = [
   'bullish', 'rally', 'surge', 'pump', 'breakout', 'recovery',
   'ceasefire', 'peace', 'dovish', 'stimulus', 'easing',
 ];
+
+/** Word-boundary-aware keyword match. Handles multi-word phrases verbatim. */
+function matchKw(text: string, kw: string): boolean {
+  const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`, 'i').test(text);
+}
 
 /**
  * Multi-source news fetcher:
@@ -162,27 +189,30 @@ export class NewsFetcher {
     const triggers: string[] = [];
     let riskOff = 0, riskOn = 0, high = 0;
 
-    for (const it of recent) {
-      const t = (it.title + ' ' + (it.summary ?? '')).toLowerCase();
-      const matchedHigh = HIGH_IMPACT_KEYWORDS.filter((k) => t.includes(k));
-      const hasRiskOn = RISK_ON_KEYWORDS.some((k) => t.includes(k));
-      const hasRiskOff = RISK_OFF_KEYWORDS.some((k) => t.includes(k));
+    const BENIGN_GEO = ['iran', 'china', 'russia', 'ukraine', 'war', 'sanction', 'tariff', 'nuclear', 'missile', 'blockade'];
 
-      // v2: prefer negative-toned match for trigger label when geopolitical
-      // keyword ('iran', 'war', etc.) appears with positive modifier ('ceasefire',
-      // 'peace'). Prevents false-positive triggers from ceasefire headlines.
+    for (const it of recent) {
+      const t = (it.title + ' ' + (it.summary ?? ''));
+      const hasCrypto = CRYPTO_CONTEXT.test(t);
+
+      // Tier 1: macro/geopolitical keywords — count regardless of crypto context
+      const tier1Hits = KW_MACRO_ALWAYS.filter((k) => matchKw(t, k));
+      // Tier 2: crypto-event keywords — count only if headline has crypto context
+      const tier2Hits = hasCrypto ? KW_CRYPTO_GATED.filter((k) => matchKw(t, k)) : [];
+
+      const matchedHigh = [...tier1Hits, ...tier2Hits];
+      const hasRiskOn = RISK_ON_KEYWORDS.some((k) => matchKw(t, k));
+      const hasRiskOff = RISK_OFF_KEYWORDS.some((k) => matchKw(t, k));
+
+      // Benign-geopolitical filter: 'iran: ceasefire' shouldn't trigger high-impact.
+      // Detect: only geopolitical keyword matched AND risk-on modifier present AND no risk-off.
       if (matchedHigh.length) {
-        const negativeMatch = matchedHigh.find((k) =>
-          !['iran', 'china', 'war', 'sanction', 'tariff', 'nuclear', 'missile', 'blockade'].includes(k)
-        );
-        const isBenignGeopolitical = matchedHigh.length > 0
-          && !negativeMatch
-          && hasRiskOn
-          && !hasRiskOff;
+        const nonGeoMatch = matchedHigh.find((k) => !BENIGN_GEO.includes(k));
+        const isBenignGeopolitical = !nonGeoMatch && hasRiskOn && !hasRiskOff;
 
         if (!isBenignGeopolitical) {
           high++;
-          const label = negativeMatch ?? matchedHigh[0];
+          const label = nonGeoMatch ?? matchedHigh[0];
           triggers.push(`${label}: ${it.title.slice(0, 80)}`);
         }
       }
@@ -202,7 +232,10 @@ export class NewsFetcher {
     if (riskOff > riskOn + 1) bias = 'risk-off';
     else if (riskOn > riskOff + 1) bias = 'risk-on';
 
-    const impact: MacroAssessment['impact'] = high >= 3 ? 'high' : high >= 1 ? 'medium' : 'low';
+    // Thresholds raised after Apr 23 diagnostic: single false-positive was triggering medium (×0.5)
+    // and two false-positives triggered high (×0.25). With word-boundary + crypto-gate, each hit
+    // is now meaningful, so require more hits before cutting risk.
+    const impact: MacroAssessment['impact'] = high >= 4 ? 'high' : high >= 2 ? 'medium' : 'low';
 
     // Risk multiplier — scale down position size based on news intensity
     // Not a block — we still trade, but adjust size to match the environment
