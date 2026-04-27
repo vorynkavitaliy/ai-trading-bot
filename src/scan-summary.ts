@@ -22,10 +22,17 @@ const arg = process.argv[2] || "all";
 // See CLAUDE.md § Clear Protocol. Threshold 40 cycles (~2h at /loop 3m).
 const cycle = cycleTick();
 
-const raw = execSync(`npx tsx src/scan-data.ts ${arg}`, {
-  encoding: "utf8",
-  maxBuffer: 50 * 1024 * 1024,
+// Capture via shell redirection to file — execSync/spawnSync silently truncate
+// stdout buffers around ~144KB regardless of `maxBuffer` setting (reproducible
+// 2026-04-27 after universe expansion to 10 pairs pushed scan-data output past
+// that threshold). Direct shell redirection bypasses the node pipe-buffer limit.
+const tmpFile = `/tmp/scan-data-${process.pid}-${Date.now()}.json`;
+execSync(`npx tsx src/scan-data.ts ${arg} > ${tmpFile}`, {
+  shell: "/bin/bash",
+  stdio: ["ignore", "ignore", "inherit"], // stderr to parent, stdout to file
 });
+const raw = fs.readFileSync(tmpFile, "utf8");
+try { fs.unlinkSync(tmpFile); } catch {}
 const start = raw.indexOf("{");
 const json = JSON.parse(raw.slice(start));
 
