@@ -72,7 +72,7 @@ Parse per-pair:
 
 Also fetch open positions/pending orders via `audit.ts` if needed.
 
-**Heartbeat cycle:** If no position and no pair meets regime-gate entry conditions → log one journal line "C### — no eligible setups, regime state [BTC:X, ETH:Y, SOL:Z]", exit cleanly.
+**Heartbeat cycle (no triggers):** Do NOT append to Journal every cycle. See § PHASE 7 PERSIST below for the new write rules — only material events + 1 hourly summary. Exit cleanly without writing.
 
 ### PHASE 3 — REGIME DETECTION + PLAYBOOK SELECTION
 
@@ -180,14 +180,35 @@ For long rationale with `$` signs or newlines — use `--rationale-file /tmp/r.t
 
 ### PHASE 7 — PERSIST
 
-**Journal append** (`Journal/{TODAY}.md` via Edit tool):
+**Strict write policy** (per CLAUDE.md § Vault Protocol § Write on material events):
+
+**Journal append on these events ONLY:**
+- Position open / close / SL hit / TP hit / abort
+- Setup trigger fires (A or B condition met) — even if SKIP per blocks
+- Regime flip (RANGE↔TREND↔TRANSITION on any pair)
+- News impact level changes
+- Operator interaction
+- 1H bar close that materially affects state (ADX crosses 22/25, EMA stack flips)
+- /clear or compaction event (note as marker)
+
+**One hourly summary** at top of hour ±10 min — single line:
 ```
-### [HH:MM UTC] — C### — {ACTION}
+### [HH:00 UTC] — heartbeat (Cxxxx-Cyyy) — regime [BTC:X, ETH:Y, SOL:Z, BNB:W, OP:V, NEAR:U, AVAX:T, SUI:S], P&L $±N, no/N triggers in window
+```
+
+**On a material event** — fuller entry:
+```
+### [HH:MM UTC] — C### — {EVENT}
 
 **Pair:** {SYMBOL}  **Regime:** {RANGE/TREND/TRANSITION}  **Playbook:** {A/B/SKIP}
-**Entry:** {price} {side}  **SL:** {price} ({R% risk})  **TP1:** {price}  **TP2:** {price}
+**Entry:** {price} {side}  **SL:** {price} ({R% risk})  **TP1:** {price}
 **Rationale:** 1-2 sentences citing the strategy.md rule that fired.
 ```
+
+**What NOT to write to Journal:**
+- ❌ Per-cycle scan-data dumps when state unchanged from prior cycle
+- ❌ "Heartbeat — все SKIP" entries every 5 min
+- ❌ Detailed RSI/CVD/OBI numbers as standalone heartbeat (these belong in `/tmp/scan-data-CYCLE.json` and Telegram, not Journal)
 
 **On new open:** Create `Trades/{DATE}_{SYMBOL}_{DIR}.md` from template.
 
@@ -196,10 +217,10 @@ For long rationale with `$` signs or newlines — use `--rationale-file /tmp/r.t
 - Write `Postmortem/{DATE}_{SYMBOL}_{DIR}.md` within 1h.
 - If lesson emerged → append to `lessons-learned.md`.
 
-**Telegram heartbeat** (`send-tg.ts --file`):
-- Every 55-65 min if no events.
-- Immediately on open/close/abort/SL hit.
-- Style per `Playbook/telegram-templates.md` (Russian, emoji + why + next-action).
+**Telegram** (`send-tg.ts --file`) — unchanged:
+- Heartbeat every 55-65 min (= roughly 1 per hour, confirms loop alive)
+- Immediately on open/close/abort/SL hit
+- Style per `Playbook/telegram-templates.md` (Russian, emoji + why + next-action)
 
 ---
 

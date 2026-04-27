@@ -8,3 +8,7 @@ dist/
 accounts.json
 .claude/settings.local.json
 .mcp.json
+
+# Pure runtime — no value in git history
+vault/state/cycle-counter.json     # resets per /clear
+.claude/scheduled_tasks.lock        # harness state

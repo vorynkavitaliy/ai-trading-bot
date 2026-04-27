@@ -222,6 +222,7 @@ npx tsx src/execute.ts <args>
 | Journal append | **Edit tool** (NOT bash heredoc) |
 | Backtest run | `BT_DAYS=365 npx tsx src/backtest.ts --combined` |
 | Walk-forward | `BT_DAYS=365 npx tsx src/backtest.ts --walkforward` |
+| Archive vault (monthly) | `npx tsx src/archive-vault.ts --days 60` (use `--dry-run` to preview) |
 
 ---
 
@@ -238,6 +239,7 @@ Key rules:
 - **Never include:** order IDs, technical thresholds ("ADX 18.3"), acronyms.
 - **P&L always from `pnl-day.ts`** (Bybit equity diff), never trade-math.
 - **Send:** `npx tsx src/send-tg.ts --file /tmp/tg-X.txt` (Write tool creates file first).
+- **HTML-escape `<` / `>`:** send-tg.ts uses `parse_mode=HTML`. Literal `<22` / `>65` / `<35` are parsed as unclosed tags → Telegram 400 error. Rewrite as "ниже 22" / "выше 65" / "меньше 35". Scan every message before sending. (2026-04-23 incident: heartbeat with "ADX остынет <22" failed.)
 
 ---
 
@@ -376,17 +378,40 @@ Full schema in `vault/README.md`.
 
 **Skip archive subdirs** (`Playbook/archive/`) — v1 strategy, historical only.
 
-## Write on material events
+## Write on material events ONLY (post-2026-04-27 verbosity reduction)
 
-| Event | File |
-|---|---|
-| First cycle after 07:00 UTC | Create `Journal/{TODAY}.md` from template |
-| Any decision (open/close/skip/abort) | Append `Journal/{TODAY}.md` |
-| Regime flipped on a pair | Update `Thesis/{SYMBOL}.md` |
-| Catalyst resolved / new within 14 days | Update `Watchlist/catalysts.md` |
-| New position | Create `Trades/{DATE}_{SYMBOL}_{DIR}.md` |
-| Position closed | Update trade file + Postmortem within 1h |
-| Lesson emerged (paid P&L) | Append `lessons-learned.md` |
+Background: pre-2026-04-27 journals reached 5000-9000 lines/day because every /loop cycle
+appended a heartbeat section. This bloated git diffs and provided zero retrievability value
+(scan-data JSON already on disk per cycle). New rule: **journal captures decisions, not
+state observations.**
+
+| Event | Action | File |
+|---|---|---|
+| **First cycle after 00:00 UTC** | Create `Journal/{TODAY}.md` from template | Journal |
+| **Position open / close / SL hit / TP hit / abort** | Append entry with full context | Journal |
+| **Setup trigger fires** (A or B condition met) | Append entry — even if SKIP per blocks | Journal |
+| **Regime flips** (RANGE↔TREND↔TRANSITION on any pair) | Append + update `Thesis/{SYMBOL}.md` | Journal + Thesis |
+| **News impact level changes** (low↔medium↔high) | Append entry | Journal |
+| **Operator interaction / instruction received** | Append entry | Journal |
+| **1H bar close that materially affects state** (ADX crosses 22/25, EMA stack flips, swing high/low confirmed) | Append entry | Journal |
+| **/clear or compaction event** | Append `## clear at cycle N — context reset` marker | Journal |
+| **Hourly heartbeat (1 per hour, top of hour ±10 min)** | Append 1-line summary: cycle range, regime states, P&L. No data dumps. | Journal |
+| Catalyst resolved or new within 14 days | Update | `Watchlist/catalysts.md` |
+| New position | Create `Trades/{DATE}_{SYMBOL}_{DIR}.md` | Trades |
+| Position closed | Update trade file + `Postmortem/{DATE}_{SYMBOL}.md` within 1h | Trades + Postmortem |
+| Lesson emerged (paid P&L, generalizable) | Append `Playbook/lessons-learned.md` | Playbook |
+
+**What NOT to write:**
+
+- ❌ Per-cycle scan dumps (RSI/ADX/CVD/OBI numbers when nothing changed)
+- ❌ "Heartbeat — все SKIP, ничего не произошло" entries every 5 min
+- ❌ Repeated state when prior cycle's entry covered it
+- ❌ Telegram-style narrative ("watching SOL at BB upper, may trigger soon") — this belongs in TG, not Journal
+
+**Goal:** journal grows ~200-500 lines/day on active days, ~50-100 on quiet days.
+**Versus pre-2026-04-27:** ~5000-9000 lines/day. ~10× reduction.
+
+Live state observation is via `audit.ts` + `scan-summary.ts` re-runs (always fresh) + `/tmp/scan-data-cycle.json` written every cycle. No need to mirror in Journal.
 
 ## Writing style
 

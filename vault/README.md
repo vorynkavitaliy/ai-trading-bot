@@ -140,3 +140,24 @@ PHASE 5 — PERSIST (write back)
 3. **Update don't accumulate.** A stale Thesis is worse than no Thesis. Rewrite it.
 4. **Short files beat long files.** A sharp thesis in 10 lines beats a meandering one in 100.
 5. **The vault is the source of truth for WHY.** Bybit is the source of truth for WHAT (positions, PnL). Both must agree.
+
+---
+
+## Archive workflow (introduced 2026-04-27)
+
+**Why:** Pre-2026-04-27 the active `Journal/` directory grew to 2.7MB (80% of vault) because every 5-min cycle wrote a heartbeat section. Now: only material events go to Journal (see CLAUDE.md § Vault Protocol § Write on material events ONLY). For files that DO accumulate (Trades/, Postmortem/, daily Journals), periodic archive keeps the working directories small.
+
+**How:** `npx tsx src/archive-vault.ts --days 60` moves files older than 60 days from `Journal/`, `Trades/`, `Postmortem/` into `{dir}/archive/{YYYY-MM}/` subdirectories.
+
+**Cadence:** monthly. End of month or whenever working dir feels cluttered.
+
+**Procedure:**
+
+1. **Preview:** `npx tsx src/archive-vault.ts --days 60 --dry-run` — see what would move.
+2. **Apply:** `npx tsx src/archive-vault.ts --days 60` — actually move files.
+3. **Verify:** `git status` — confirm moves are tracked as renames.
+4. **Commit:** `chore(vault): archive {YYYY-MM} files older than 60d` — single dedicated commit.
+
+Archived files stay in git history. They're moved, not deleted. To browse old content: `vault/Journal/archive/2026-04/2026-04-17.md` etc.
+
+**Templates and index files** (`_template.md`, `_index.md`, anything starting with `_`) are never archived — they're working files.
