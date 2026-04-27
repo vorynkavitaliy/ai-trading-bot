@@ -14,19 +14,7 @@ updated: 2026-04-20T14:30:00Z
 
 ## 🔴 IMMEDIATE — within 24h
 
-### 2026-04-21 — Iran ceasefire expires (BINARY EVENT)
-
-**Context:** Temporary 2-week ceasefire declared Apr 7, 2026. Islamabad talks (Apr 11-12) FAILED — Iran offered 3-5yr uranium suspension vs US-demanded 20yr. Trump called unacceptable. US naval blockade of Iranian ports in force since Apr 13. Pakistani military chief Asim Munir in Tehran Apr 20 carrying new US message (Pakistan-brokered 2nd round push, not Iran-initiated).
-
-**Scenarios:**
-- Deal announced OR extension → bullish gap on risk-on flip
-- Expiry without deal → sharp risk-off (reference Apr 19 crash к $73,753, −$83B wiped in hours)
-
-**Trading rules:**
-- **Size down overnight positions going into Apr 20 22:00 UTC.** Max 0.5R outstanding at session close.
-- **No new LONG entries** between Apr 20 20:00 UTC and Apr 21 first confirmed news cycle.
-- **SHORT entries fine with tight SL** (structural risk-off remains base case).
-- **2-cycle news rule applies strictly** — do NOT act on single-cycle news flip at expiry.
+_Empty — Iran ceasefire resolved bullish (Trump extended), see Resolved section._
 
 ---
 
@@ -97,6 +85,7 @@ updated: 2026-04-20T14:30:00Z
 
 ## 🗄 RESOLVED (keep for 7 days for context)
 
+- **Apr 22-23 Iran ceasefire EXTENDED** (Trump announced) — RSS classifier headline "Trump Extends Ceasefire: Bitcoin Hits $79K" caught at C1598 13:38 UTC. BTC pumped к $79K на news, retraced к $77,500 within hours (typical "buy rumor sell fact"). Bullish structural catalyst resolved — Apr 21 binary risk REMOVED. Strategy did NOT chase pump (regime gate held — TRANSITION ADX 26.5/EMA mixed). Application: removes overhang for next 1-2 weeks; default risk-on bias unless new geopolitical trigger.
 - **Apr 19 Iran Hormuz re-closure** — BTC crashed $78K → $73.7K in hours. 2-cycle news rule VALIDATED bidirectionally (saved panic exit + enabled defensive exit on XRP +0.58R). Lesson: `2026-04-19 — 2-cycle news rule VALIDATED`.
 - **Feb 20 SCOTUS IEEPA ruling** (structural) — administration pivoted to alt authorities.
 - **Mar 11 SEC-CFTC MoU signed** (structural) — coordination baseline in place.

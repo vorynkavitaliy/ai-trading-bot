@@ -11,6 +11,13 @@ export interface InstrumentSpec {
   tickSize: number;
   qtyStep: number;
   minQty: number;
+  /**
+   * Per-symbol exchange max single-order quantity (BNB=370, etc.).
+   * Use min(maxOrderQty, maxMktOrderQty) to be safe across order types.
+   * sizing.ts clamps qty to this; without it, large accounts get exchange rejects
+   * (caused 2026-04-25 BNB partial-fill bug — 50k filled, 200k rejected at 370).
+   */
+  maxQty?: number;
   maxLeverage: number;
 }
 

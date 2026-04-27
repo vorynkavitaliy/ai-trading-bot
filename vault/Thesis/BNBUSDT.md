@@ -20,12 +20,16 @@ version: 2.0
 
 **Правило:** BNB trades через Playbook A only. Если regime == TREND — **skip BNB**.
 
-## Current regime (fill on first cycle)
+## Current regime (2026-04-22T17:54 UTC)
 
-- ADX(1H): TBD
-- EMA stack: TBD
-- Regime: TBD
-- Active playbook: TBD (A only, иначе skip)
+- ADX(1H): **31.9** (strong trend)
+- EMA stack: **bullish** (8=645.43 > 21=641.55 > 55=635.75 > 200=628.31)
+- Regime: **TREND**
+- Active playbook: **SKIP** (BNB = A-only по правилу, в trend пропускаем)
+- Price: 644.80 (+1.42% от EMA55)
+- Slope1h −3.74 sharp, rsi_accel1h **−5.86 EXTREME** (deepest decay из 4 пар)
+- Funding +0.010% positive
+- Жду ADX<22 для A-fade triggera
 
 ## Priors
 

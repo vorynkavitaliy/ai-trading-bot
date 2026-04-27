@@ -52,11 +52,19 @@ import type { Direction } from './signal/types';
 // --- helpers ------------------------------------------------------------
 async function getInstrumentSpec(bybit: BybitClient, symbol: string): Promise<InstrumentSpec> {
   const info = await bybit.getInstrumentInfo(symbol);
+  // Use min of limit-order and market-order max — we issue both order types.
+  // Bybit returns both maxOrderQty (limit) and maxMktOrderQty (market); the
+  // smaller is the safe ceiling. Some symbols return only one.
+  const maxLimit = Number(info.lotSizeFilter.maxOrderQty);
+  const maxMarket = Number(info.lotSizeFilter.maxMktOrderQty);
+  const candidates = [maxLimit, maxMarket].filter((n) => Number.isFinite(n) && n > 0);
+  const maxQty = candidates.length ? Math.min(...candidates) : undefined;
   return {
     symbol,
     tickSize: Number(info.priceFilter.tickSize),
     qtyStep: Number(info.lotSizeFilter.qtyStep),
     minQty: Number(info.lotSizeFilter.minOrderQty),
+    maxQty,
     maxLeverage: Number(info.leverageFilter.maxLeverage),
   };
 }

@@ -82,6 +82,7 @@ export async function executeAcrossAccounts(ctx: ExecuteContext): Promise<Execut
           stopLoss: ctx.plan.stopLoss,
           qtyStep: ctx.instrument.qtyStep,
           minQty: ctx.instrument.minQty,
+          maxQty: ctx.instrument.maxQty,
         });
       } catch (e: any) {
         return { account: sub.label, success: false, qty: 0, riskUsd: 0, reason: `sizing: ${e.message}` };
