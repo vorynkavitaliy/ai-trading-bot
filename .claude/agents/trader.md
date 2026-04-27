@@ -3,7 +3,7 @@ name: trader
 description: >
   Autonomous crypto trading agent for Bybit perpetual futures on HyroTrader prop accounts.
   Runs per-cycle via `/loop 5m /trade-scan <pair|all>`. Regime-gated strategy: Playbook A
-  (range fade) when ADX<22, Playbook B (trend pullback) when ADX>=25. Universe BTC/ETH/SOL/BNB/OP/NEAR/AVAX/SUI (8 pairs, last 4 added 2026-04-23 as A-only).
+  (range fade) when ADX<22, Playbook B (trend pullback) when ADX>=25. Universe BTC/ETH/SOL/BNB/OP/NEAR/AVAX/SUI/XLM/TAO (10 pairs, last 6 added 2026-04-23/27 as A-only).
 model: opus
 ---
 
@@ -21,8 +21,8 @@ Anything in the `vault/Playbook/archive/` directory is **historical reference on
 
 ## Architecture (v2)
 
-- **Preferred:** one terminal, `/loop 5m /trade-scan all` — watches all 8 pairs.
-- Universe (8 pairs): **ETHUSDT (primary, A+B), BTCUSDT (secondary, A+B), SOLUSDT (A-only), BNBUSDT (A-only), OPUSDT (A-only), NEARUSDT (A-only), AVAXUSDT (A-only), SUIUSDT (A-only)**. Max 4 simultaneous positions across universe.
+- **Preferred:** one terminal, `/loop 5m /trade-scan all` — watches all 10 pairs.
+- Universe (10 pairs): **ETHUSDT (primary, A+B), BTCUSDT (secondary, A+B), SOLUSDT (A-only), BNBUSDT (A-only), OPUSDT (A-only), NEARUSDT (A-only), AVAXUSDT (A-only), SUIUSDT (A-only), XLMUSDT (A-only, added 2026-04-27), TAOUSDT (A-only, added 2026-04-27)**. Max 4 simultaneous positions across universe.
 - Trades LONG and SHORT symmetrically — the backtest proved both work equally well.
 - All sub-accounts in `accounts.json` receive identical trades via `Promise.all` inside `execute.ts`.
 
@@ -132,4 +132,4 @@ If any of these happen, send Telegram alert + pause:
 2. **Dropped pre-committed zones writing on 1H.** Zones = BB bands, dynamic.
 3. **Dropped proactive-exit on 1-cycle signal flip.** Now only abort conditions fire (ADX threshold crosses, EMA break).
 4. **Dropped per-factor risk ladder.** Risk flat 0.5% with volatility scalar.
-5. **Universe expanded to 8 pairs** — started BTC-only (2026-04-18), grew to BTC/ETH/SOL (2026-04-22), then +BNB (2026-04-22 eve), then +OP/NEAR/AVAX/SUI (2026-04-23). All 4 alts added 2026-04-23 are A-only (B failed OOS per-pair). Top altcoin OOS results: OP +19.18R / PF 2.76 / +9.99% eq, NEAR +11.23R / PF 6.24 / +5.67% eq. Testing rejected DOT despite strongest in-sample PF — walk-forward caught overfit.
+5. **Universe expanded to 10 pairs** — started BTC-only (2026-04-18), grew to BTC/ETH/SOL (2026-04-22), then +BNB (2026-04-22 eve), then +OP/NEAR/AVAX/SUI (2026-04-23), then +XLM/TAO (2026-04-27). All non-BTC/ETH pairs are A-only (B failed OOS per-pair across all altcoins). Notable OOS results: XLM +13R/PF 1.88, TAO +10R/PF 2.55, OP +19R/PF 2.76, NEAR +11R/PF 6.24. Walk-forward rejected: DOT, WLD (−1.24R OOS despite WR 67% in-sample), JUP (−10R OOS catastrophe).

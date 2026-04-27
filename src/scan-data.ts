@@ -224,7 +224,8 @@ function computeV2Context(symbol: string, c1h: Candle[]) {
   //   - SOL −4.22R, BNB −0.27R (v2 original pairs)
   //   - OP/NEAR/AVAX/SUI (added 2026-04-23): B OOS weak (AVAX −2.11R, OP −0.79R,
   //     SUI +1.20R marginal, NEAR +4.43R on 6 trades only). A-only enforced.
-  const aOnlyPairs = ['SOLUSDT', 'BNBUSDT', 'OPUSDT', 'NEARUSDT', 'AVAXUSDT', 'SUIUSDT'];
+  //   - XLM/TAO (added 2026-04-27): B OOS −0.34R / −1.83R respectively. A-only enforced.
+  const aOnlyPairs = ['SOLUSDT', 'BNBUSDT', 'OPUSDT', 'NEARUSDT', 'AVAXUSDT', 'SUIUSDT', 'XLMUSDT', 'TAOUSDT'];
   const isAOnly = aOnlyPairs.includes(symbol);
   const activePlaybook: 'A' | 'B' | 'SKIP' =
     regime === 'RANGE' ? 'A' :

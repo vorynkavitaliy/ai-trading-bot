@@ -79,7 +79,7 @@ src/
 | **Min leverage** | **8×** (config `LEVERAGE=10`) |
 | Mandatory Stop-Loss | Server-side within **5 min** of open — NO EXCEPTIONS |
 | SL can be moved but NEVER removed | Edit-never-cancel |
-| Max simultaneous positions | **4** (rotating across 8-pair universe BTC/ETH/SOL/BNB/OP/NEAR/AVAX/SUI) |
+| Max simultaneous positions | **4** (rotating across 10-pair universe BTC/ETH/SOL/BNB/OP/NEAR/AVAX/SUI/XLM/TAO) |
 | Max hold time | **48 hours** (prefer intraday) |
 | Max total heat | **3%** (sum of open risks — 4 × 0.5% base = 2% safe; with vol scalar cap 4 × 1.0% = 4% hits cap, reduce size) |
 | Same-direction positions | **Allowed** — 4×LONG or 4×SHORT OK if each setup valid per its pair's playbook. No correlation block. Operator accepts correlation risk in exchange for trend-capture across universe. |
@@ -278,7 +278,7 @@ A position on Bybit that the bot did not open via `execute.ts` is **operator-ope
 - **DO NOT apply playbook abort rules** (ADX<20 for B, ADX≥28 for A) to operator positions. Those abort clauses belong to the playbook entry mechanism — operator opened outside the playbook, abort logic does not transfer. Wait for explicit instruction or natural SL/TP/server-side fill.
 - **DO NOT open additional positions on the same pair** as operator without explicit coordination — no parallel-direction doubling.
 
-## Out-of-universe symbols (DOGE, XRP, etc., not in 8-pair watchlist)
+## Out-of-universe symbols (DOGE, XRP, etc., not in 10-pair watchlist)
 
 - Still monitor every cycle via audit.ts output (it already enumerates all positions, not just universe).
 - Report status, alert on adverse moves, respect operator's SL/TP unchanged.
@@ -329,7 +329,7 @@ News **doesn't create setups**. It only adjusts size/skip.
 ## WebSearch — mandatory triggers
 
 1. Any pair moves >2% in 10 min without identified news
-2. Funding rate >+0.05% or <−0.05% on any pair in universe (BTC/ETH/SOL/BNB/OP/NEAR/AVAX/SUI)
+2. Funding rate >+0.05% or <−0.05% on any pair in universe (BTC/ETH/SOL/BNB/OP/NEAR/AVAX/SUI/XLM/TAO)
 3. OI up >5% in 1h with flat price
 4. Open position >30 min with deteriorating R, chart intact (hidden news)
 5. Session transition 07/13/17 UTC with unclear bias
@@ -346,7 +346,7 @@ News **doesn't create setups**. It only adjusts size/skip.
 
 # Pairs & Timeframes
 
-**Universe (8 pairs):**
+**Universe (10 pairs):**
 - ETHUSDT (primary, A+B)
 - BTCUSDT (secondary, A+B)
 - SOLUSDT (secondary, A-only)
@@ -355,6 +355,8 @@ News **doesn't create setups**. It only adjusts size/skip.
 - NEARUSDT (secondary, A-only, added 2026-04-23)
 - AVAXUSDT (secondary, A-only, added 2026-04-23)
 - SUIUSDT (secondary, A-only, added 2026-04-23)
+- XLMUSDT (secondary, A-only, added 2026-04-27)
+- TAOUSDT (secondary, A-only, added 2026-04-27)
 
 **Priority on conflict:** ETH first (best OOS edge), BTC, SOL.
 
@@ -455,6 +457,7 @@ Live state observation is via `audit.ts` + `scan-summary.ts` re-runs (always fre
 - **Introduced:** Playbook A (BB/Z range fade) + Playbook B (EMA55 pullback trend-follow), regime gate by ADX, initially 3-pair universe (BTC/ETH/SOL with ETH primary), 0.5% flat risk.
 - **2026-04-22 evening:** universe expanded to 4 pairs — added BNBUSDT as A-only (walk-forward +12.03R / PF 3.03 / maxDD 1.17%, B disabled per OOS −0.27R). XRP and DOGE tested and rejected (both failed OOS, PF 0.74).
 - **2026-04-23:** universe expanded to 8 pairs — added OP/NEAR/AVAX/SUI as A-only secondary. Screened 14 candidates on 365d combined; top-6 ran walk-forward (273d/92d). Added (OOS test combined sumR / PF / eq%): OP (+19.18R / 2.76 / +9.99%), NEAR (+11.23R / 6.24 / +5.67%), AVAX (+8.73R / 1.55 / +4.47%), SUI (+8.21R / 1.65 / +4.06%). DOT rejected (failed OOS: −12.56R / PF 0.66 despite strongest in-sample PF — walk-forward caught overfit). APT passed (+10.08R) but excluded pending second pass. B playbook disabled for all 4 new pairs (OOS per-pair B weak/negative: AVAX −2.11R, OP −0.79R, APT −6.76R, SUI +1.20R var, NEAR +4.43R on 6 trades). Also: news classifier fixed — word-boundary regex replaces substring match (cured "stEWARt" → `war:` false positives), tier-2 keywords (hack/exploit/collapse/sec lawsuit) require crypto context, impact threshold raised to 4+ hits for `high`.
+- **2026-04-27:** universe expanded to 10 pairs — added XLM/TAO as A-only secondary. Second-batch screening of 12 candidates (HYPE, ATOM, APT, LINK, TON, KAS, TAO, WLD, ENA, XLM, PENDLE, JUP) on 365d combined; top-8 ran walk-forward. Added (OOS combined sumR / PF / eq%): XLM (+13.02R / 1.88 / +6.62%), TAO (+10.01R / 2.55 / +5.01%, best PF among additions). Rejected by walk-forward despite passing in-sample: WLD (−1.24R OOS, in-sample WR 67% looked best), JUP (−10.21R OOS catastrophe, BB=3 train cherry-pick). Marginal-rejected (OOS <+5R gate): ATOM (+4.55R), ENA (+3.31R), HYPE (+8.04R but DD 5.42% edge). B playbook disabled on both — OOS B-test was XLM −0.34R, TAO −1.83R consistent with prior altcoin pattern.
 - **Validated:** `src/backtest.ts` walk-forward 273d/92d on 365d data, all 3 pairs positive OOS, +16.41R test combined.
 - **Cleaned:** vault/Playbook/archive/ (v1 rules), removed 4 obsolete skills, rewrote trader.md + trade-scan.md.
 

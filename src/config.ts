@@ -95,7 +95,7 @@ export const config = {
   },
 
   /**
-   * Active trading watchlist — strategy-v2 universe.
+   * Active trading watchlist — strategy-v2 universe (10 pairs).
    *
    * Core (added 2026-04-22):
    *   - ETHUSDT primary: +12.81R OOS, PF 1.43
@@ -109,12 +109,18 @@ export const config = {
    *   - AVAXUSDT:  +8.73R test, PF 1.55, +4.47% eq
    *   - SUIUSDT:   +8.21R test, PF 1.65, +4.06% eq
    *
+   * Second altcoin expansion (added 2026-04-27) — A-only per fresh walk-forward:
+   *   - XLMUSDT:  +13.02R test, PF 1.88, +6.62% eq (strongest second-batch)
+   *   - TAOUSDT:  +10.01R test, PF 2.55, +5.01% eq (best PF, 68% retention)
+   *   Rejected from same batch: WLD (-1.24R), JUP (-10.21R) caught by walk-forward.
+   *
    * Adding pair: requires 365d backtest with PF≥1.3 + walk-forward positive
-   * on held-out. Override via WATCHLIST env var (comma-separated).
+   * on held-out (≥+5R OOS sumR per pair). Override via WATCHLIST env var.
    */
   watchlist: list('WATCHLIST', [
     'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT',
     'OPUSDT', 'NEARUSDT', 'AVAXUSDT', 'SUIUSDT',
+    'XLMUSDT', 'TAOUSDT',
   ]),
 
   /**

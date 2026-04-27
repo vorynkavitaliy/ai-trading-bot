@@ -1,6 +1,6 @@
 ---
 name: Strategy v2 — Regime-Aware Range/Trend
-description: Core operational strategy — BB/Z-score range fade (Playbook A) + EMA pullback trend-follow (Playbook B), regime-gated by ADX. Backed by 365d backtest + walk-forward on 8-pair universe (BTC/ETH/SOL/BNB/OP/NEAR/AVAX/SUI).
+description: Core operational strategy — BB/Z-score range fade (Playbook A) + EMA pullback trend-follow (Playbook B), regime-gated by ADX. Backed by 365d backtest + walk-forward on 10-pair universe (BTC/ETH/SOL/BNB/OP/NEAR/AVAX/SUI/XLM/TAO).
 type: playbook
 priority: 1
 version: 2.0
@@ -27,23 +27,25 @@ validated_by: src/backtest.ts (walk-forward 273d/92d)
 
 ### Активные пары
 
-**8 пар** — из walk-forward backtest (273d train / 92d test):
+**10 пар** — из walk-forward backtest (273d train / 92d test):
 
 | Пара | Test edge | Playbook | Роль |
 |---|---|---|---|
 | ETHUSDT | +12.81R / PF 1.43 | A + B | **Primary** — самая чистая range/trend механика |
 | OPUSDT | +19.18R / PF 2.76 | **A only** | Secondary — strongest alt OOS (added 2026-04-23) |
+| **XLMUSDT** | **+13.02R / PF 1.88** | **A only** | Secondary — second-batch top (added 2026-04-27) |
 | BNBUSDT | +12.03R / PF 3.03 | **A only** | Secondary — B fails (−0.27R) |
 | NEARUSDT | +11.23R / PF 6.24 | **A only** | Secondary — best risk-adj OOS (added 2026-04-23) |
+| **TAOUSDT** | **+10.01R / PF 2.55** | **A only** | Secondary — best PF in-class (added 2026-04-27) |
 | AVAXUSDT | +8.73R / PF 1.55 | **A only** | Secondary — B fails (−2.11R) (added 2026-04-23) |
 | SUIUSDT | +8.21R / PF 1.65 | **A only** | Secondary — B marginal (added 2026-04-23) |
 | BTCUSDT | +1.92R / PF 1.17 | A + B | Secondary — benchmark для режима |
 | SOLUSDT | +1.68R / PF 1.09 | **A only** | Secondary — B проваливается (−4.22R) |
 
-**A-only пары (SOL, BNB, OP, NEAR, AVAX, SUI):** при `regime=TREND` — SKIP, не применять B. B работает только на BTC + ETH.
+**A-only пары (8 of 10):** SOL, BNB, OP, NEAR, AVAX, SUI, XLM, TAO. При `regime=TREND` — SKIP, не применять B. B работает только на BTC + ETH.
 
-Добавление новых пар — **только после** 365d backtest + walk-forward с test PF ≥ 1.3 и sumR > 0.
-Тестированные и отклонённые: XRP (test PF 0.74), DOGE (PF 0.74), DOT (in-sample PF 2.41 но OOS −12.56R / PF 0.66 — walk-forward пойма overfit), TRX (PF 1.05 in-sample), TIA (1.09), UNI (1.27), LTC (1.35 in-sample но не пошёл на WF), LINK (1.53 in-sample), INJ (1.50 in-sample), ARB (1.50), APT (+10.08R OOS — passed, но resetved до second pass).
+Добавление новых пар — **только после** 365d backtest + walk-forward с test sumR ≥ +5R и PF ≥ 1.3.
+Тестированные и отклонённые: XRP (test PF 0.74), DOGE (PF 0.74), DOT (in-sample PF 2.41 но OOS −12.56R), TRX (PF 1.05), TIA (1.09), UNI (1.27), LTC (1.35), LINK (1.53), INJ (1.50), ARB (1.50), APT (passed twice OOS +10/+7R, reserved для third pass), WLD (in-sample WR 67% но OOS −1.24R — overfit caught), JUP (OOS −10.21R catastrophe), ATOM (+4.55R below gate), ENA (+3.31R below gate), TON (DD 6.25%), KAS (PF 1.34 marginal), PENDLE (PF 1.10).
 
 ### Таймфреймы
 
