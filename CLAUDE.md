@@ -254,6 +254,45 @@ Key rules:
 
 ---
 
+# Operator-opened positions
+
+A position on Bybit that the bot did not open via `execute.ts` is **operator-opened**. Detected by Phase 0 reconcile (`bybit_without_vault` divergence). Policy added 2026-04-26 after BNB partial-execution incident where operator manually filled the missing leg.
+
+## On detection (first cycle a new position appears)
+
+1. **Create vault file:** `vault/Trades/{DATE}_{SYMBOL}_{DIR}.md` with frontmatter field `trade_category: operator-opened`. Document operator's actual SL/TP/qty/entry exactly as Bybit reports them — do NOT reverse-engineer to strategy values.
+2. **Send Telegram alert** with position details. Operator may not be at terminal; alert ensures visibility.
+3. **Append to today's Journal** under a `### [HH:MM UTC] — operator-opened ${SYMBOL}` entry.
+
+## Cycle-by-cycle while open
+
+- Report status every cycle (mark, unrealized R, distance to SL/TP, daily DD impact). Same as managed positions.
+- Include in Telegram heartbeat (55-65 min cadence) just like managed positions.
+- Run audit.ts at any sign of divergence — operator may close without notifying.
+
+## What the bot MUST NOT do
+
+- **NEVER auto-modify operator's SL or TP.** May suggest via Telegram ("SL X is wider than strategy Y, confirm hold?") but DO NOT execute changes without explicit operator instruction.
+- **DO NOT apply playbook abort rules** (ADX<20 for B, ADX≥28 for A) to operator positions. Those abort clauses belong to the playbook entry mechanism — operator opened outside the playbook, abort logic does not transfer. Wait for explicit instruction or natural SL/TP/server-side fill.
+- **DO NOT open additional positions on the same pair** as operator without explicit coordination — no parallel-direction doubling.
+
+## Out-of-universe symbols (DOGE, XRP, etc., not in 8-pair watchlist)
+
+- Still monitor every cycle via audit.ts output (it already enumerates all positions, not just universe).
+- Report status, alert on adverse moves, respect operator's SL/TP unchanged.
+- **DO NOT generate new entries** on that symbol via Playbook A/B — entry edge unverified for that symbol.
+
+## Close authority hierarchy
+
+The bot may close an operator position only via these paths:
+
+1. **Operator explicit instruction** (Telegram message, terminal command) → close immediately as instructed.
+2. **Server-side SL/TP** triggered by Bybit → already handled by exchange; bot just reconciles and writes postmortem.
+3. **HyroTrader hard limits** (4% daily DD or 8% total DD reached) → close ALL positions including operator-opened. Survival > etiquette.
+4. **Playbook abort rules** → DO NOT apply to operator positions. Bot's authority limit is its own positions.
+
+---
+
 # Trading Sessions (UTC)
 
 | Session | Hours | Notes |
