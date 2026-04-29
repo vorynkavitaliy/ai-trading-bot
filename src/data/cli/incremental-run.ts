@@ -1,6 +1,6 @@
-import { runIncremental } from '../data/backfill';
-import { close as closePg } from '../lib/db';
-import { log } from '../lib/logger';
+import { runIncremental } from '../backfill';
+import { close as closePg } from '../../lib/db';
+import { log } from '../../lib/logger';
 
 async function main() {
   await runIncremental();

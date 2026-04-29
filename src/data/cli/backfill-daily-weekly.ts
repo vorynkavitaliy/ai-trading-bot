@@ -2,10 +2,10 @@
 // 1D × 365 = 365 candles per pair. 1W × 52 = 52 candles per pair.
 // One API call per (pair, tf) since limit=1000 covers it.
 
-import { query } from '../lib/db';
-import { fetchKlines, BybitKline, delay } from '../data/bybit-public';
-import { close as closePg } from '../lib/db';
-import { log } from '../lib/logger';
+import { query } from '../../lib/db';
+import { fetchKlines, BybitKline, delay } from '../bybit-public';
+import { close as closePg } from '../../lib/db';
+import { log } from '../../lib/logger';
 
 const SYMBOLS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'OPUSDT',

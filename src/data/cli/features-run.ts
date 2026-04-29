@@ -1,7 +1,7 @@
-import { getFeatures, recentFunding } from '../data/features';
-import { close as closePg } from '../lib/db';
-import { close as closeRedis } from '../lib/redis';
-import { log } from '../lib/logger';
+import { getFeatures, recentFunding } from '../features';
+import { close as closePg } from '../../lib/db';
+import { close as closeRedis } from '../../lib/redis';
+import { log } from '../../lib/logger';
 
 const SYMBOLS = ['BTCUSDT', 'ETHUSDT'];
 const TFS = ['5m', '15m', '60m', '240m'];

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { QueueEntry } from '../backtest/claude-walk/types';
-import { log } from '../lib/logger';
+import { QueueEntry } from '../types';
+import { log } from '../../../lib/logger';
 
 interface BatchEntry {
   id: string;
@@ -15,7 +15,7 @@ interface BatchEntry {
   rationale?: string;
 }
 
-const VAULT_BACKTEST = path.resolve(__dirname, '../../vault/Backtest');
+const VAULT_BACKTEST = path.resolve(__dirname, '../../../../vault/Backtest');
 
 async function main() {
   const inputPath = process.argv[2];

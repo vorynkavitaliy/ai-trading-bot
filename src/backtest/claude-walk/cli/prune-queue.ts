@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { QueueEntry } from '../backtest/claude-walk/types';
-import { log } from '../lib/logger';
+import { QueueEntry } from '../types';
+import { log } from '../../../lib/logger';
 
-const VAULT_BACKTEST = path.resolve(__dirname, '../../vault/Backtest');
+const VAULT_BACKTEST = path.resolve(__dirname, '../../../../vault/Backtest');
 
 async function main() {
   const minReasons = process.argv[2] ? parseInt(process.argv[2], 10) : 2;
