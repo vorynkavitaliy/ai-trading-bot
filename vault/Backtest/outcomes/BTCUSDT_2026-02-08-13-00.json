@@ -1,0 +1,12 @@
+{
+  "id": "BTCUSDT_2026-02-08-13-00",
+  "symbol": "BTCUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "BB-upper touch + RSI 68 + vol spike 1.57 in continuation up move (3 green bars). OI -0.07% neutral but PDI 30 vs MDI 12 — strong up. Do not fade.",
+    "id": "BTCUSDT_2026-02-08-13-00",
+    "symbol": "BTCUSDT",
+    "ts": 1770555600000,
+    "decidedAt": "2026-04-29T14:14:48.843Z"
+  }
+}

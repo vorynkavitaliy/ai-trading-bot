@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-02-08-13-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "BB-upper touch in ADX 33 trending UP (PDI 28 vs MDI 14). Funding -0.28% slightly negative + OI +2.88%/24h. ls_top_position 2.1 extreme long — fade target but trend strong.",
+    "id": "ETHUSDT_2026-02-08-13-00",
+    "symbol": "ETHUSDT",
+    "ts": 1770555600000,
+    "decidedAt": "2026-04-29T14:14:48.843Z"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-02-04-17-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "BB-touch trigger в нисходящем тренде (ADX 28.9, EMA bear stack, MDI 33 vs PDI 9). Funding +0.51% при падающей цене + OI -2.67%/24h = retail в ловушке, продолжается capitulation, а не разворот.",
+    "id": "ETHUSDT_2026-02-04-17-00",
+    "symbol": "ETHUSDT",
+    "ts": 1770224400000,
+    "decidedAt": "2026-04-29T13:43:00.000Z"
+  }
+}

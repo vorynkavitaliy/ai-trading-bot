@@ -1,0 +1,12 @@
+{
+  "id": "BTCUSDT_2026-02-05-16-00",
+  "symbol": "BTCUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "ADX 56 trending, бар 15:00 пробил с $69.5k вниз до $66.6k (-4% за час), отскок до $68.3k — это retracement в downtrend, не reversal. MDI 35 vs PDI 10.",
+    "id": "BTCUSDT_2026-02-05-16-00",
+    "symbol": "BTCUSDT",
+    "ts": 1770307200000,
+    "decidedAt": "2026-04-29T13:44:00.000Z"
+  }
+}

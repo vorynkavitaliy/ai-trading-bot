@@ -1,0 +1,28 @@
+{
+  "id": "BTCUSDT_2026-02-19-13-00",
+  "symbol": "BTCUSDT",
+  "decision": {
+    "kind": "enter",
+    "side": "long",
+    "entryPrice": 65875.1,
+    "sl": 65540,
+    "tp1": 66604,
+    "tp2": 67284,
+    "sizePct": 0.6,
+    "rationale": "ADX 16 (RANGE, не trend), узкая BB ($65924-$67284), цена на BB.lower с vol spike 2.34×. OI стабилен (+0.36%/24h), funding +0.15% умеренный, no extreme L/S. Stop под recent low $65714 даёт R:R 2.2:1 на TP1, 4.2:1 на TP2.",
+    "id": "BTCUSDT_2026-02-19-13-00",
+    "symbol": "BTCUSDT",
+    "ts": 1771153200000,
+    "decidedAt": "2026-04-29T13:46:00.000Z"
+  },
+  "trade": {
+    "entry": 65908.03755000001,
+    "exit": 67250.35800000001,
+    "exitTs": 1771153260000,
+    "pnlR": 2.5890263744758557,
+    "pnlUsd": 270.5792874123783,
+    "feesUsd": 11.676649964792738,
+    "fundingUsd": 0,
+    "exitReason": "tp2"
+  }
+}

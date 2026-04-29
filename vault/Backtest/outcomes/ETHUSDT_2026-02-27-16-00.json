@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-02-27-16-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "Capitulation signature (funding -0.46%, OI -5.8%/24h, long liq 11.9M vs short 3.2M) but ADX 25 still trending. No reclaim of BB.lower yet — premature.",
+    "id": "ETHUSDT_2026-02-27-16-00",
+    "symbol": "ETHUSDT",
+    "ts": 1772120400000,
+    "decidedAt": "2026-04-29T13:50:00.000Z"
+  }
+}

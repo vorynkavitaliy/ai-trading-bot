@@ -1,43 +1,47 @@
 ---
 name: Trading Vault
-description: Claude's working memory for autonomous trading
+description: Claude's working memory for autonomous trading (v3)
 type: root-index
 ---
 
-# Trading Vault — Claude's Working Memory
+# Trading Vault — Claude's Working Memory (v3)
 
 This vault is **Claude's persistent brain** between `/loop` cycles.
 
 Context resets every cycle — but a professional trader does not forget yesterday's thesis, last week's lesson, or the reason a position was opened. The vault is where that continuity lives.
 
 Every cycle Claude:
-1. **Reads** the relevant slices of the vault to restore operating context
-2. **Thinks** using the Playbook and accumulated Lessons
-3. **Acts** on the live market (mechanical scan + LLM judgement)
-4. **Writes** back — updates thesis, logs decisions, records outcomes
+1. **Reads** the relevant slices to restore operating context.
+2. **Thinks** using the Playbook and accumulated lessons.
+3. **Acts** on the live market via `npm run execute` (mechanical scan + LLM judgement).
+4. **Writes** back — material events to the Journal, frontmatter updates to Trade files, Postmortem after close.
 
-The vault is plain Markdown. Everything is versioned via git — every decision, every change of mind, every mistake is auditable.
+Plain Markdown. Everything versioned via git.
 
 ---
 
-## Folder Map
+## Folder map
 
-### `Playbook/` — The Rules I Operate By
-
-Stable documents that codify how I trade. Living — I refine them when experience reveals a new truth, but they do not change per cycle.
+### `Playbook/` — The rules I operate by
 
 | File | Purpose |
 |---|---|
 | `00-trader-identity.md` | Who I am as a trader. Read FIRST every cycle. |
-| `entry-rules.md` | The conditions under which I open a position. |
-| `exit-rules.md` | The conditions under which I close. |
-| `regime-playbook.md` | What to do in Bull / Bear / Range / Transitional. |
-| `session-playbook.md` | Asian / London / NY tactics and expectations. |
-| `lessons-learned.md` | Mistakes I have made and vowed not to repeat. |
+| `strategy.md` | THE strategy. Numeric entry/exit rules. **Empty until Stage 4 finalization.** |
+| `lessons-learned.md` | Paid-in-PnL lessons. Append after each Postmortem if non-obvious. |
+| `telegram-templates.md` | Russian templates for operator messages. No slang. |
 
-### `Thesis/` — My Current View On Each Pair
+### `Watchlist/` — Forward-looking state
 
-One file per tracked symbol (`BTCUSDT.md`, `ETHUSDT.md`, ...). Continuously updated as the market evolves. My current bias, structural levels I care about, what would invalidate my view.
+| File | Purpose |
+|---|---|
+| `catalysts.md` | Auto-updated by `npm run news:fetch` — calendar events ±72h. |
+| `zones.md` | Manual structural levels (S/R, weekly opens, etc). |
+| `PAUSE.md` | Created when red flags fire — blocks new entries until operator clears. |
+
+### `Thesis/` — Per-pair narrative
+
+`BTCUSDT.md`, `ETHUSDT.md`. Current bias, key levels, scenario tree. Updated when a 1H/4H close materially changes the picture, not every cycle.
 
 **Frontmatter schema:**
 ```yaml
@@ -47,117 +51,93 @@ bias: long | short | neutral
 timeframe_bias: { "4H": "bull", "1H": "range", "15M": "bull" }
 key_levels: { support: [...], resistance: [...] }
 invalidation: "4H close below $68k"
-updated: 2026-04-17T14:32:00Z
+updated: 2026-04-29T14:32:00Z
 ---
 ```
 
-### `Watchlist/active.md` — Setups I'm Waiting For
+### `Trades/` — Active and closed positions
 
-Specific conditions I am hunting. "If SOL sweeps 82 and reclaims — I long."
-Once a setup triggers or invalidates, it is moved out of this file.
-
-### `Journal/` — Daily Log
-
-One file per trading day: `YYYY-MM-DD.md`. The narrative of the day — news, regime, key decisions made, mood of the market. Written by Claude continuously through the day.
-
-### `Trades/` — Active And Closed Positions
-
-One file per trade: `YYYY-MM-DD_SYMBOL_DIRECTION.md`. Created when I open a position, updated as it evolves, archived when closed. Not just numbers — the REASONING behind the trade.
+`{YYYY-MM-DD}_{SYMBOL}_{LONG|SHORT}.md`. Created by `execute.ts` on open. Updated to `closed` on exit. The full reasoning lives here.
 
 **Frontmatter schema:**
 ```yaml
 ---
 symbol: BTCUSDT
-direction: long
+side: buy | sell
+order_type: market | limit
 status: open | closed
-opened: 2026-04-17T14:32:00Z
-closed: null
-entry: 68420
-sl: 67200
-tp: 71000
-size_usd: 5000
-risk_r: 0.5
-confluence: 6
-regime: bull
-thesis_snapshot: "4H OB + 1H sweep + BTC bull"
-closed_reason: null
-r_multiple: null
+opened_at: 2026-04-29T14:32:00Z
+entry_price: 77580
+sl: 77100
+tp1: 78340
+tp2: 79200
+risk_pct: 0.6
+total_qty: 0.34
+accounts: ["200000/Vitalii=0.27","50000/Ivan=0.07"]
 ---
 ```
 
-### `Postmortem/` — Learning From What Happened
+### `Postmortem/` — Learning from what happened
 
-After a trade closes, a postmortem is written analyzing what actually happened vs. what I expected. Wins AND losses. The goal is to extract a lesson that updates `Playbook/lessons-learned.md` if meaningful.
+`{YYYY-MM-DD}_{SYMBOL}_{LONG|SHORT}.md`. Written within 1h of close. Wins AND losses. The goal is to extract a lesson worth adding to `Playbook/lessons-learned.md`.
 
-### `Research/` — Methodology Library
+### `Journal/` — Daily event log
 
-Symlink to `.claude/docs/research/` — 35 source books on market theory, SMC, technical analysis, algorithmic trading, ML, risk, crypto microstructure. I cite these directly when my reasoning leans on a specific methodology.
+`{YYYY-MM-DD}.md`. Material events + one hourly heartbeat (top of hour ±10 min). NOT every cycle, NOT every scan dump.
+
+After each closed ISO week, `npm run vault:compact` aggregates the dailies into `_weekly/{YYYY-Www}.md` and removes the dailies. Weekly summaries are the long-term archive of journal narrative.
+
+### `Backtest/` — Stage 3.5 Claude Walk artifacts
+
+`queue.json`, `snapshots/`, `decisions/`, `outcomes/`. Created by `npm run walk:prepare` and processed via `/loop 30m /claude-walk-decide`. Reports go to `report.txt`.
 
 ---
 
-## The Cycle Protocol
+## Cycle protocol (short)
 
-See `CLAUDE.md` → `THE TRADER — Operating Protocol` for the canonical rules.
-
-Short version, every `/loop 3m /trade-scan` fire:
+See `CLAUDE.md` and `.claude/commands/trade-scan.md` for the canonical version.
 
 ```
-PHASE 1 — LOAD CONTEXT (read)
-  • Playbook/00-trader-identity.md          (who I am)
-  • Playbook/lessons-learned.md             (what I must not repeat)
-  • Thesis/{SYMBOL}.md                      (my current view)
-  • Watchlist/active.md                     (what I am hunting)
-  • Journal/{TODAY}.md                      (today's story so far)
-
-PHASE 2 — GATHER DATA
-  • npm run scan (mechanical: prices, indicators, confluence)
-  • MCP Bybit tools if needed (orderbook, ticker)
-  • WebSearch on 15-min cycle (macro, news)
-
-PHASE 3 — THINK (as trader, not analyst)
-  • Does my thesis still hold? Has something changed?
-  • Is a watchlist setup now active?
-  • Are open positions still valid?
-  • What does the Playbook say about this regime/session/structure?
-
-PHASE 4 — ACT
-  • Open / close / adjust via executor (all accounts, Promise.all)
-
-PHASE 5 — PERSIST (write back)
-  • Update Thesis/{SYMBOL}.md if view changed
-  • Append to Journal/{TODAY}.md — decisions + reasoning
-  • Create Trades/{...}.md on new open
-  • Update Trades/{...}.md frontmatter on close + create Postmortem/
-  • If a non-obvious lesson emerged: append to Playbook/lessons-learned.md
+PHASE 0 — RECONCILE         npm run reconcile (blocking)
+PHASE 1 — LOAD CONTEXT       Playbook + Watchlist + Thesis + today's Journal
+PHASE 2 — GATHER DATA        npm run scan
+PHASE 3 — RISK GATE          Check funding window / dead zone / kill switch / heat
+PHASE 4 — DECIDE PER PAIR    Apply strategy.md when populated; otherwise SKIP
+PHASE 5 — NEWS CHECK         WebSearch on trigger only
+PHASE 6 — EXECUTE            npm run execute -- --symbol ... --rationale-file ...
+PHASE 7 — PERSIST            Material events → Journal; new open → Trade file; close → Postmortem
 ```
 
 ---
 
 ## Principles
 
-1. **Write decisions, not narration.** "I closed ETH because 1H BOS invalidated thesis" > "I was watching ETH and then it moved."
-2. **Cite structure and data.** Every claim backed by a level, a level-of-structure, or a research source.
-3. **Update don't accumulate.** A stale Thesis is worse than no Thesis. Rewrite it.
+1. **Write decisions, not narration.** "Closed ETH SHORT at SL: ADX 22→26 during bar, regime flipped" > "ETH was strong so I closed."
+2. **Cite structure and data.** Every claim backed by a level, an indicator value, or a research note.
+3. **Update don't accumulate.** A stale Thesis is worse than no Thesis. Rewrite it on regime change.
 4. **Short files beat long files.** A sharp thesis in 10 lines beats a meandering one in 100.
-5. **The vault is the source of truth for WHY.** Bybit is the source of truth for WHAT (positions, PnL). Both must agree.
+5. **Vault is source of truth for WHY.** Bybit is source of truth for WHAT (positions, PnL, fills). Both must agree (`reconcile.ts` enforces this every cycle).
+6. **Skipping is a valid answer.** No setup ≠ no decision. SKIP-because-X is a recorded decision.
 
 ---
 
-## Archive workflow (introduced 2026-04-27)
+## Compaction policy
 
-**Why:** Pre-2026-04-27 the active `Journal/` directory grew to 2.7MB (80% of vault) because every 5-min cycle wrote a heartbeat section. Now: only material events go to Journal (see CLAUDE.md § Vault Protocol § Write on material events ONLY). For files that DO accumulate (Trades/, Postmortem/, daily Journals), periodic archive keeps the working directories small.
+| Folder | Compacted? | Notes |
+|---|---|---|
+| `Playbook/*` | No | Stable rules, hand-edited only. |
+| `Watchlist/*` | No | Auto-overwritten on each news fetch. |
+| `Thesis/*` | No | Updated in place when bias changes. |
+| `Trades/*` | **Never** | Paid memory. Each trade is a permanent record. |
+| `Postmortem/*` | **Never** | Same — these are the source of lessons. |
+| `Journal/{date}.md` | Weekly | `vault:compact` runs Sunday 23:55 UTC. |
+| `Backtest/*` | Never | Frozen artifact of Stage 3.5. |
 
-**How:** `npx tsx src/archive-vault.ts --days 60` moves files older than 60 days from `Journal/`, `Trades/`, `Postmortem/` into `{dir}/archive/{YYYY-MM}/` subdirectories.
+---
 
-**Cadence:** monthly. End of month or whenever working dir feels cluttered.
+## What changed vs v2
 
-**Procedure:**
-
-1. **Preview:** `npx tsx src/archive-vault.ts --days 60 --dry-run` — see what would move.
-2. **Apply:** `npx tsx src/archive-vault.ts --days 60` — actually move files.
-3. **Verify:** `git status` — confirm moves are tracked as renames.
-4. **Commit:** `chore(vault): archive {YYYY-MM} files older than 60d` — single dedicated commit.
-
-Archived files stay in git history. They're moved, not deleted. To browse old content: `vault/Journal/archive/2026-04/2026-04-17.md` etc.
-
-**Templates and index files** (`_template.md`, `_index.md`, anything starting with `_`) are never archived — they're working files.
+- `entry-rules.md` / `exit-rules.md` / `regime-playbook.md` → unified into `strategy.md`.
+- `Watchlist/active.md` → setups live in Journal as material events; `catalysts.md` is forward-looking.
+- `archive-vault.ts` (60-day move-to-archive) → `weekly-compact.ts` (Sunday roll-up of dailies into `_weekly/`).
+- Universe: 10 pairs → 2 pairs (BTC + ETH).

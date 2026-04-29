@@ -1,0 +1,12 @@
+{
+  "id": "BTCUSDT_2026-02-05-20-00",
+  "symbol": "BTCUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "ADX 59, RSI 17 extreme oversold, ATR 2.3% violent. Close 63739 below BB.lower 64717. Long liq 54M (massive flush).",
+    "id": "BTCUSDT_2026-02-05-20-00",
+    "symbol": "BTCUSDT",
+    "ts": 1770321600000,
+    "decidedAt": "2026-04-29T14:14:48.842Z"
+  }
+}

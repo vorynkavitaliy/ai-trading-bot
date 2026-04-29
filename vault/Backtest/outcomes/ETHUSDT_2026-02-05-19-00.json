@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-02-05-19-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "Continuation, ADX 48, vol_spike 0.5 — actually low volume on this bar despite candidate trigger. Drift down.",
+    "id": "ETHUSDT_2026-02-05-19-00",
+    "symbol": "ETHUSDT",
+    "ts": 1770318000000,
+    "decidedAt": "2026-04-29T14:14:48.842Z"
+  }
+}

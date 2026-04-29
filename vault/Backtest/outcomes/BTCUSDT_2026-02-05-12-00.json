@@ -1,0 +1,12 @@
+{
+  "id": "BTCUSDT_2026-02-05-12-00",
+  "symbol": "BTCUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "ADX 57.6 (extreme trend), MDI 33 vs PDI 7.7, EMA bear stack, OI -4%/24h, long liq $23M > short $13M. Чистый downtrend, BB-touch это continuation, не reversal.",
+    "id": "BTCUSDT_2026-02-05-12-00",
+    "symbol": "BTCUSDT",
+    "ts": 1770292800000,
+    "decidedAt": "2026-04-29T13:44:00.000Z"
+  }
+}

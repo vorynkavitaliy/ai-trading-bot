@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-02-20-15-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "Ambiguous BB.upper touch + EMA55 reclaim в downtrend. Vol 5.07× очень высокий, funding -0.37% (short squeeze in progress). Bar high $1980 пробил BB.upper $1967, но close $1963 = rejection. Нет ясного сигнала: SHORT против squeeze опасно, LONG continuation требует подтверждения.",
+    "id": "ETHUSDT_2026-02-20-15-00",
+    "symbol": "ETHUSDT",
+    "ts": 1771248600000,
+    "decidedAt": "2026-04-29T13:46:00.000Z"
+  }
+}

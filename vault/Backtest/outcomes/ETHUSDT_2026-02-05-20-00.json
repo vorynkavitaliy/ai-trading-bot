@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-02-05-20-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "ADX 50, RSI 21, ATR 3.18%, funding -1.3% extreme. OI -10.9%/24h. Capitulation in extreme.",
+    "id": "ETHUSDT_2026-02-05-20-00",
+    "symbol": "ETHUSDT",
+    "ts": 1770321600000,
+    "decidedAt": "2026-04-29T14:14:48.842Z"
+  }
+}

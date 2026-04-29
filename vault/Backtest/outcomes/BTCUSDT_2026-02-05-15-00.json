@@ -1,0 +1,12 @@
+{
+  "id": "BTCUSDT_2026-02-05-15-00",
+  "symbol": "BTCUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "ADX 56, RSI 20 deep oversold, ATR 1.78%. Flash crash bar -2.4% in 1h. Catastrophic flush, not bottom.",
+    "id": "BTCUSDT_2026-02-05-15-00",
+    "symbol": "BTCUSDT",
+    "ts": 1770303600000,
+    "decidedAt": "2026-04-29T14:14:48.841Z"
+  }
+}

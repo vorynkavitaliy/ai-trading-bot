@@ -1,0 +1,12 @@
+{
+  "id": "BTCUSDT_2026-02-03-17-00",
+  "symbol": "BTCUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "ADX 29, MDI 36 vs PDI 7, RSI 30 in steep downtrend (74874 from 78097 in 2h). Funding +0.37% positive at falling price = retail trapped.",
+    "id": "BTCUSDT_2026-02-03-17-00",
+    "symbol": "BTCUSDT",
+    "ts": 1770138000000,
+    "decidedAt": "2026-04-29T14:14:48.841Z"
+  }
+}

@@ -1,17 +1,30 @@
 {
   "200000": {
-    "apiKey": ["your_api_key_here"],
-    "apiSecret": ["your_api_secret_here"],
-    "testnet": true,
-    "demoTrading": true,
-    "label": "200k account"
+    "key": {
+      "apiKey": "your_api_key_here",
+      "apiSecret": "your_api_secret_here",
+      "testnet": true,
+      "demoTrading": true,
+      "label": "200k account"
+    }
+
+    "key2": {
+      "apiKey": "your_api_key_here",
+      "apiSecret": "your_api_secret_here",
+      "testnet": true,
+      "demoTrading": true,
+      "label": "200k account"
+    }
   },
 
   "50000": {
-    "apiKey": ["your_api_key_here"],
-    "apiSecret": ["your_api_secret_here"],
-    "testnet": true,
-    "demoTrading": true,
-    "label": "50k account"
+    "key3": {
+      "apiKey": "your_api_key_here",
+      "apiSecret": "your_api_secret_here",
+      "testnet": true,
+      "demoTrading": true,
+      "label": "50k account"
+    }
+
   }
 }

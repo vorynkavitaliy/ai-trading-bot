@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-02-05-14-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "ADX 43.96 trending, EMA bear stack, OI -5.32%/24h (массовый exit), long liq $19.9M > short $13.4M, taker delta -$411k. BB-breakdown с продолжающимся sell pressure.",
+    "id": "ETHUSDT_2026-02-05-14-00",
+    "symbol": "ETHUSDT",
+    "ts": 1770300000000,
+    "decidedAt": "2026-04-29T13:44:00.000Z"
+  }
+}

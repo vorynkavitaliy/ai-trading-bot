@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-02-15-19-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "Продолжение predыдущего бара. ADX 34, MDI 40 vs PDI 9, RSI 20.45 (extreme oversold но в downtrend). Сильный sell aggression.",
+    "id": "ETHUSDT_2026-02-15-19-00",
+    "symbol": "ETHUSDT",
+    "ts": 1770835200000,
+    "decidedAt": "2026-04-29T13:46:00.000Z"
+  }
+}

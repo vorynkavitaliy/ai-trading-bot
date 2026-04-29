@@ -1,0 +1,43 @@
+==== Claude Walk Report ====
+queue size: 534, outcomes: 50, pending: 484
+
+TOTAL:
+  candidates: 50, enters: 1, skips: 49
+  W:1 L:0 (WR 100.0%)
+  totalR: 2.59, avgR: 2.589
+  best: 2.59R, worst: 0.00R
+
+---- by symbol ----
+ETHUSDT: 28 cand. (skip 28/28)
+BTCUSDT:
+  candidates: 22, enters: 1, skips: 21
+  W:1 L:0 (WR 100.0%)
+  totalR: 2.59, avgR: 2.589
+  best: 2.59R, worst: 0.00R
+
+---- by side (enters only) ----
+BTCUSDT-long:
+  candidates: 1, enters: 1, skips: 0
+  W:1 L:0 (WR 100.0%)
+  totalR: 2.59, avgR: 2.589
+  best: 2.59R, worst: 0.00R
+
+---- by candidate reason ----
+bb_touch_lower:
+  candidates: 24, enters: 1, skips: 23
+  W:1 L:0 (WR 100.0%)
+  totalR: 2.59, avgR: 2.589
+  best: 2.59R, worst: 0.00R
+volume_spike:
+  candidates: 46, enters: 1, skips: 45
+  W:1 L:0 (WR 100.0%)
+  totalR: 2.59, avgR: 2.589
+  best: 2.59R, worst: 0.00R
+rsi_extreme_low:
+  candidates: 34, enters: 1, skips: 33
+  W:1 L:0 (WR 100.0%)
+  totalR: 2.59, avgR: 2.589
+  best: 2.59R, worst: 0.00R
+ema55_pullback: 5 cand. (skip 5/5)
+rsi_extreme_high: 5 cand. (skip 5/5)
+bb_touch_upper: 6 cand. (skip 6/6)

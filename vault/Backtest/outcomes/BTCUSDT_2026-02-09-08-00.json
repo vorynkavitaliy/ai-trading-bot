@@ -1,0 +1,12 @@
+{
+  "id": "BTCUSDT_2026-02-09-08-00",
+  "symbol": "BTCUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "ADX 25 borderline trend, RSI 43 not oversold. ATR 1.08 squeeze. Could be range but no convincing oversold trigger.",
+    "id": "BTCUSDT_2026-02-09-08-00",
+    "symbol": "BTCUSDT",
+    "ts": 1770624000000,
+    "decidedAt": "2026-04-29T14:14:48.843Z"
+  }
+}

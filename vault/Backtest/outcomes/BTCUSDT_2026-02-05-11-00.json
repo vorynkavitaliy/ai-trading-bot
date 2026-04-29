@@ -1,0 +1,12 @@
+{
+  "id": "BTCUSDT_2026-02-05-11-00",
+  "symbol": "BTCUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "ADX 57 extreme trend, ATR 1.47%. Volume spike on continuation, not reversal.",
+    "id": "BTCUSDT_2026-02-05-11-00",
+    "symbol": "BTCUSDT",
+    "ts": 1770289200000,
+    "decidedAt": "2026-04-29T14:14:48.841Z"
+  }
+}

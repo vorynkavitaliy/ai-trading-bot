@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-03-01-02-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "BB-upper touch in UP trend (ADX 34, PDI 37 vs MDI 11, OI +4.46%/24h, funding +0.57% extreme positive). Continuation, not fade.",
+    "id": "ETHUSDT_2026-03-01-02-00",
+    "symbol": "ETHUSDT",
+    "ts": 1772322000000,
+    "decidedAt": "2026-04-29T13:50:00.000Z"
+  }
+}

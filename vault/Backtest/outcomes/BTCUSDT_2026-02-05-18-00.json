@@ -1,0 +1,12 @@
+{
+  "id": "BTCUSDT_2026-02-05-18-00",
+  "symbol": "BTCUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "ADX 56.8, RSI 23.74 (deep oversold), но цена пробила BB.lower $66453 → close $66313 ниже. EMA bear stack, MDI 36 vs PDI 8.3. Всё ещё trending down.",
+    "id": "BTCUSDT_2026-02-05-18-00",
+    "symbol": "BTCUSDT",
+    "ts": 1770314400000,
+    "decidedAt": "2026-04-29T13:44:00.000Z"
+  }
+}

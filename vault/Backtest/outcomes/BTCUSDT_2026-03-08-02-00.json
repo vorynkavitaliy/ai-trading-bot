@@ -1,0 +1,12 @@
+{
+  "id": "BTCUSDT_2026-03-08-02-00",
+  "symbol": "BTCUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "Extreme downtrend ADX 55, PDI 7 vs MDI 31, ATR_pct 0.57 (squeeze). Trend continuation — fade attempts get stopped immediately.",
+    "id": "BTCUSDT_2026-03-08-02-00",
+    "symbol": "BTCUSDT",
+    "ts": 1772938800000,
+    "decidedAt": "2026-04-29T13:50:00.000Z"
+  }
+}

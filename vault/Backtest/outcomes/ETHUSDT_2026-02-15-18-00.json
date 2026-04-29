@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-02-15-18-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "ADX 31.85 trending, MDI 36 vs PDI 10, OI -7.77%/24h, RSI 22.83 в downtrend continuation. Цена пробила BB.lower вниз ($1958 close, BB.lower $1965).",
+    "id": "ETHUSDT_2026-02-15-18-00",
+    "symbol": "ETHUSDT",
+    "ts": 1770831600000,
+    "decidedAt": "2026-04-29T13:46:00.000Z"
+  }
+}

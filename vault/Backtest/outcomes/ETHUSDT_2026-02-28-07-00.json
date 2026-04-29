@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-02-28-07-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "Deep capitulation (ADX 43, PDI 7 vs MDI 39, OI -7.4%/24h, funding -0.57%, long liq 13.6M vs short 3.7M). Trend too strong to fade.",
+    "id": "ETHUSDT_2026-02-28-07-00",
+    "symbol": "ETHUSDT",
+    "ts": 1772175600000,
+    "decidedAt": "2026-04-29T13:50:00.000Z"
+  }
+}

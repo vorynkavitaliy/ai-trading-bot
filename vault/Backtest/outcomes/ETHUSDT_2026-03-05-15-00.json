@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-03-05-15-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "Bull-stack pullback candidate (ADX 24, EMA bull, vol 3.3x) but RSI 44 not oversold and R:R only 1:1 on TP1. Insufficient edge.",
+    "id": "ETHUSDT_2026-03-05-15-00",
+    "symbol": "ETHUSDT",
+    "ts": 1772722800000,
+    "decidedAt": "2026-04-29T13:50:00.000Z"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-02-05-16-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "Самый сильный capitulation signal в очереди (funding -1.07% extreme negative, OI -8.8%/24h). НО ADX 45.7 + EMA bear stack + цена прямо на BB.lower $1996 без reclaim. R:R с stop под $1924 крайне плохой (~0.5).",
+    "id": "ETHUSDT_2026-02-05-16-00",
+    "symbol": "ETHUSDT",
+    "ts": 1770307200000,
+    "decidedAt": "2026-04-29T13:44:00.000Z"
+  }
+}

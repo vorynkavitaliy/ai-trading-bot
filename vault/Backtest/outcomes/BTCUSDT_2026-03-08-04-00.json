@@ -1,0 +1,12 @@
+{
+  "id": "BTCUSDT_2026-03-08-04-00",
+  "symbol": "BTCUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "Continuation of prior bar. ADX 57 extreme. Same downtrend, same skip rationale.",
+    "id": "BTCUSDT_2026-03-08-04-00",
+    "symbol": "BTCUSDT",
+    "ts": 1772946000000,
+    "decidedAt": "2026-04-29T13:50:00.000Z"
+  }
+}

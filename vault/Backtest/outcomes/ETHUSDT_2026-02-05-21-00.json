@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-02-05-21-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "ADX 52, RSI 19, vol 1.25 (slowing). Still in capitulation, no reclaim of BB.lower.",
+    "id": "ETHUSDT_2026-02-05-21-00",
+    "symbol": "ETHUSDT",
+    "ts": 1770325200000,
+    "decidedAt": "2026-04-29T14:14:48.842Z"
+  }
+}

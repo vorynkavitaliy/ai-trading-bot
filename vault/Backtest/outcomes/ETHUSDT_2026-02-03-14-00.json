@@ -1,0 +1,12 @@
+{
+  "id": "ETHUSDT_2026-02-03-14-00",
+  "symbol": "ETHUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "ADX 30 trending down, MDI 31 vs PDI 13, EMA bear, OI -5.43%/24h. Continuation, not reversal.",
+    "id": "ETHUSDT_2026-02-03-14-00",
+    "symbol": "ETHUSDT",
+    "ts": 1770127200000,
+    "decidedAt": "2026-04-29T14:14:48.840Z"
+  }
+}

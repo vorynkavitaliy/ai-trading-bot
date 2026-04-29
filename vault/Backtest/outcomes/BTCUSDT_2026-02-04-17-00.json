@@ -1,0 +1,12 @@
+{
+  "id": "BTCUSDT_2026-02-04-17-00",
+  "symbol": "BTCUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "ADX 39 extreme, RSI 26, funding +0.6%, prior bar -1.5%. Free fall, do not fade.",
+    "id": "BTCUSDT_2026-02-04-17-00",
+    "symbol": "BTCUSDT",
+    "ts": 1770224400000,
+    "decidedAt": "2026-04-29T14:14:48.841Z"
+  }
+}

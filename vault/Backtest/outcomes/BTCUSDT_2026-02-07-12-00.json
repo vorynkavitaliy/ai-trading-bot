@@ -1,0 +1,12 @@
+{
+  "id": "BTCUSDT_2026-02-07-12-00",
+  "symbol": "BTCUSDT",
+  "decision": {
+    "kind": "skip",
+    "reason": "EMA55-pullback in bear stack, ADX 25, PDI 27 vs MDI 21 (PDI growing). Funding +0.14%, OI -1.64%. Bear EMA stack contradicts pullback-long; SHORT trigger here.",
+    "id": "BTCUSDT_2026-02-07-12-00",
+    "symbol": "BTCUSDT",
+    "ts": 1770465600000,
+    "decidedAt": "2026-04-29T14:14:48.843Z"
+  }
+}
