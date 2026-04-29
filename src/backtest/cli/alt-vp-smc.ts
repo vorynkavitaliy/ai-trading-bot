@@ -26,6 +26,12 @@ const PER_SYMBOL: Record<string, Partial<BtcVpSmcParams>> = {
   ETHUSDT: { maxStopAtrPct: 4.5 },
   SOLUSDT: { maxStopAtrPct: 5.5 },
   XRPUSDT: { maxStopAtrPct: 5.5 },
+  AVAXUSDT: { maxStopAtrPct: 5.5 },
+  BNBUSDT:  { maxStopAtrPct: 4.0 },  // lower vol than typical alt, more BTC-like beta
+  LTCUSDT:  { maxStopAtrPct: 4.5 },
+  LINKUSDT: { maxStopAtrPct: 5.0 },
+  NEARUSDT: { maxStopAtrPct: 5.5 },
+  ATOMUSDT: { maxStopAtrPct: 5.0 },
 };
 
 function paramsFor(symbol: string): BtcVpSmcParams {

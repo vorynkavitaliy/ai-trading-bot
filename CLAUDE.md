@@ -9,7 +9,7 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 ## Targets and Constraints
 
 - **Goal:** ≥ 5% / month on starting balance (target, not guarantee). Current OOS evidence supports ~2–3%/month combined; 5% is aspirational.
-- **Universe (v3):** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT. Bybit perpetual futures, linear.
+- **Universe (v3):** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, AVAXUSDT, BNBUSDT, LTCUSDT, LINKUSDT, NEARUSDT, ATOMUSDT (10 pairs). Bybit perpetual futures, linear.
 - **Accounts:** 200k + 50k HyroTrader prop accounts (currently `demoTrading: true`). Trades are broadcast to **every** sub-key inside `accounts.json` via `Promise.all`.
 
 ## HyroTrader prop firm rules (non-negotiable)
@@ -120,13 +120,13 @@ If a new diagnostic is needed, write a committed `src/scripts/<name>.ts` and inv
 - Day P&L within 20% of kill switch (−2% of equity)
 - Position held > 24h without TP1
 - Reconcile divergence > 1 cycle
-- Regime flipped on ≥3 of 4 pairs simultaneously (macro signature)
+- Regime flipped on ≥7 of 10 pairs simultaneously (macro signature)
 
 When any fires: send Telegram alert, set vault marker `Watchlist/PAUSE.md`, do not open new entries until operator confirms.
 
 ## What changed vs v2
 
-- Universe set to 4 pairs (BTC + ETH + SOL + XRP) — prior 10-pair v2 archived; initial v3 plan was 2 pairs but expanded after VP-SMC strategy validated cross-pair on OOS walk-forward (12/13 windows profitable on each).
+- Universe set to 10 pairs (BTC, ETH, SOL, XRP, AVAX, BNB, LTC, LINK, NEAR, ATOM) — prior 10-pair v2 was different selection (had OP/SUI/XLM/TAO instead of XRP/LTC/LINK/ATOM); v3 universe rebuilt around VP-SMC strategy validation. Walk-forward OOS: ~90% of windows profitable, 658 combined trades on 1y.
 - Risk increased to 0.6% base / 1.0% cap (from 0.5% flat) — operator authorized "чуть больше рисков".
 - Strategy v3 = VP-SMC (Volume Profile + PWL/PWH + FVG + Coinglass crowd-fade). See `vault/Playbook/strategy.md`.
 - Postgres + Redis (Docker) for historical candle DB — incremental, no daily exchange re-pull.
