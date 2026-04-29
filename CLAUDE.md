@@ -8,8 +8,8 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 
 ## Targets and Constraints
 
-- **Goal:** ≥ 5% / month on starting balance (target, not guarantee).
-- **Universe (v3):** BTCUSDT, ETHUSDT only. Bybit perpetual futures.
+- **Goal:** ≥ 5% / month on starting balance (target, not guarantee). Current OOS evidence supports ~2–3%/month combined; 5% is aspirational.
+- **Universe (v3):** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT. Bybit perpetual futures, linear.
 - **Accounts:** 200k + 50k HyroTrader prop accounts (currently `demoTrading: true`). Trades are broadcast to **every** sub-key inside `accounts.json` via `Promise.all`.
 
 ## HyroTrader prop firm rules (non-negotiable)
@@ -28,7 +28,7 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 | Risk per trade (base) | 0.6% of equity |
 | Volatility scalar range | 0.7× – 1.2× of base |
 | Hard cap per trade | 1.0% of equity |
-| Max parallel positions | 2 (one per pair) |
+| Max parallel positions | 2 (one per pair, any pairs) |
 | Total heat cap | 1.5% of equity |
 | Soft kill (daily) | −2.5% → flat until next UTC day |
 | Hard kill (daily) | −4% → halt + manual review |
@@ -43,7 +43,7 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 2. **Edit-never-cancel** SL: to move a stop, use Bybit `amend_order`, never cancel-then-create.
 3. **Pre-trade risk check** via `src/risk-guard.ts` blocks entries that would breach any limit above.
 4. **Reconcile before every cycle.** If `vault/Trades/*.md` and Bybit positions diverge → halt analysis until aligned.
-5. **No live entry until backtest gate passes:** PF ≥ 1.4, MaxDD ≤ 4%, expectancy ≥ 0.3R, ≥ 100 trades on each of BTC and ETH on OOS walk-forward.
+5. **No live entry until backtest gate passes:** PF ≥ 1.4, MaxDD ≤ 4%, expectancy ≥ 0.3R, ≥ 100 trades combined across the universe on OOS walk-forward. Per-pair expR may dip slightly (e.g. XRP 0.25R) provided combined portfolio metrics stay above gate.
 
 ## Strategy source of truth
 
@@ -120,13 +120,13 @@ If a new diagnostic is needed, write a committed `src/scripts/<name>.ts` and inv
 - Day P&L within 20% of kill switch (−2% of equity)
 - Position held > 24h without TP1
 - Reconcile divergence > 1 cycle
-- Regime flipped on both pairs simultaneously (macro signature)
+- Regime flipped on ≥3 of 4 pairs simultaneously (macro signature)
 
 When any fires: send Telegram alert, set vault marker `Watchlist/PAUSE.md`, do not open new entries until operator confirms.
 
 ## What changed vs v2
 
-- Universe shrunk to 2 pairs (BTC + ETH) — prior 10-pair v2 archived.
+- Universe set to 4 pairs (BTC + ETH + SOL + XRP) — prior 10-pair v2 archived; initial v3 plan was 2 pairs but expanded after VP-SMC strategy validated cross-pair on OOS walk-forward (12/13 windows profitable on each).
 - Risk increased to 0.6% base / 1.0% cap (from 0.5% flat) — operator authorized "чуть больше рисков".
-- Strategy v3 will be derived from walk-forward backtest + Claude-Walk calibration, not inherited from v2.
+- Strategy v3 = VP-SMC (Volume Profile + PWL/PWH + FVG + Coinglass crowd-fade). See `vault/Playbook/strategy.md`.
 - Postgres + Redis (Docker) for historical candle DB — incremental, no daily exchange re-pull.

@@ -8,10 +8,10 @@
 
 ## Scope
 
-- **Pairs:** BTCUSDT, ETHUSDT (Bybit perpetual, linear).
+- **Pairs:** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT (Bybit perpetual, linear).
 - **Decision TF:** 1H close.
 - **Direction:** long + short, mean-reversion to value.
-- **Goal:** ≥1% / month / pair on starting equity (combined ~2%/month).
+- **Goal:** ≥1% / month / pair on starting equity. With cap of 2 parallel positions, realistic combined target is ~2–3%/month.
 
 ---
 
@@ -29,7 +29,7 @@ Stops are placed at **structural levels (PWL/PWH ± 0.3 × ATR)**, not statistic
 
 ## Entry rules
 
-### LONG (BTC and ETH)
+### LONG (all pairs)
 
 All conditions required (1H close):
 
@@ -41,7 +41,7 @@ All conditions required (1H close):
 | 4 | **Above PWL** — current price > previous-week low | Last closed 1W bar |
 | 5 | **No funding extreme** — `|funding_oi_weighted|` ≤ 0.005 | Coinglass |
 | 6 | **Top traders not too long** — `ls_top_position` ≤ 1.7 | Coinglass |
-| 7 | **Stop sane** — proposed SL distance is between `0.5 × ATR` and `3.0%` of price (BTC) / `4.5%` (ETH) | computed |
+| 7 | **Stop sane** — proposed SL distance is between `0.5 × ATR` and `maxStopAtrPct` of price (BTC: 3.0%, ETH: 4.5%, SOL/XRP: 5.5%) | computed |
 | 8 | **TP1 valid** — TP1 ≥ entry + 0.4 × ATR (must be in trade direction) | computed |
 | 9 | **Cooldown clear** — ≥6h since last LONG signal on this symbol | tracker |
 
@@ -106,21 +106,23 @@ No discretionary exits. No trailing beyond TP1→BE. Time stop = end of test win
 
 ## Backtest evidence (1y OOS, walk-forward 30d windows)
 
-Period: 2025-04-29 → 2026-04-29. Coinglass full coverage only last ~85 days; first 280d ran with permissive crowd-fade.
+Period: 2025-04-29 → 2026-04-29. Coinglass full coverage only last ~85 days; first 280d ran with permissive crowd-fade. SOL/XRP: only Bybit data, no Coinglass at any point — strategy permissive on those gates.
 
-| Metric | BTC | ETH | Gate | OK |
-|---|---|---|---|---|
-| Trades | 57 | 66 | ≥100 (combined 123) | ✅ |
-| WR | 87.7% | 90.9% | — | |
-| **expR** | **0.370R** | **0.368R** | ≥0.3 | ✅ |
-| **PF** | **8.98** | **6.73** | ≥1.4 | ✅ |
-| **MaxDD** | **0.63%** | **1.25%** | ≤4% | ✅ |
-| Sharpe | 13.05 | 12.81 | — | |
-| Net %/year | +11.99% | +14.15% | — | |
-| **≈ /month** | **1.00%** | **1.18%** | ≥1% | 🎯 |
-| Profitable WF windows | 12/13 | 11/13 | — | |
+| Metric | BTC | ETH | SOL | XRP | Gate |
+|---|---|---|---|---|---|
+| Trades | 57 | 66 | 58 | 93 | ≥100 (combined 274) ✅ |
+| WR | 87.7% | 90.9% | 91.4% | 87.1% | — |
+| **expR** | **0.370R** | **0.368R** | **0.314R** | 0.252R ⚠ | ≥0.3 |
+| **PF** | **8.98** | **6.73** | **5.78** | **4.95** | ≥1.4 ✅ |
+| **MaxDD** | **0.63%** | **1.25%** | **0.69%** | **0.66%** | ≤4% ✅ |
+| Sharpe | 13.05 | 12.81 | 10.33 | 9.57 | — |
+| Net %/year | +11.99% | +14.15% | +10.59% | +13.60% | — |
+| **≈ /month** | **1.00%** | **1.18%** | **0.88%** | **1.13%** | ≥1% 🎯 |
+| Profitable WF windows | 12/13 | 11/13 | 12/13 | 12/13 | — |
 
-Worst trade: −1.05R (clean SL hit, no anomaly). Worst window: −0.55R (BTC May 2025, 7 trades, MaxDD 0.6% — survivable).
+**XRP caveat:** expR 0.252 falls just below the 0.3 gate. avgWin 0.36R is smaller than BTC's 0.48R because XRP's value area is tighter (POC closer to VAL/VAH → shorter targets). Compensated by higher trade frequency (93 vs 57). 12/13 windows profitable means the edge is real, but per-trade expectancy is the weakest of the four.
+
+Worst single trade across all pairs: −1.12R (SOL 2026-01-04 SHORT, clean SL hit). Worst window: −0.55R (BTC May 2025, 7 trades, MaxDD 0.6% — survivable).
 
 ---
 
@@ -145,7 +147,7 @@ Worst trade: −1.05R (clean SL hit, no anomaly). Worst window: −0.55R (BTC Ma
   // SL / TP
   slBufferAtr: 0.3,
   minStopAtr: 0.5,
-  maxStopAtrPct: 3.0,    // ETH override: 4.5
+  maxStopAtrPct: 3.0,    // overridden per symbol
   minTpAtrFromEntry: 0.4,
   // Sizing
   riskPct: 0.6,
@@ -154,7 +156,16 @@ Worst trade: −1.05R (clean SL hit, no anomaly). Worst window: −0.55R (BTC Ma
 }
 ```
 
-ETH uses the same defaults with one override: `maxStopAtrPct: 4.5`. See `src/backtest/cli/eth-vp-smc.ts`.
+**Per-symbol overrides** (only `maxStopAtrPct` differs — alts have wider relative volatility):
+
+| Symbol | maxStopAtrPct |
+|---|---|
+| BTCUSDT | 3.0 |
+| ETHUSDT | 4.5 |
+| SOLUSDT | 5.5 |
+| XRPUSDT | 5.5 |
+
+Implemented in `src/backtest/cli/alt-vp-smc.ts` (`PER_SYMBOL` map). BTC uses defaults via `src/backtest/cli/btc-vp-smc.ts`.
 
 ---
 

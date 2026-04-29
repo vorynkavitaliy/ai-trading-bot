@@ -38,6 +38,10 @@
     "backtest:vpsmc:eth": "tsx src/backtest/cli/eth-vp-smc.ts 85",
     "backtest:vpsmc:eth:y": "tsx src/backtest/cli/eth-vp-smc.ts 365",
     "backtest:vpsmc:eth:wf": "tsx src/backtest/cli/eth-vp-smc.ts 365 wf",
+    "backtest:vpsmc:sol": "tsx src/backtest/cli/alt-vp-smc.ts SOLUSDT 365",
+    "backtest:vpsmc:sol:wf": "tsx src/backtest/cli/alt-vp-smc.ts SOLUSDT 365 wf",
+    "backtest:vpsmc:xrp": "tsx src/backtest/cli/alt-vp-smc.ts XRPUSDT 365",
+    "backtest:vpsmc:xrp:wf": "tsx src/backtest/cli/alt-vp-smc.ts XRPUSDT 365 wf",
 
     "_archived_backtest_combined": "tsx src/backtest/cli/run.ts combined 365",
     "_archived_backtest_grid": "tsx src/backtest/cli/grid.ts 365",

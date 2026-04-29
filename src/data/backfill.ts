@@ -53,7 +53,7 @@ async function insertFunding(symbol: string, rows: { ts: number; rate: number }[
   return r.rowCount;
 }
 
-async function backfillCandles(symbol: string, tf: string, fromMs: number, toMs: number) {
+export async function backfillCandles(symbol: string, tf: string, fromMs: number, toMs: number) {
   const stepMs = TF_MS[tf] * 1000; // 1000 candles per request
   let cursor = fromMs;
   let totalInserted = 0;
@@ -91,7 +91,7 @@ async function backfillCandles(symbol: string, tf: string, fromMs: number, toMs:
   log.info('backfill candles done', { symbol, tf, inserted: totalInserted, batches });
 }
 
-async function backfillFunding(symbol: string, fromMs: number, toMs: number) {
+export async function backfillFunding(symbol: string, fromMs: number, toMs: number) {
   // Bybit funding has 8h cadence — ~1100 entries / year
   let cursor = fromMs;
   let totalInserted = 0;
