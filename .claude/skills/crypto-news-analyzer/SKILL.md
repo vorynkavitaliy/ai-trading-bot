@@ -8,7 +8,7 @@ description: >
 user_invocable: true
 arguments:
   - name: topic
-    description: "Specific topic or event to analyze (optional — omit for general scan)"
+    description: 'Specific topic or event to analyze (optional — omit for general scan)'
     required: false
 ---
 
@@ -32,6 +32,7 @@ Assess news for crypto market impact with actionable trading implications. Two c
 ### 1. `vault/Watchlist/catalysts.md` — forward calendar
 
 Sections:
+
 - 🔴 IMMEDIATE — within 24h (highest-impact gates)
 - 🟡 THIS WEEK — 1-7 days (sizing ×0.5 days, entry blocks)
 - 🟢 MONITOR — 7-14 days (context, no action yet)
@@ -42,6 +43,7 @@ Sections:
 ### 2. Scan-summary news block
 
 Per-cycle fields:
+
 - `bias` — risk-on / risk-off / neutral
 - `impact` — high / medium / low
 - `risk_multiplier` — applied to sizing (pre-computed by scanner)
@@ -61,16 +63,19 @@ Per-cycle fields:
 ## Event Classification
 
 ### Tier 1 — High Impact
+
 Fed rate decisions, FOMC, CPI/PPI/NFP, SEC major actions, ETF decisions, BlackRock/Fidelity large moves, war escalation/de-escalation, major exchange hacks, sovereign crypto moves.
 
 **Effect:** reduce exposure ×0.25, no new entries 30 min before/after the print.
 
 ### Tier 2 — Medium Impact
+
 Crypto-company earnings (COIN, MSTR), protocol upgrades, stablecoin depeg risk, regulatory framework announcements, whale movements >$100M.
 
 **Effect:** ×0.5 sizing, monitor SLs.
 
 ### Tier 3 — Low Impact
+
 Partnerships, listings, analyst opinions, social trends.
 
 **Effect:** note for context, no action.
@@ -81,28 +86,33 @@ If a news trigger references price > 3% from current price (e.g., "BTC crashes t
 
 ## Bias → direction gating
 
-| News bias | Effect on 12-factor Factor 7 | Entry gating |
-|---|---|---|
-| risk-off (2-cycle confirmed) | SHORT = 1, LONG = 0 | block LONG, allow SHORT |
-| risk-on (2-cycle confirmed) | LONG = 1, SHORT = 0 | block SHORT, allow LONG |
-| neutral | both = 1 | no gating |
-| stale / >3% from current | both = 1 (neutral) | no gating |
+| News bias                    | Effect on 12-factor Factor 7 | Entry gating            |
+| ---------------------------- | ---------------------------- | ----------------------- |
+| risk-off (2-cycle confirmed) | SHORT = 1, LONG = 0          | block LONG, allow SHORT |
+| risk-on (2-cycle confirmed)  | LONG = 1, SHORT = 0          | block SHORT, allow LONG |
+| neutral                      | both = 1                     | no gating               |
+| stale / >3% from current     | both = 1 (neutral)           | no gating               |
 
 ## Workflow
 
 ### Step 1 — Read catalysts.md every cycle (Phase 1)
+
 Check 🔴 IMMEDIATE section. If any event within 30 min → block new entries (especially ≥ 10/12 A setups) and tighten SLs on open positions.
 
 ### Step 2 — Read scan-summary news block
+
 Note bias, impact, triggers, headlines. Apply 2-cycle rule before acting on any non-catalogued trigger.
 
 ### Step 3 — Apply sizing multiplier
+
 Stacking multipliers (news × regime × F&G), but floor at ×0.1:
+
 ```
 effective_risk = base_risk × news_multiplier × regime_multiplier × fng_multiplier
 ```
 
 ### Step 4 — WebSearch on trigger (Phase 3)
+
 When catalysts.md flags a binary event within 2h, WebSearch for latest read: "{event} today update". Don't summarize headlines — extract the narrative pivot.
 
 ### Step 5 — Output
