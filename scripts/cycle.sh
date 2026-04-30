@@ -32,6 +32,17 @@ if ! npx tsx src/scripts/heartbeat.ts > /tmp/cycle-hb.out 2>&1; then
   log "heartbeat failed (see /tmp/cycle-hb.out)"
 fi
 
+# 3b) Coinglass incremental — every 12th cycle (~hourly) to respect 30 req/min limit.
+#     Coinglass granularity is 4h, so hourly refresh is plenty.
+MINUTE=$(date -u +%-M)
+if [ "$MINUTE" -lt 5 ] 2>/dev/null; then
+  if ! npx tsx src/data/cli/cg-incremental.ts > /tmp/cycle-cg.out 2>&1; then
+    log "cg-incremental failed (see /tmp/cycle-cg.out)"
+  else
+    log "cg-incremental done (top of hour)"
+  fi
+fi
+
 # 4) Set trigger flag iff actionable + risk-allowed signals are present.
 ENTER_COUNT=$(jq -r '.enterCount // 0' /tmp/scan-decide-latest.json 2>/dev/null || echo 0)
 if [ "$ENTER_COUNT" -gt 0 ] 2>/dev/null; then

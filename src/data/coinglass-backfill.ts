@@ -14,19 +14,22 @@ const HISTORY_LIMIT = 540;
 // it has the deepest data and is consistently available.
 const REF_EXCHANGE = 'Binance';
 
-const SYMBOLS_COIN = ['BTC', 'ETH', 'SOL', 'BNB', 'OP', 'NEAR', 'AVAX', 'SUI', 'XLM', 'TAO'];
+// v3 FINAL universe: 10 pairs matching VP-SMC strategy.
+const SYMBOLS_COIN = ['BTC', 'ETH', 'SOL', 'XRP', 'AVAX', 'BNB', 'LTC', 'LINK', 'NEAR', 'ATOM'];
 const PAIRS = [
   { symbol: 'BTC',  pair: 'BTCUSDT'  },
   { symbol: 'ETH',  pair: 'ETHUSDT'  },
   { symbol: 'SOL',  pair: 'SOLUSDT'  },
-  { symbol: 'BNB',  pair: 'BNBUSDT'  },
-  { symbol: 'OP',   pair: 'OPUSDT'   },
-  { symbol: 'NEAR', pair: 'NEARUSDT' },
+  { symbol: 'XRP',  pair: 'XRPUSDT'  },
   { symbol: 'AVAX', pair: 'AVAXUSDT' },
-  { symbol: 'SUI',  pair: 'SUIUSDT'  },
-  { symbol: 'XLM',  pair: 'XLMUSDT'  },
-  { symbol: 'TAO',  pair: 'TAOUSDT'  },
+  { symbol: 'BNB',  pair: 'BNBUSDT'  },
+  { symbol: 'LTC',  pair: 'LTCUSDT'  },
+  { symbol: 'LINK', pair: 'LINKUSDT' },
+  { symbol: 'NEAR', pair: 'NEARUSDT' },
+  { symbol: 'ATOM', pair: 'ATOMUSDT' },
 ];
+// Old v2 universe pairs left in DB but no longer refreshed:
+// OP, SUI, XLM, TAO. Removed from current SYMBOLS_COIN/PAIRS.
 
 function delay(ms: number) {
   return new Promise(r => setTimeout(r, ms));

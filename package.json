@@ -34,6 +34,15 @@
     "execute": "tsx src/execute.ts",
     "backtest:portfolio": "tsx src/backtest/cli/portfolio.ts 365 0.375 4",
 
+    "trader:cycle": "scripts/cycle.sh",
+    "trader:cron:install": "scripts/cron-install.sh",
+    "trader:cron:uninstall": "scripts/cron-uninstall.sh",
+    "trader:status": "scripts/cron-status.sh",
+    "trader:logs": "tail -f /tmp/cycle.log",
+    "trader:start": "scripts/start-trader.sh",
+    "trader:attach": "tmux attach -t claude-trader",
+    "trader:stop": "tmux kill-session -t claude-trader",
+
     "backtest:vpsmc": "tsx src/backtest/cli/btc-vp-smc.ts 85",
     "backtest:vpsmc:y": "tsx src/backtest/cli/btc-vp-smc.ts 365",
     "backtest:vpsmc:wf": "tsx src/backtest/cli/btc-vp-smc.ts 365 wf",
