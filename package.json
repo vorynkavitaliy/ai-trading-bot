@@ -29,8 +29,10 @@
     "cg:incremental": "tsx src/data/cli/cg-incremental.ts",
 
     "scan": "tsx src/scan-summary.ts all",
+    "scan:decide": "tsx src/scan-decide.ts",
     "reconcile": "tsx src/reconcile.ts",
     "execute": "tsx src/execute.ts",
+    "backtest:portfolio": "tsx src/backtest/cli/portfolio.ts 365 0.375 4",
 
     "backtest:vpsmc": "tsx src/backtest/cli/btc-vp-smc.ts 85",
     "backtest:vpsmc:y": "tsx src/backtest/cli/btc-vp-smc.ts 365",

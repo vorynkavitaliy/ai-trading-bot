@@ -3,7 +3,10 @@ import { getFeatures, FeatureSnapshot } from './data/features';
 import { getRiskState, RiskState } from './risk-guard';
 import { log } from './lib/logger';
 
-const SYMBOLS = ['BTCUSDT', 'ETHUSDT'];
+const SYMBOLS = [
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'AVAXUSDT',
+  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'NEARUSDT', 'ATOMUSDT',
+];
 const TFS = ['5m', '15m', '60m', '240m'] as const;
 
 interface CgRecentRow {

@@ -5,9 +5,9 @@ import { log } from './lib/logger';
 
 // Risk constants — must match CLAUDE.md § Risk budget v3
 export const RISK = {
-  riskPctBase: 0.6,
-  riskPctCap: 1.0,
-  maxParallelPositions: 2,
+  riskPctBase: 0.375,                       // 1.5% heat cap / 4 parallel = 0.375%
+  riskPctCap: 0.6,                          // hard cap if scaled up by vol multiplier
+  maxParallelPositions: 4,                  // one per pair, across 10-pair universe
   totalHeatCapPct: 1.5,
   dailyDrawdownSoftKillPct: -2.5,
   dailyDrawdownHardKillPct: -4.0,
@@ -120,7 +120,11 @@ export async function getRiskState(now: Date = new Date()): Promise<RiskState> {
   const totalHeatPct = equity > 0 ? (totalRisked / equity) * 100 : 0;
 
   const pairBlocked: Record<string, string> = {};
-  for (const symbol of ['BTCUSDT', 'ETHUSDT']) {
+  const universe = [
+    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'AVAXUSDT',
+    'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'NEARUSDT', 'ATOMUSDT',
+  ];
+  for (const symbol of universe) {
     const slCount = await countSlToday(now, symbol);
     if (slCount >= RISK.maxSlPerPairPerDay) {
       pairBlocked[symbol] = `${slCount} SL today (cap ${RISK.maxSlPerPairPerDay})`;

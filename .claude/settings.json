@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(test -f *)",
+      "Bash(test -d *)",
+      "Bash(test -e *)",
+      "Bash(test -s *)",
+      "Bash(test -r *)",
+      "Bash(test -w *)",
+      "Bash(stat *)",
+      "Bash(realpath *)",
+      "Bash(readlink *)"
+    ]
+  }
+}

@@ -2,12 +2,41 @@ import { query } from '../lib/db';
 import { log } from '../lib/logger';
 import { fetchKlines, fetchFunding, TF_MS, delay, BybitKline } from './bybit-public';
 
-// v3 universe: 10 pairs (BTC/ETH primary, 8 alts for extra setups)
-const SYMBOLS = [
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'OPUSDT',
-  'NEARUSDT', 'AVAXUSDT', 'SUIUSDT', 'XLMUSDT', 'TAOUSDT',
+// v3 FINAL universe: 10 pairs (VP-SMC strategy, cap-4 parallel).
+export const SYMBOLS = [
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'AVAXUSDT',
+  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'NEARUSDT', 'ATOMUSDT',
 ];
 const TFS = ['1m', '5m', '15m', '60m', '240m'];
+
+// Lighter incremental for live cycles: only the TFs scan-decide reads.
+// 60m for indicators+VP, 1D/1W for PWL/PWH. Skip 1m/5m/15m/240m (live decision doesn't use).
+export const TFS_FOR_SCAN = ['60m', '1D', '1W'];
+
+export async function refreshForScan(): Promise<void> {
+  const now = Date.now();
+  for (const symbol of SYMBOLS) {
+    for (const tf of TFS_FOR_SCAN) {
+      const r = await query<{ last: string | null }>(
+        `SELECT MAX(ts)::text AS last FROM candles WHERE symbol = $1 AND tf = $2`,
+        [symbol, tf]
+      );
+      const last = r.rows[0]?.last ? parseInt(r.rows[0].last, 10) : null;
+      const tfMsLocal = TF_MS[tf];
+      const from = last ? last + tfMsLocal : now - 30 * 24 * 60 * 60_000;
+      if (from >= now) continue;
+      await backfillCandles(symbol, tf, from, now);
+    }
+    // Funding refresh (cheap — at most 3 events/day)
+    const fr = await query<{ last: string | null }>(
+      `SELECT MAX(ts)::text AS last FROM funding_history WHERE symbol = $1`,
+      [symbol]
+    );
+    const lastF = fr.rows[0]?.last ? parseInt(fr.rows[0].last, 10) : null;
+    const fromF = lastF ? lastF + 60_000 : now - 7 * 24 * 60 * 60_000;
+    if (fromF < now) await backfillFunding(symbol, fromF, now);
+  }
+}
 
 async function insertCandles(
   symbol: string,

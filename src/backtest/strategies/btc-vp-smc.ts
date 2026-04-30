@@ -57,7 +57,7 @@ export const DEFAULT_BTC_VP_SMC: BtcVpSmcParams = {
   minStopAtr: 0.5,
   maxStopAtrPct: 3.0,
   minTpAtrFromEntry: 0.4,
-  riskPct: 0.6,
+  riskPct: 0.375,            // = 1.5% heat cap / 4 parallel positions (CLAUDE.md)
   cooldownHours: 6,
 };
 
@@ -78,7 +78,13 @@ function markEntry(symbol: string, side: 'long' | 'short', ts: number): void {
   lastEntryTs.set(`${symbol}:${side}`, ts);
 }
 
-interface VolumeProfile {
+// For replay/walk scripts that need to re-decide at historical points without
+// the cooldown map polluting decisions across runs.
+export function resetCooldownState(): void {
+  lastEntryTs.clear();
+}
+
+export interface VolumeProfile {
   poc: number;
   val: number;
   vah: number;
@@ -88,7 +94,7 @@ interface VolumeProfile {
 
 // Build a volume profile from a contiguous slice of bars.
 // Distributes each bar's volume evenly across bins overlapped by [low, high].
-function buildVolumeProfile(bars: Bar[], binCount: number, valuePct: number): VolumeProfile | null {
+export function buildVolumeProfile(bars: Bar[], binCount: number, valuePct: number): VolumeProfile | null {
   if (bars.length < 6) return null;
   const lo = Math.min(...bars.map((b) => b.low));
   const hi = Math.max(...bars.map((b) => b.high));

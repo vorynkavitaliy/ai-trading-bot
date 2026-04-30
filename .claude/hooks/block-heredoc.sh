@@ -102,4 +102,49 @@ MSG
   exit 2
 fi
 
+# Detect `$?` (exit code) and `$(...)` (command substitution) — Claude Code's
+# built-in classifier prompts on every cycle for these. Breaks /loop autonomy.
+if echo "$command" | grep -qE '(^|[^\\])\$\?|(^|[^\\])\$\('; then
+  cat >&2 <<'MSG'
+🚫 Shell expansion `$?` or `$(...)` blocked.
+
+Claude Code's built-in classifier prompts every cycle for `$?` (last exit code)
+and `$(...)` (command substitution). This breaks /loop autonomy.
+
+Use these patterns instead:
+
+  ❌ npx tsx src/scan-decide.ts > /tmp/x.json 2>&1; echo "exit $?"; ls -la /tmp/x.json
+  ✅ npx tsx src/scan-decide.ts > /tmp/x.json 2>&1
+     [then use Read tool on /tmp/x.json — exit code is in tool output, file size visible there]
+
+  ❌ DATA="$(cat /tmp/x.json)"
+  ✅ Use Read tool on /tmp/x.json directly
+
+The two-step pattern (run → Read) is in the allow-list. Don't chain exit-code echoes.
+
+See CLAUDE.md § "Forbidden shell patterns".
+MSG
+  exit 2
+fi
+
+# Detect bash process substitution — `<(...)` and `>(...)`.
+# Claude Code's built-in classifier prompts on every cycle for these. Breaks /loop autonomy.
+if echo "$command" | grep -qE '(^|[^[:alnum:]_])[<>]\('; then
+  cat >&2 <<'MSG'
+🚫 Process substitution `<(...)` / `>(...)` blocked.
+
+Claude Code's built-in classifier prompts on every cycle for process substitution,
+which breaks /loop autonomy. Use the two-step pattern instead:
+
+  ❌ jq ... <(npx tsx src/scan-decide.ts json)
+  ✅ npx tsx src/scan-decide.ts json > /tmp/decisions.json 2>&1
+     jq ... /tmp/decisions.json
+
+This pattern is already in the allow-list (`Bash(* > /tmp/*; *)`).
+
+See CLAUDE.md § "Forbidden shell patterns".
+MSG
+  exit 2
+fi
+
 exit 0

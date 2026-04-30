@@ -11,12 +11,21 @@ function getBot(): Telegraf {
   return bot;
 }
 
-export async function send(text: string): Promise<void> {
+// Escape HTML special chars: <, >, & — required because send() uses parse_mode='HTML'.
+// Without this, rationale text with `<=`, `>=`, `&` (e.g. strategy formulas) breaks parsing.
+export function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+export async function send(text: string, opts: { raw?: boolean } = {}): Promise<void> {
   const { chatId } = requireTelegram();
   const b = getBot();
+  // raw=true means caller has already escaped where needed (e.g. wants <b>...</b>).
+  // Default: escape entire body — safe for any plain-text content.
+  const body = opts.raw ? text : escapeHtml(text);
   try {
-    await b.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
-    log.debug('telegram sent', { len: text.length });
+    await b.telegram.sendMessage(chatId, body, { parse_mode: 'HTML' });
+    log.debug('telegram sent', { len: body.length });
   } catch (e: any) {
     log.error('telegram send failed', { err: e?.message ?? String(e) });
     throw e;

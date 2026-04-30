@@ -1,6 +1,6 @@
 # Strategy v3 — VP-SMC
 
-**Active.** Codified after backtest gate passed on BTC + ETH.
+**FINAL — production-ready.** Codified after portfolio backtest gate passed on 10-pair universe with cap-4 parallel.
 
 > Source of truth for entry/exit rules. If this contradicts CLAUDE.md, CLAUDE.md wins (operational charter > strategy file). Lessons-learned informs the next revision; it does not override active rules mid-cycle.
 
@@ -72,11 +72,11 @@ No discretionary exits. No trailing beyond TP1→BE. Time stop = end of test win
 
 ## Sizing
 
-- **Risk per trade base:** 0.6% of equity.
-- **Hard cap:** 1.0% (CLAUDE.md global).
-- **Leverage cap:** notional ≤ equity × 10. Strategy auto-trims qty if structural SL is too tight (good — avoids the −141R pre-fix incident).
-- **Max parallel:** 2 (one per pair).
-- **Total heat cap:** 1.5% of equity (CLAUDE.md).
+- **Risk per trade:** **0.375% of equity** (= 1.5% total heat cap / 4 max parallel).
+- **Leverage cap:** notional ≤ equity × 10. Strategy auto-trims qty if structural SL is too tight.
+- **Max parallel:** **4** (one per pair max, across 10-pair universe).
+- **Total heat cap:** 1.5% of equity (CLAUDE.md, never breached by design).
+- **Compounding:** every new entry sizes on current equity (not starting equity).
 
 ---
 
@@ -160,7 +160,7 @@ Worst single trade across all pairs: −1.12R (SOL 2026-01-04 SHORT, clean SL hi
   maxStopAtrPct: 3.0,    // overridden per symbol
   minTpAtrFromEntry: 0.4,
   // Sizing
-  riskPct: 0.6,
+  riskPct: 0.375,         // 1.5% heat cap / 4 parallel
   // Cooldown
   cooldownHours: 6,
 }
@@ -194,10 +194,46 @@ Implemented in `src/backtest/cli/alt-vp-smc.ts` (`PER_SYMBOL` map). BTC uses def
 
 ---
 
+## Portfolio backtest evidence (10 pairs, cap-4, $50k start)
+
+```
+window:       2025-04-29 → 2026-04-29 (365d)
+risk/trade:   0.375% (heat cap 1.5%)
+max parallel: 4 (one per pair, across 10 pairs)
+
+signals:      644 generated, 514 taken (79.8% take-rate)
+              130 skipped on cap-4 (no pair-collision skips — cooldown handled)
+
+trades:       514 (W:458 L:56)  WR: 89.1%
+expR:         0.308R   PF: 5.24
+MaxDD:        2.38%   ✅ (gate ≤4%)
+Sharpe:       13.30
+
+Net P&L:      +80.64% over 365 days
+avg /month:   6.72%   🎯 (gate ≥5%)
+
+monthly breakdown (compounding):
+  2025-05:  +5.48%  → $52,742
+  2025-06:  +5.55%  → $55,670
+  2025-07:  +3.95%  → $57,870
+  2025-08:  +6.29%  → $61,510
+  2025-09:  +4.39%  → $64,207
+  2025-10:  +4.90%  → $67,351
+  2025-11:  +2.60%  → $69,105   ← worst
+  2025-12:  +7.65%  → $74,391   ← best
+  2026-01:  +5.08%  → $78,172
+  2026-02:  +5.83%  → $82,733
+  2026-03:  +4.05%  → $86,082
+  2026-04:  +4.92%  → $90,319
+
+12 of 12 months profitable. Final equity $90,319 from $50k.
+```
+
 ## When to revisit
 
 - **WR < 60% on last 20 trades** → review.
 - **3 consecutive losing weeks** → pause and review.
+- **MaxDD > 3% in any rolling 30d window** → pause; gate is 4% but breaking 3% means risk profile shifted.
 - **A regime change in BTC structure** (ATH break, sub-50k crash) — value-area logic still works but PWL/PWH stretches; verify max-stop limits don't choke it.
 - **Coinglass coverage extends to full year** → re-run OOS to confirm crowd-fade adds edge.
 

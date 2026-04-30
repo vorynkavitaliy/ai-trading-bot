@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadAccounts, AccountKey } from './lib/accounts';
-import { getRest, withRetry } from './lib/bybit';
+import { getRest, withRetry, getInstrumentInfo, roundQtyToStep, roundPriceToTick } from './lib/bybit';
 import { query } from './lib/db';
-import { send } from './lib/telegram';
+import { notifyOpen } from './lib/tg-templates';
 import { precheckEntry, RISK } from './risk-guard';
 import { config } from './lib/config';
 import { log } from './lib/logger';
@@ -95,24 +95,13 @@ async function calcQtyFromRisk(account: AccountKey, args: CliArgs): Promise<numb
   return qty;
 }
 
-function roundQty(symbol: string, qty: number): string {
-  // BTCUSDT 0.001 step, ETHUSDT 0.01 step (Bybit defaults). Round down.
-  const step = symbol === 'BTCUSDT' ? 0.001 : symbol === 'ETHUSDT' ? 0.01 : 0.001;
-  const rounded = Math.floor(qty / step) * step;
-  return rounded.toFixed(symbol === 'BTCUSDT' ? 3 : 2);
-}
-
-function roundPrice(symbol: string, price: number): string {
-  // BTCUSDT tick 0.1, ETHUSDT tick 0.01
-  const tick = symbol === 'BTCUSDT' ? 0.1 : symbol === 'ETHUSDT' ? 0.01 : 0.1;
-  const rounded = Math.round(price / tick) * tick;
-  return rounded.toFixed(symbol === 'BTCUSDT' ? 1 : 2);
-}
-
 async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<AccountResult> {
   const result: AccountResult = { bucket: account.bucket, keyName: account.keyName, ok: false };
   try {
     const c = getRest(account);
+    // Fetch instrument metadata (qtyStep, tickSize, minOrderQty) — cached per process.
+    const info = await getInstrumentInfo(account, args.symbol);
+
     // Set leverage first (silently — it might already be set)
     try {
       await withRetry(() => c.setLeverage({
@@ -127,9 +116,24 @@ async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<Accou
       }
     }
 
-    const qty = await calcQtyFromRisk(account, args);
-    const qtyStr = roundQty(args.symbol, qty);
-    if (parseFloat(qtyStr) <= 0) throw new Error(`computed qty rounds to 0 (${qty})`);
+    const rawQty = await calcQtyFromRisk(account, args);
+    // Clamp to per-symbol order-type max — Bybit rejects market orders > maxMktOrderQty
+    // (often ~3× lower than maxOrderQty for limits, e.g. BNB 370 vs 940).
+    const orderMax = args.orderType === 'market' ? info.maxMktOrderQty : info.maxOrderQty;
+    let clampedQty = rawQty;
+    if (clampedQty > orderMax) {
+      log.warn('qty clamped to exchange max', {
+        symbol: args.symbol, account: account.keyName,
+        raw: rawQty, max: orderMax, orderType: args.orderType,
+      });
+      clampedQty = orderMax;
+    }
+    const qtyStr = roundQtyToStep(clampedQty, info);
+    const qtyNum = parseFloat(qtyStr);
+    if (qtyNum <= 0) throw new Error(`computed qty rounds to 0 (raw=${rawQty}, step=${info.qtyStep})`);
+    if (qtyNum < info.minOrderQty) {
+      throw new Error(`qty ${qtyNum} below minOrderQty ${info.minOrderQty} for ${args.symbol} — risk too small or stop too wide`);
+    }
 
     const orderParams: any = {
       category: 'linear',
@@ -139,14 +143,14 @@ async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<Accou
       qty: qtyStr,
       timeInForce: args.orderType === 'market' ? 'IOC' : 'GTC',
       reduceOnly: false,
-      stopLoss: roundPrice(args.symbol, args.sl),         // server-side SL within 5 min
+      stopLoss: roundPriceToTick(args.sl, info),
       slTriggerBy: 'LastPrice',
     };
     if (args.orderType === 'limit') {
-      orderParams.price = roundPrice(args.symbol, args.entryPrice!);
+      orderParams.price = roundPriceToTick(args.entryPrice!, info);
     }
     if (args.tp1) {
-      orderParams.takeProfit = roundPrice(args.symbol, args.tp1);
+      orderParams.takeProfit = roundPriceToTick(args.tp1, info);
       orderParams.tpTriggerBy = 'LastPrice';
     }
 
@@ -221,24 +225,21 @@ async function notifyTelegram(args: CliArgs, results: AccountResult[]): Promise<
   if (!config.telegram.botToken || !config.telegram.chatId) return;
   const succ = results.filter(r => r.ok);
   const fail = results.filter(r => !r.ok);
-  const dir = args.side === 'buy' ? 'LONG' : 'SHORT';
-  const lines = [
-    `📈 ВХОД ${args.symbol} ${dir}`,
-    '',
-    `Цена входа: ${args.entryPrice?.toFixed(2) ?? 'market'}`,
-    `Стоп-лосс: ${args.sl.toFixed(2)}` + (args.riskPct ? ` (риск ${args.riskPct}%)` : ''),
-    args.tp1 ? `Тейк-1: ${args.tp1.toFixed(2)}` : '',
-    args.tp2 ? `Тейк-2: ${args.tp2.toFixed(2)}` : '',
-    '',
-    `Аккаунты: ${succ.length}/${results.length} успешно`,
-    ...succ.map(r => `  ${r.bucket}/${r.keyName} qty=${r.qty}`),
-    ...(fail.length > 0 ? ['', 'Ошибки:'] : []),
-    ...fail.map(r => `  ${r.bucket}/${r.keyName}: ${r.error}`),
-    '',
-    'Обоснование:',
-    args.rationale.length > 1500 ? args.rationale.slice(0, 1500) + '…' : args.rationale,
-  ].filter(Boolean).join('\n');
-  await send(lines);
+  const qtyTotal = succ.reduce((s, r) => s + (r.qty ?? 0), 0);
+  await notifyOpen({
+    symbol: args.symbol,
+    side: args.side,
+    orderType: args.orderType,
+    entryPrice: args.entryPrice,
+    sl: args.sl,
+    tp1: args.tp1,
+    tp2: args.tp2,
+    riskPct: args.riskPct,
+    qtyTotal,
+    accountSummaries: succ.map(r => `${r.bucket}/${r.keyName} — ${r.qty} ${args.symbol.replace(/USDT$/, '')}`),
+    failedAccounts: fail.map(r => ({ label: `${r.bucket}/${r.keyName}`, error: r.error ?? 'unknown' })),
+    rationale: args.rationale,
+  });
 }
 
 async function main() {

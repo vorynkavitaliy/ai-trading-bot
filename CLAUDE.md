@@ -25,10 +25,10 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 
 | Parameter | Value |
 |---|---|
-| Risk per trade (base) | 0.6% of equity |
+| Risk per trade (base) | 0.375% of equity (= 1.5% heat / 4 parallel) |
 | Volatility scalar range | 0.7× – 1.2× of base |
-| Hard cap per trade | 1.0% of equity |
-| Max parallel positions | 2 (one per pair, any pairs) |
+| Hard cap per trade | 0.6% of equity |
+| Max parallel positions | 4 (one per pair max, across 10-pair universe) |
 | Total heat cap | 1.5% of equity |
 | Soft kill (daily) | −2.5% → flat until next UTC day |
 | Hard kill (daily) | −4% → halt + manual review |
@@ -54,16 +54,58 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 
 If a rule in `strategy.md` contradicts something in this `CLAUDE.md` — `CLAUDE.md` wins. If `lessons-learned.md` contradicts `strategy.md` — `strategy.md` wins (lessons inform the next strategy revision; they do not override active rules mid-cycle).
 
-## Cycle protocol (every `/loop 5m /trade-scan` fire)
+## Architecture: event-driven (cron + /loop /trade-watch)
 
-1. **Phase 0 — Reconcile.** `npm run reconcile`. If misaligned → fix, do not analyze.
-2. **Phase 1 — Load vault context.** identity → strategy.md → lessons-learned → catalysts → per-pair Thesis → today's Journal.
-3. **Phase 2 — Gather data.** `npx tsx src/scan-summary.ts all` → JSON snapshot. No vault writes here.
-4. **Phase 3 — Risk pre-check.** Funding window? Dead zone? Day equity ≤ −2.5%? Pair disabled? Max heat? If any → SKIP.
-5. **Phase 4 — Decide per pair.** Apply `strategy.md` rules. Open position → re-check abort/TP only.
-6. **Phase 5 — News check** (only on trigger): |Δprice|>2% in 10min unexplained, funding spike, OI ±5%/1H, calendar event ±30min.
-7. **Phase 6 — Execute.** `npx tsx src/execute.ts ...` with rationale. Server-side SL within 5min.
-8. **Phase 7 — Persist.** Material events → Journal append. New open → Trade file. Close → Postmortem within 1h.
+**Cron handles 99% — Claude wakes only on triggers.**
+
+```
+[cron */5min]  scripts/cycle.sh:
+  → scan-decide.ts   (refresh + enrichment + risk-check, writes /tmp/scan-decide-latest.json)
+  → reconcile.ts     (auto-close db_without_bybit, sends Telegram exits)
+  → heartbeat.ts     (self-throttles to 1/hour)
+  → if enterCount > 0:    set /tmp/trade-trigger.flag
+  → if closed-no-postmortem > 0:  set /tmp/postmortem-trigger.flag
+
+[Claude /loop 5m /trade-watch]:
+  → no flag fresh    → exit silently in <500 tokens (~99% of polls)
+  → trade-trigger    → review enrichment, classify (TAKE/DOWNSIZE/SKIP per walk-decide rules), execute
+  → postmortem flag  → write Postmortem.md for closed trades
+```
+
+The 365-day walk-back proved trade-level filtering on enrichment data is approximately neutral (algo edge already strong). Claude's value is **safety overlay**:
+- News halt (high-impact event window)
+- Black-swan halt (Watchlist/PAUSE.md)
+- Postmortem authoring (deep analysis of closed trades)
+- Strategy revision (weekly review)
+- Reconcile escalation (when auto-close fails)
+
+## Classifier rules (zero-overfit, validated on 365d data)
+
+```
+SKIP if:
+  • rrTp2 < 0.20                                  (catastrophic R:R — 11 trades, near-zero outcome)
+  • isLong AND m15m_rsi > 68 AND m5m_rsi > 60     (long entry on exhausted up-move)
+
+DOWNSIZE to 0.25% if:
+  • rrTp2 0.20–0.30                               (thin R:R, tighten exposure)
+
+TAKE 0.375% otherwise.
+```
+
+Discarded rules (validated harmful at 365d):
+- counter-BTC short → +27.58R / 87% WR / 100 trades (this is the strategy's core edge)
+- short extension (m15m<32) → +5.01R / 84% WR / 19 trades
+- 4H stack contradicts → mean-reversion strategy is counter-trend BY DESIGN
+
+## Cycle protocol (Claude /trade-watch fire)
+
+1. **Read `/tmp/trade-trigger.flag`** — if absent or older than 6 min → exit.
+2. **Read `/tmp/scan-decide-latest.json`** — already populated by cron.
+3. **For each `enter` + `riskCheck.allowed`:** apply classifier rules (above).
+4. **News check** (only when Δprice>2%/10min, OI±5%/1h, calendar ±30min): WebFetch → high-impact = halt.
+5. **Execute** picked signals (cap-4 minus open). Russian rationale, `--rationale-file /tmp/r.txt`.
+6. **Remove flag.** Append 1-line entry to `Journal/{TODAY}.md`.
+7. **Postmortem flag** present → write postmortems for trades closed in last 75 min.
 
 ## Cadence discipline
 
@@ -100,7 +142,9 @@ If a rule in `strategy.md` contradicts something in this `CLAUDE.md` — `CLAUDE
 
 - Heredocs of any shell (`<<EOF`, `<<-`, etc.)
 - `node -e '...'`, `python3 -c '...'`
-- `"$(cat file)"` substitutions inside arguments
+- `"$(cat file)"` and `$(...)` command substitution — Claude Code prompts on every cycle. Use Read tool instead.
+- **`$?` exit-code echoes** (`; echo "exit $?"`) — same reason. The npx/tsx tool output already shows success/failure. Just run the command, then use Read tool on the output file.
+- **Process substitution `<(...)` and `>(...)`** — Claude Code prompts. Use `cmd > /tmp/out 2>&1; jq ... /tmp/out` instead.
 - `--rationale "... $value ..."` with shell-special chars — use `--rationale-file /tmp/r.txt` instead (Write the file first via the Write tool)
 - `curl -X POST api.telegram.org` — use `npx tsx src/scripts/tg-test.ts` or `src/lib/telegram.ts`
 - Multi-line `echo "..." >> file` — use the Edit tool
