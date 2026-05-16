@@ -84,11 +84,4 @@ else
   log "mid-hour cycle (skipping scan-decide; backtest-aligned timing)"
 fi
 
-# 5) Postmortem trigger: any trade closed in last 75 min lacking Postmortem file?
-RECENTLY_CLOSED=$(npx tsx src/scripts/recently-closed-no-postmortem.ts 2>/dev/null || echo 0)
-if [ "$RECENTLY_CLOSED" -gt 0 ] 2>/dev/null; then
-  ts > /tmp/postmortem-trigger.flag
-  log "postmortems pending=${RECENTLY_CLOSED} -> flag set"
-fi
-
 log "cycle done"

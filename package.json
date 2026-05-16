@@ -18,7 +18,6 @@
     "bybit:test": "tsx src/scripts/bybit-test.ts",
     "cg:test": "tsx src/scripts/coinglass-test.ts",
     "news:fetch": "tsx src/scripts/news-fetch.ts",
-    "vault:compact": "tsx src/scripts/vault-compact.ts",
     "risk": "tsx src/scripts/risk-status.ts",
 
     "data:backfill": "tsx src/data/cli/backfill-run.ts",
@@ -73,12 +72,7 @@
     "_archived_backtest_v2": "tsx src/backtest/cli/rangefade-v2.ts 365",
     "_archived_backtest_v3": "tsx src/backtest/cli/rangefade-v3.ts 85",
     "_archived_backtest_t4h": "tsx src/backtest/cli/trend-4h.ts 365",
-    "_archived_backtest_btc_pro": "tsx src/backtest/cli/btc-pro.ts 85",
-
-    "walk:prepare": "tsx src/backtest/claude-walk/cli/prepare.ts",
-    "walk:resolve": "tsx src/backtest/claude-walk/cli/resolve.ts",
-    "walk:report": "tsx src/backtest/claude-walk/cli/report.ts",
-    "walk:prune": "tsx src/backtest/claude-walk/cli/prune-queue.ts"
+    "_archived_backtest_btc_pro": "tsx src/backtest/cli/btc-pro.ts 85"
   },
   "keywords": [],
   "author": "",

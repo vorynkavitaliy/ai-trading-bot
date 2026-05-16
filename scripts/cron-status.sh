@@ -19,14 +19,6 @@ else
 fi
 
 echo ""
-echo "═══════════════ FLAGS ═══════════════"
-if [ -f /tmp/postmortem-trigger.flag ]; then
-  echo "🚩 /tmp/postmortem-trigger.flag — fresh: $(cat /tmp/postmortem-trigger.flag)"
-else
-  echo "   /tmp/postmortem-trigger.flag — none"
-fi
-
-echo ""
 echo "═══════════════ AUTO-EXECUTE (last cycle) ═══════════════"
 if [ -f /tmp/auto-execute-latest.json ]; then
   jq '{cycle: .cycle.iso, actionable, take, downsize, skip, executed}' /tmp/auto-execute-latest.json 2>/dev/null || cat /tmp/auto-execute-latest.json

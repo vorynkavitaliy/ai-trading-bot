@@ -22,8 +22,8 @@ echo "Creating new tmux session: $SESSION"
 tmux new-session -d -s "$SESSION" -c "$PROJECT_DIR"
 
 # Window 1 — Claude (main interactive). Use `claude --continue` to resume the
-# saved session for analysis (postmortems, weekly review, news halts).
-# Live execution is handled by cron — Claude is no longer in the hot path.
+# saved session for ad-hoc maintenance, strategy iteration, news halts.
+# Live execution is handled by cron — Claude is not in the hot path.
 tmux rename-window -t "$SESSION:0" claude
 tmux send-keys -t "$SESSION:claude" "cd $PROJECT_DIR && claude --continue" C-m
 
