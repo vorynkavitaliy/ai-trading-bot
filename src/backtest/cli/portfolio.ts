@@ -14,36 +14,47 @@ import { close as closePg } from '../../lib/db';
 import { log } from '../../lib/logger';
 
 const SYMBOLS = [
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'AVAXUSDT',
-  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'NEARUSDT', 'ATOMUSDT',
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
+  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'ATOMUSDT',
+  'SUIUSDT', 'TONUSDT', 'DOGEUSDT',
+  'APTUSDT', 'ARBUSDT',
 ];
 
 const PER_SYMBOL: Record<string, Partial<BtcVpSmcParams>> = {
   ETHUSDT:  { maxStopAtrPct: 4.5 },
   SOLUSDT:  { maxStopAtrPct: 5.5 },
   XRPUSDT:  { maxStopAtrPct: 5.5 },
-  AVAXUSDT: { maxStopAtrPct: 5.5 },
   BNBUSDT:  { maxStopAtrPct: 4.0 },
   LTCUSDT:  { maxStopAtrPct: 4.5 },
   LINKUSDT: { maxStopAtrPct: 5.0 },
-  NEARUSDT: { maxStopAtrPct: 5.5 },
   ATOMUSDT: { maxStopAtrPct: 5.0 },
+  SUIUSDT:  { maxStopAtrPct: 5.0 },
+  TONUSDT:  { maxStopAtrPct: 5.0 },
+  DOGEUSDT: { maxStopAtrPct: 5.5 },
+  APTUSDT:  { maxStopAtrPct: 5.0 },
+  ARBUSDT:  { maxStopAtrPct: 5.0 },
 };
+
+// Override via CLI: portfolio.ts <days> <riskPct> <maxParallel> [posCapPct] [slippagePct] [tp1SlMode] [bePlusBufferPct]
+// Defaults reflect production config (no_move SL after TP1, slip 0.12%).
+const RISK_PCT = parseFloat(process.argv[3] ?? '0.375');
+const MAX_PARALLEL = parseInt(process.argv[4] ?? '4', 10);
+const POS_CAP_PCT = process.argv[5] ? parseFloat(process.argv[5]) : undefined;
+const SLIPPAGE_PCT = process.argv[6] ? parseFloat(process.argv[6]) : 0.12;          // mid-realistic
+const TP1_SL_MODE = (process.argv[7] as 'be' | 'be_plus' | 'no_move' | 'halfway' | undefined) ?? 'no_move';
+const BE_PLUS_BUFFER_PCT = process.argv[8] ? parseFloat(process.argv[8]) : 0.10;
 
 const COMMON: Omit<BacktestSettings, 'symbol' | 'startTs' | 'endTs'> = {
   startEquity: 50_000,
   takerFeeRate: 0.00055,
   makerFeeRate: 0.0002,
-  slippagePct: 0.05,
+  slippagePct: SLIPPAGE_PCT,
   riskPctBase: 0.6,
   leverage: 10,
+  maxNotionalPctOfEquity: POS_CAP_PCT,
+  tp1SlMode: TP1_SL_MODE,
+  bePlusBufferPct: BE_PLUS_BUFFER_PCT,
 };
-
-// Portfolio risk = total heat cap (CLAUDE.md = 1.5%) / max parallel.
-// With cap-4 and heat 1.5%, risk per trade = 0.375%.
-// Override via CLI: portfolio.ts <days> <riskPct> <maxParallel>
-const RISK_PCT = parseFloat(process.argv[3] ?? '0.375');
-const MAX_PARALLEL = parseInt(process.argv[4] ?? '4', 10);
 
 interface PortfolioTrade extends ClosedTrade {
   // Recomputed at portfolio level

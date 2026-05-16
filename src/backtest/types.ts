@@ -72,6 +72,14 @@ export interface BacktestSettings {
   slippagePct: number;        // applied to entry/exit price
   riskPctBase: number;        // 0.6 means 0.6% per trade
   leverage: number;           // 10
+  maxNotionalPctOfEquity?: number; // cap notional to N% of equity (default = leverage×100, i.e. no extra cap)
+  // After TP1 fills, what to do with SL on remaining 50%:
+  //  'be' — move to entry (breakeven, original behavior)
+  //  'be_plus' — move to entry × (1 ± bePlusBufferPct/100) — covers fees+slippage
+  //  'no_move' — keep initial SL (let it ride to TP2 or original SL)
+  //  'halfway' — move to halfway between entry and initial SL (still risk, but reduced)
+  tp1SlMode?: 'be' | 'be_plus' | 'no_move' | 'halfway';
+  bePlusBufferPct?: number;   // default 0.10 (= 0.10%)
   decisionTf?: '60m' | '240m';  // default '60m' (1H decisions); set '240m' for 4H
   // Time stop: close position if held longer than this many ms after entry
   maxHoldMs?: number;

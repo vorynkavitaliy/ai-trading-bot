@@ -34,8 +34,10 @@ export interface BtcVpSmcParams {
   slBufferAtr: number;        // 0.3 — extra ATR beyond PWL/PWH
   minStopAtr: number;         // 0.5
   maxStopAtrPct: number;      // 3.0 — reject if stop > 3% (too far, bad R/R)
+  minStopPct: number;         // 0.75 — reject if stop < 0.75% (slippage + noise; bt grid 2026-05-16: 0.5→0.75 lifts P&L +5.8pp, MaxDD 4.75%→3.30%)
   // Targets
   minTpAtrFromEntry: number;  // 0.4 — TP1 must be at least this far from entry in trade direction
+  minTpSpreadPct: number;     // 0.3 — skip if |TP1-TP2|/entry < 0.3% (TP1 ≈ TP2 = bad split)
   // Sizing
   riskPct: number;            // 0.6
   // Trade-frequency control
@@ -56,7 +58,9 @@ export const DEFAULT_BTC_VP_SMC: BtcVpSmcParams = {
   slBufferAtr: 0.3,
   minStopAtr: 0.5,
   maxStopAtrPct: 3.0,
+  minStopPct: 0.75,
   minTpAtrFromEntry: 0.4,
+  minTpSpreadPct: 0.3,
   riskPct: 0.375,            // = 1.5% heat cap / 4 parallel positions (CLAUDE.md)
   cooldownHours: 6,
 };
@@ -249,6 +253,7 @@ export function btcVpSmc(params: BtcVpSmcParams = DEFAULT_BTC_VP_SMC): Strategy 
         const stopDist = ctx.price - sl;
         if (stopDist < params.minStopAtr * f.atr) return { kind: 'hold' };
         if ((stopDist / ctx.price) * 100 > params.maxStopAtrPct) return { kind: 'hold' };
+        if ((stopDist / ctx.price) * 100 < params.minStopPct) return { kind: 'hold' };  // slippage guard
 
         // TP1 must be in trade direction (above entry by ≥ minTpAtrFromEntry × ATR).
         // For LONG: prefer POC; if POC ≤ entry (price already past it), use VAH; if
@@ -262,6 +267,8 @@ export function btcVpSmc(params: BtcVpSmcParams = DEFAULT_BTC_VP_SMC): Strategy 
         }
         if (tp1 < ctx.price + minTp) return { kind: 'hold' };
         if (tp2 < tp1) tp2 = tp1 + (tp1 - ctx.price);
+        // Skip if TP1 and TP2 are too close — split makes no economic sense (slippage > spread).
+        if ((Math.abs(tp2 - tp1) / ctx.price) * 100 < params.minTpSpreadPct) return { kind: 'hold' };
 
         markEntry(ctx.symbol, 'long', ctx.ts);
         return {
@@ -288,6 +295,7 @@ export function btcVpSmc(params: BtcVpSmcParams = DEFAULT_BTC_VP_SMC): Strategy 
         const stopDist = sl - ctx.price;
         if (stopDist < params.minStopAtr * f.atr) return { kind: 'hold' };
         if ((stopDist / ctx.price) * 100 > params.maxStopAtrPct) return { kind: 'hold' };
+        if ((stopDist / ctx.price) * 100 < params.minStopPct) return { kind: 'hold' };  // slippage guard
 
         const minTp = params.minTpAtrFromEntry * f.atr;
         let tp1 = vp.poc;
@@ -298,6 +306,7 @@ export function btcVpSmc(params: BtcVpSmcParams = DEFAULT_BTC_VP_SMC): Strategy 
         }
         if (tp1 > ctx.price - minTp) return { kind: 'hold' };
         if (tp2 > tp1) tp2 = tp1 - (ctx.price - tp1);
+        if ((Math.abs(tp1 - tp2) / ctx.price) * 100 < params.minTpSpreadPct) return { kind: 'hold' };
 
         markEntry(ctx.symbol, 'short', ctx.ts);
         return {

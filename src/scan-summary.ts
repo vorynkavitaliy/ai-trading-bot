@@ -4,8 +4,10 @@ import { getRiskState, RiskState } from './risk-guard';
 import { log } from './lib/logger';
 
 const SYMBOLS = [
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'AVAXUSDT',
-  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'NEARUSDT', 'ATOMUSDT',
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
+  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'ATOMUSDT',
+  'SUIUSDT', 'TONUSDT', 'DOGEUSDT',
+  'APTUSDT', 'ARBUSDT',
 ];
 const TFS = ['5m', '15m', '60m', '240m'] as const;
 

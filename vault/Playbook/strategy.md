@@ -72,10 +72,10 @@ No discretionary exits. No trailing beyond TP1→BE. Time stop = end of test win
 
 ## Sizing
 
-- **Risk per trade:** **0.375% of equity** (= 1.5% total heat cap / 4 max parallel).
+- **Risk per trade:** **0.375% of equity** (= 2.25% total heat cap / 6 max parallel).
 - **Leverage cap:** notional ≤ equity × 10. Strategy auto-trims qty if structural SL is too tight.
-- **Max parallel:** **4** (one per pair max, across 10-pair universe).
-- **Total heat cap:** 1.5% of equity (CLAUDE.md, never breached by design).
+- **Max parallel:** **6** (one per pair max, across 10-pair universe).
+- **Total heat cap:** 2.25% of equity (CLAUDE.md, never breached by design).
 - **Compounding:** every new entry sizes on current equity (not starting equity).
 
 ---
@@ -160,7 +160,7 @@ Worst single trade across all pairs: −1.12R (SOL 2026-01-04 SHORT, clean SL hi
   maxStopAtrPct: 3.0,    // overridden per symbol
   minTpAtrFromEntry: 0.4,
   // Sizing
-  riskPct: 0.375,         // 1.5% heat cap / 4 parallel
+  riskPct: 0.375,         // 2.25% heat cap / 6 parallel
   // Cooldown
   cooldownHours: 6,
 }

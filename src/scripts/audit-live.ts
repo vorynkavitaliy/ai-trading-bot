@@ -83,8 +83,8 @@ async function main() {
   }
 
   // 4) Universe coverage — which pairs have what
-  console.log(`\n🌐 UNIVERSE (10 pairs) — Coinglass coverage:`);
-  const universe = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'AVAXUSDT', 'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'NEARUSDT', 'ATOMUSDT'];
+  console.log(`\n🌐 UNIVERSE (13 pairs) — Coinglass coverage:`);
+  const universe = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'ATOMUSDT', 'SUIUSDT', 'TONUSDT', 'DOGEUSDT', 'APTUSDT', 'ARBUSDT'];
   for (const sym of universe) {
     const coin = sym.replace(/USDT$/, '');
     const fr = await query<any>(`SELECT COUNT(*)::int AS c FROM cg_funding_oi_weighted WHERE symbol = $1`, [coin]);

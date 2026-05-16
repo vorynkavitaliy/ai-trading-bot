@@ -20,21 +20,16 @@ fi
 
 echo ""
 echo "═══════════════ FLAGS ═══════════════"
-for flag in /tmp/trade-trigger.flag /tmp/postmortem-trigger.flag; do
-  if [ -f "$flag" ]; then
-    echo "🚩 $flag — fresh: $(cat "$flag")"
-  else
-    echo "   $flag — none"
-  fi
-done
+if [ -f /tmp/postmortem-trigger.flag ]; then
+  echo "🚩 /tmp/postmortem-trigger.flag — fresh: $(cat /tmp/postmortem-trigger.flag)"
+else
+  echo "   /tmp/postmortem-trigger.flag — none"
+fi
 
 echo ""
-echo "═══════════════ TMUX SESSION ═══════════════"
-if tmux has-session -t claude-trader 2>/dev/null; then
-  echo "✅ tmux session 'claude-trader' running"
-  tmux list-windows -t claude-trader -F '   • #W (#{window_panes} panes)'
-  echo ""
-  echo "   attach: npm run trader:attach"
+echo "═══════════════ AUTO-EXECUTE (last cycle) ═══════════════"
+if [ -f /tmp/auto-execute-latest.json ]; then
+  jq '{cycle: .cycle.iso, actionable, take, downsize, skip, executed}' /tmp/auto-execute-latest.json 2>/dev/null || cat /tmp/auto-execute-latest.json
 else
-  echo "❌ tmux session 'claude-trader' NOT running (run: npm run trader:start)"
+  echo "ℹ /tmp/auto-execute-latest.json — none yet"
 fi

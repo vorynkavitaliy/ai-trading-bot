@@ -85,8 +85,8 @@ export async function notifyOpen(a: OpenTradeArgs): Promise<void> {
     `📍 Цена входа: <b>$${fmtNum(ep)}</b>`,
     `🛡 Стоп:       $${fmtNum(a.sl)}  (${fmtPctSigned(slPct)})`,
   ];
-  if (a.tp1) lines.push(`🎯 Тейк-1:     $${fmtNum(a.tp1)}  (${fmtPctSigned(tp1Pct)}, 50% объёма → стоп в безубыток)`);
-  if (a.tp2) lines.push(`🎯 Тейк-2:     $${fmtNum(a.tp2)}  (${fmtPctSigned(tp2Pct)}, 50% объёма)`);
+  if (a.tp1) lines.push(`🎯 Тейк-1:     $${fmtNum(a.tp1)}  (${fmtPctSigned(tp1Pct)})  — 50% объёма, reduce-only лимит`);
+  if (a.tp2) lines.push(`🎯 Тейк-2:     $${fmtNum(a.tp2)}  (${fmtPctSigned(tp2Pct)})  — 50% объёма, reduce-only лимит`);
   lines.push(``);
   lines.push(`💼 <b>Размер:</b> ${fmtNum(a.qtyTotal, 2)} ${tag}`);
   if (a.riskPct) lines.push(`⚖ <b>Риск:</b> ${a.riskPct}% от equity`);
@@ -122,8 +122,11 @@ export interface CloseArgs {
   pnlR: number;
   feesUsd?: number;
   fundingUsd?: number;
-  comment?: string;          // e.g. "200000/Vitalii"
+  comment?: string;
   durationMin?: number;
+  // For consolidated multi-account close: per-account breakdown.
+  // If provided AND accountFills.length > 1, message lists each account; else single-line.
+  accountFills?: Array<{ label: string; qty: number; pnlUsd: number; pnlR: number }>;
 }
 
 export async function notifyClose(a: CloseArgs): Promise<void> {
@@ -158,15 +161,24 @@ export async function notifyClose(a: CloseArgs): Promise<void> {
   ];
   if (a.feesUsd != null && a.feesUsd > 0) lines.push(`   Комиссии: $${fmtNum(a.feesUsd, 2)}`);
   if (a.fundingUsd != null && a.fundingUsd !== 0) lines.push(`   Фондирование: ${fmtUsdSigned(a.fundingUsd, 2)}`);
+  // Per-account breakdown (consolidated multi-account close)
+  if (a.accountFills && a.accountFills.length > 0) {
+    lines.push(``);
+    lines.push(`<b>Аккаунты:</b> ${a.accountFills.length}`);
+    const tag = pairTag(a.symbol);
+    for (const f of a.accountFills) {
+      const sign = f.pnlUsd >= 0 ? '+' : '−';
+      lines.push(`   • ${escapeHtml(f.label)} — ${fmtNum(f.qty, 2)} ${tag} → ${sign}$${fmtNum(Math.abs(f.pnlUsd), 0)} (${f.pnlR >= 0 ? '+' : ''}${f.pnlR.toFixed(2)}R)`);
+    }
+  } else if (a.comment) {
+    lines.push(``);
+    lines.push(`<i>${escapeHtml(a.comment)}</i>`);
+  }
   if (a.durationMin != null) {
     const h = Math.floor(a.durationMin / 60);
     const m = Math.round(a.durationMin % 60);
     lines.push(``);
     lines.push(`⏱ Длительность: ${h > 0 ? `${h}ч ` : ''}${m}мин`);
-  }
-  if (a.comment) {
-    lines.push(``);
-    lines.push(`<i>${escapeHtml(a.comment)}</i>`);
   }
   lines.push(``);
   lines.push(SEP);
@@ -180,37 +192,111 @@ export async function notifyClose(a: CloseArgs): Promise<void> {
 // -----------------------------------------------------------
 export interface HeartbeatArgs {
   cycle: string;
-  regime: { btc: string; eth: string };  // .btc carries dominant text; .eth carries breakdown
+  regimeCount: { range: number; trend: number; transition: number };
+  dominantRegime: string;                       // 'range' | 'trend_bull' | 'trend_bear' | 'transition'
   openPositions: number;
-  pnlDayUsd: number;
-  pnlDayPct: number;
+  maxPositions: number;                         // = RISK.maxParallelPositions
+  totalEquity: number;                          // sum across all accounts
+  totalUpnl: number;                            // sum unrealized PnL across all positions
+  dayPnlUsd: number;                            // realized + unrealized today
+  dayPnlPct: number;                            // % of session-start equity
+  accounts: Array<{ name: string; equity: number; uPnl: number }>;
+  btcPrice?: number;                            // for market context
   triggersInWindow: { fired: number; total: number };
   notes?: string;
+  // File ages from /tmp — proxy for "is the cron pipeline alive?". scan-decide should
+  // refresh every top-of-hour; an age > 90 min means top-of-hour scan-decide has been
+  // failing silently. Heartbeat surfaces this so the operator sees it before "no trades
+  // for a day" becomes the first alarm.
+  staleness?: {
+    scanDecideAgeMin: number | null;
+    autoExecAgeMin: number | null;
+    cycleLogAgeMin: number | null;
+    degraded: boolean;
+    reasons: string[];
+  };
+}
+
+function regimeMeaning(dominantRegime: string, count: { range: number; trend: number; transition: number }): string {
+  // Total pairs derived from breakdown — auto-updates when universe changes.
+  const total = count.range + count.trend + count.transition;
+  if (dominantRegime === 'range') {
+    return `🔄 <b>Боковик</b> — ${count.range} из ${total} пар топчутся между уровнями (хорошо для нашей стратегии)`;
+  }
+  if (dominantRegime.startsWith('trend')) {
+    const dir = dominantRegime.includes('bull') ? 'вверх' : 'вниз';
+    return `🚀 <b>Тренд ${dir}</b> — ${count.trend} из ${total} пар идут направленно (плохо для нашей стратегии — она торгует развороты)`;
+  }
+  return `⚪ <b>Переход</b> — рынок перестраивается (${count.range} в боковике, ${count.trend} в тренде, ${count.transition} в переходе)`;
+}
+
+function pnlStatusLine(dayPnlUsd: number, dayPnlPct: number): string {
+  if (Math.abs(dayPnlUsd) < 1) return `⚪ Сегодня в нуле`;
+  if (dayPnlUsd > 0) return `🟢 Сегодня <b>в плюсе</b>: ${fmtUsdSigned(dayPnlUsd, 0)} (+${dayPnlPct.toFixed(2)}%)`;
+  return `🔴 Сегодня <b>в минусе</b>: ${fmtUsdSigned(dayPnlUsd, 0)} (${dayPnlPct.toFixed(2)}%)`;
+}
+
+// Russian noun pluralization helper: 1 → "слот", 2-4 → "слота", 5+ → "слотов"
+function pluralRu(n: number, one: string, few: string, many: string): string {
+  const mod10 = n % 10, mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
 }
 
 export async function notifyHeartbeat(h: HeartbeatArgs): Promise<void> {
-  const pnlEmoji = h.pnlDayUsd >= 0 ? '📈' : '📉';
+  const slotsFree = h.maxPositions - h.openPositions;
+  const slotsWordMax = pluralRu(h.maxPositions, 'слот', 'слота', 'слотов');
+  const slotsWordFree = pluralRu(slotsFree, 'слот', 'слота', 'слотов');
+  const positionLine = h.openPositions === 0
+    ? `📭 <b>Сделок нет</b> — все ${h.maxPositions} ${slotsWordMax} свободны, бот ждёт сигнал`
+    : `📂 <b>Открыто ${h.openPositions} из ${h.maxPositions} сделок</b> (свободно ${slotsFree} ${slotsWordFree})`;
+
   const lines: string[] = [
-    `💓 <b>ПУЛЬС</b>  •  ${escapeHtml(h.cycle)}`,
+    `💓 <b>Бот живой — ежечасный отчёт</b>`,
     SEP,
-    ``,
-    `📊 <b>Режим рынка</b>`,
-    `   ${escapeHtml(h.regime.btc)}`,
-    `   ${escapeHtml(h.regime.eth)}`,
-    ``,
-    `💼 Открытых позиций: <b>${h.openPositions}/4</b>`,
-    `${pnlEmoji} Дневной P&amp;L: <b>${fmtUsdSigned(h.pnlDayUsd, 0)} (${h.pnlDayPct >= 0 ? '+' : ''}${h.pnlDayPct.toFixed(2)}%)</b>`,
   ];
-  if (h.triggersInWindow.total > 0) {
-    lines.push(`🎯 Триггеров: ${h.triggersInWindow.fired}/${h.triggersInWindow.total}`);
+  // Stale state warning goes at the very top: if cron pipeline pieces are silently
+  // failing, that's the most important thing the operator should see this minute.
+  if (h.staleness?.degraded) {
+    lines.push(``);
+    lines.push(`⚠️ <b>Конвейер деградировал:</b>`);
+    for (const reason of h.staleness.reasons) {
+      lines.push(`   • ${escapeHtml(reason)}`);
+    }
+  }
+  lines.push(``);
+  lines.push(`📊 <b>Что на рынке:</b>`);
+  lines.push(`   ${regimeMeaning(h.dominantRegime, h.regimeCount)}`);
+  if (h.btcPrice) {
+    lines.push(`   💎 BTC: $${fmtNum(h.btcPrice, 0)}`);
+  }
+  lines.push(``);
+  lines.push(`💼 <b>Что у бота:</b>`);
+  lines.push(`   ${positionLine}`);
+  if (h.openPositions > 0 && h.totalUpnl !== 0) {
+    const upnlEmoji = h.totalUpnl >= 0 ? '🟢' : '🔴';
+    lines.push(`   ${upnlEmoji} Текущая прибыль/убыток открытых: ${fmtUsdSigned(h.totalUpnl, 0)}`);
+  }
+  lines.push(``);
+  lines.push(`💰 <b>Итог дня:</b>`);
+  lines.push(`   ${pnlStatusLine(h.dayPnlUsd, h.dayPnlPct)}`);
+  lines.push(`   💵 Капитал: <b>$${fmtNum(h.totalEquity, 0)}</b>`);
+  lines.push(``);
+  lines.push(`🏦 <b>По аккаунтам:</b>`);
+  for (const a of h.accounts) {
+    const upnlEmoji = a.uPnl > 0 ? '🟢' : a.uPnl < 0 ? '🔴' : '';
+    const upnlStr = a.uPnl !== 0 ? `  ${upnlEmoji} ${fmtUsdSigned(a.uPnl, 0)}` : '';
+    lines.push(`   • <b>${escapeHtml(a.name)}</b>: $${fmtNum(a.equity, 0)}${upnlStr}`);
   }
   if (h.notes) {
     lines.push(``);
-    lines.push(`⚠ ${escapeHtml(h.notes)}`);
+    lines.push(`⚠ <b>Внимание:</b> ${escapeHtml(h.notes)}`);
   }
   lines.push(``);
   lines.push(SEP);
-  lines.push(`<i>${nowUtcShort()}</i>`);
+  lines.push(`<i>VP-SMC v3 • ${nowUtcShort()}</i>`);
 
   await send(lines.join('\n'), { raw: true });
 }

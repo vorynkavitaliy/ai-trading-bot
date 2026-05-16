@@ -93,16 +93,43 @@ function applySlippage(price: number, side: 'long' | 'short', kind: 'entry' | 'e
   return kind === 'entry' ? price * (1 - factor) : price * (1 + factor);
 }
 
-function calcQty(equity: number, riskPct: number, entry: number, sl: number, leverage: number): number {
+function calcQty(equity: number, riskPct: number, entry: number, sl: number, leverage: number, maxNotionalPctOfEquity?: number): number {
   const riskUsd = equity * (riskPct / 100);
   const stopDist = Math.abs(entry - sl);
   if (stopDist <= 0) return 0;
   let qty = riskUsd / stopDist;
-  // Cap by leverage: notional must not exceed equity × leverage
-  const maxNotional = equity * leverage;
-  const maxQtyByLev = maxNotional / entry;
+  // Cap 1: hard leverage cap (HyroTrader compliance, prevents catastrophe)
+  const maxNotionalLev = equity * leverage;
+  const maxQtyByLev = maxNotionalLev / entry;
   if (qty > maxQtyByLev) qty = maxQtyByLev;
+  // Cap 2 (optional): position-size guard — limit notional to N% of equity.
+  // Triggers when stopDist is so tight that risk-based qty inflates the position.
+  // Result: actual realized risk on this trade < target riskPct, but absolute loss
+  // on slippage stays bounded.
+  if (maxNotionalPctOfEquity != null && maxNotionalPctOfEquity > 0) {
+    const maxNotionalPos = equity * (maxNotionalPctOfEquity / 100);
+    const maxQtyByPos = maxNotionalPos / entry;
+    if (qty > maxQtyByPos) qty = maxQtyByPos;
+  }
   return qty;
+}
+
+// Compute new SL after TP1 fill, given the configured mode.
+function newSlAfterTp1(
+  side: 'long' | 'short',
+  entry: number,
+  initialSl: number,
+  mode: 'be' | 'be_plus' | 'no_move' | 'halfway',
+  bePlusBufferPct: number
+): number {
+  if (mode === 'no_move') return initialSl;
+  if (mode === 'halfway') return (entry + initialSl) / 2;
+  if (mode === 'be_plus') {
+    return side === 'long'
+      ? entry * (1 + bePlusBufferPct / 100)
+      : entry * (1 - bePlusBufferPct / 100);
+  }
+  return entry;  // 'be' default
 }
 
 // Fill resolution per minute: scan 1m bars between entry and SL/TP touch
@@ -117,7 +144,9 @@ function resolvePosition(
   symbol: string,
   rationale: string,
   riskedUsd: number,
-  equityRef: { value: number }
+  equityRef: { value: number },
+  tp1SlMode: 'be' | 'be_plus' | 'no_move' | 'halfway' = 'be',
+  bePlusBufferPct: number = 0.10
 ): ClosedTrade | null {
   let fundingPaid = pos.fundingPaidUsd;
   for (let i = startIdx; i <= endIdx && i < bars1m.length; i++) {
@@ -157,7 +186,7 @@ function resolvePosition(
         };
       }
       if (!pos.tp1Hit && b.high >= pos.tp1) {
-        // TP1 — close 50%, move SL to breakeven on remaining 50%
+        // TP1 — close 50%, move SL per configured tp1SlMode
         const fillPrice = applySlippage(pos.tp1, 'long', 'exit', slipPct);
         const halfQty = pos.qty / 2;
         const halfPnl = (fillPrice - pos.entry) * halfQty;
@@ -166,7 +195,7 @@ function resolvePosition(
         // Reduce position
         pos.qty -= halfQty;
         pos.tp1Hit = true;
-        pos.sl = pos.entry; // breakeven
+        pos.sl = newSlAfterTp1('long', pos.entry, pos.initialSl, tp1SlMode, bePlusBufferPct);
         // Track partial pnl as if banked into the trade's outcome at end
         // Simpler: treat TP1 + remainder as one "trade" with weighted pnl.
         // Track "banked" via reducing future exit pnl by this halfPnl baseline.
@@ -232,7 +261,7 @@ function resolvePosition(
         pos.openFeesUsd += halfFee;
         pos.qty -= halfQty;
         pos.tp1Hit = true;
-        pos.sl = pos.entry;
+        pos.sl = newSlAfterTp1('short', pos.entry, pos.initialSl, tp1SlMode, bePlusBufferPct);
         (pos as any).bankedPnl = ((pos as any).bankedPnl ?? 0) + halfPnl - halfFee;
         if (pos.tp2 && b.low <= pos.tp2) {
           const tp2Fill = applySlippage(pos.tp2, 'short', 'exit', slipPct);
@@ -337,7 +366,9 @@ export async function runBacktest(
           data.fundingByTs, fees, settings.slippagePct,
           settings.symbol, pos.rationale,
           pos.riskedUsd,
-          equityRef
+          equityRef,
+          settings.tp1SlMode ?? 'be',
+          settings.bePlusBufferPct ?? 0.10
         );
         if (closed) {
           trades.push(closed);
@@ -437,7 +468,7 @@ export async function runBacktest(
       ? applySlippage(next1m.open, action.side, 'entry', settings.slippagePct)
       : action.entryPrice;
 
-    const qty = calcQty(equityRef.value, action.sizePct, fillPrice, action.sl, settings.leverage);
+    const qty = calcQty(equityRef.value, action.sizePct, fillPrice, action.sl, settings.leverage, settings.maxNotionalPctOfEquity);
     if (qty <= 0) continue;
     const entryFee = qty * fillPrice * (action.orderType === 'market' ? fees.taker : fees.maker);
 

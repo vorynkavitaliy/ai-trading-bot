@@ -1,6 +1,6 @@
 # Trading Bot — Operational Charter
 
-You are the **brain** of a Claude-driven crypto trading bot. TypeScript scripts in `src/` are your sensors and hands. The `vault/` directory is your persistent memory across `/loop` cycles. **You are the trader, not the analyst.**
+You are the **offline analyst** for a cron-driven crypto trading bot. TypeScript scripts in `src/` execute autonomously via cron — `auto-execute.ts` handles all live entries. Your role: postmortems, weekly strategy review, news/black-swan halts. The `vault/` directory is your persistent memory across analysis sessions.
 
 This document is the **inviolable contract**. It is loaded into every cycle. Never violate.
 
@@ -9,7 +9,7 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 ## Targets and Constraints
 
 - **Goal:** ≥ 5% / month on starting balance (target, not guarantee). Current OOS evidence supports ~2–3%/month combined; 5% is aspirational.
-- **Universe (v3):** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, AVAXUSDT, BNBUSDT, LTCUSDT, LINKUSDT, NEARUSDT, ATOMUSDT (10 pairs). Bybit perpetual futures, linear.
+- **Universe (v3):** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, LTCUSDT, LINKUSDT, ATOMUSDT, SUIUSDT, TONUSDT, DOGEUSDT, APTUSDT, ARBUSDT (13 pairs). Bybit perpetual futures, linear. 2026-05-12 timeline: trimmed 14→11 after week-1 live showed short-only pairs (NEAR/OP/AVAX) bleeding in bull-trend market (combined −$3.7k); ZEC tried, 1 live trade −$1.4k → removed; cap raised 5→6 (11×cap-6 bt: +115%/MaxDD 4.17%); APT/ARB added from candidate pool (per-pair bt 365d: APT WR 92.7%/PF 12, ARB WR 92.9%/PF 14). Top weekly performers: DOGE +$5.7k, TON +$2.1k, BTC +$1.7k. Removed pair data retained for re-evaluation.
 - **Accounts:** 200k + 50k HyroTrader prop accounts (currently `demoTrading: true`). Trades are broadcast to **every** sub-key inside `accounts.json` via `Promise.all`.
 
 ## HyroTrader prop firm rules (non-negotiable)
@@ -25,16 +25,15 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 
 | Parameter | Value |
 |---|---|
-| Risk per trade (base) | 0.375% of equity (= 1.5% heat / 4 parallel) |
+| Risk per trade (base) | 0.375% of equity (5×0.375% = 1.875% effective heat; cap allows up to 2.25% with vol mult) |
 | Volatility scalar range | 0.7× – 1.2× of base |
 | Hard cap per trade | 0.6% of equity |
-| Max parallel positions | 4 (one per pair max, across 10-pair universe) |
-| Total heat cap | 1.5% of equity |
+| Max parallel positions | 6 (one per pair max, across 13-pair universe) |
+| Total heat cap | 2.25% of equity |
 | Soft kill (daily) | −2.5% → flat until next UTC day |
 | Hard kill (daily) | −4% → halt + manual review |
 | Total kill | −8% → halt + manual review |
 | Max SL/pair/day | 2 → pair disabled until next UTC day |
-| Dead zone | 22:00–00:00 UTC → skip new entries |
 | Funding window | ±10 min around 00/08/16 UTC → skip new entries |
 
 ## Inviolable execution rules
@@ -54,58 +53,54 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 
 If a rule in `strategy.md` contradicts something in this `CLAUDE.md` — `CLAUDE.md` wins. If `lessons-learned.md` contradicts `strategy.md` — `strategy.md` wins (lessons inform the next strategy revision; they do not override active rules mid-cycle).
 
-## Architecture: event-driven (cron + /loop /trade-watch)
+## Architecture: cron-driven (no Claude in hot path)
 
-**Cron handles 99% — Claude wakes only on triggers.**
+**Cron handles 100% of execution. Claude is offline analyst, not live trader.**
 
 ```
 [cron */5min]  scripts/cycle.sh:
-  → scan-decide.ts   (refresh + enrichment + risk-check, writes /tmp/scan-decide-latest.json)
-  → reconcile.ts     (auto-close db_without_bybit, sends Telegram exits)
+  → reconcile.ts     (auto-close db_without_bybit, sends Telegram exits — every 5min)
+  → position-watcher.ts (TP1 detect→no-move SL, naked-TP recovery, drawdown alerts, SL safety-net)
   → heartbeat.ts     (self-throttles to 1/hour)
-  → if enterCount > 0:    set /tmp/trade-trigger.flag
-  → if closed-no-postmortem > 0:  set /tmp/postmortem-trigger.flag
-
-[Claude /loop 5m /trade-watch]:
-  → no flag fresh    → exit silently in <500 tokens (~99% of polls)
-  → trade-trigger    → review enrichment, classify (TAKE/DOWNSIZE/SKIP per walk-decide rules), execute
-  → postmortem flag  → write Postmortem.md for closed trades
+  → if top-of-hour (HH:00-04):
+       → scan-decide.ts   (refresh + enrichment + risk-check, writes /tmp/scan-decide-latest.json)
+       → if enterCount > 0:
+            → auto-execute.ts (applies TAKE/DOWNSIZE/SKIP classifier; spawns execute.ts for TAKE)
+       → cg-incremental (Coinglass refresh)
+  → if closed-no-postmortem > 0:  set /tmp/postmortem-trigger.flag (Claude-side)
 ```
 
-The 365-day walk-back proved trade-level filtering on enrichment data is approximately neutral (algo edge already strong). Claude's value is **safety overlay**:
-- News halt (high-impact event window)
-- Black-swan halt (Watchlist/PAUSE.md)
-- Postmortem authoring (deep analysis of closed trades)
-- Strategy revision (weekly review)
-- Reconcile escalation (when auto-close fails)
+Why no `/loop /trade-watch` execution: 365d walk-decide proved trade-level filtering on enrichment data is approximately neutral (≈+1.7% lift, mostly variance — algo edge already strong). Cron-direct execute closes a 5–30 min latency gap that previously caused 70%+ of intraday setups to slip past their entry windows.
 
-## Classifier rules (zero-overfit, validated on 365d data)
+**Claude's role (offline, no live execution path):**
+- Postmortem authoring (deep analysis of closed trades) — `/postmortem` command
+- News halt (Watchlist/PAUSE.md created manually if high-impact event)
+- Strategy revision (weekly review of lessons-learned + backtest re-run)
+- Reconcile escalation (manual investigation when auto-close fails repeatedly)
+- DOWNSIZE-grade signals (rrTp2 0.20–0.30) — auto-execute leaves them unsized; operator can review and execute manually if desired
 
-```
-SKIP if:
-  • rrTp2 < 0.20                                  (catastrophic R:R — 11 trades, near-zero outcome)
-  • isLong AND m15m_rsi > 68 AND m5m_rsi > 60     (long entry on exhausted up-move)
+## Classifier — DISABLED (2026-05-03)
 
-DOWNSIZE to 0.25% if:
-  • rrTp2 0.20–0.30                               (thin R:R, tighten exposure)
+Every actionable signal (`action='enter' && riskCheck.allowed`) → TAKE at full 0.375% size. No SKIP/DOWNSIZE filtering.
 
-TAKE 0.375% otherwise.
-```
+**Why removed:**
+- Backtest cap-6 @ 0.375% delivered +88.45%/365d **without** the classifier.
+- Walk-decide showed only ~+1.7% lift, within noise of the full-strategy variance.
+- Live trial 2026-05-02 → 2026-05-03: 5/5 actionable signals SKIP'd (rrTp2 hovering at 0.198 — borderline by 0.002). Classifier was rejecting ~all live setups, defeating its purpose.
 
-Discarded rules (validated harmful at 365d):
+Discarded rules (already validated harmful at 365d):
 - counter-BTC short → +27.58R / 87% WR / 100 trades (this is the strategy's core edge)
 - short extension (m15m<32) → +5.01R / 84% WR / 19 trades
 - 4H stack contradicts → mean-reversion strategy is counter-trend BY DESIGN
 
-## Cycle protocol (Claude /trade-watch fire)
+## Postmortem protocol (Claude wakes for analysis only)
 
-1. **Read `/tmp/trade-trigger.flag`** — if absent or older than 6 min → exit.
-2. **Read `/tmp/scan-decide-latest.json`** — already populated by cron.
-3. **For each `enter` + `riskCheck.allowed`:** apply classifier rules (above).
-4. **News check** (only when Δprice>2%/10min, OI±5%/1h, calendar ±30min): WebFetch → high-impact = halt.
-5. **Execute** picked signals (cap-4 minus open). Russian rationale, `--rationale-file /tmp/r.txt`.
-6. **Remove flag.** Append 1-line entry to `Journal/{TODAY}.md`.
-7. **Postmortem flag** present → write postmortems for trades closed in last 75 min.
+1. **Read `/tmp/postmortem-trigger.flag`** — if absent or older than 6 min → exit.
+2. **Identify closed-no-postmortem trades:** query DB for trades closed in last 75 min lacking `vault/Trades/{symbol}-{ts}/Postmortem.md`.
+3. **Write Postmortem.md** per trade: entry/exit reasoning, classifier verdict at signal time, what worked / failed, lessons.
+4. **Remove flag.**
+
+Claude does NOT execute trades. All entries are auto-executed by `auto-execute.ts` (cron, top-of-hour). If an entry shows up in DB without a corresponding Telegram OPEN message — that's an `auto-execute → execute.ts` failure path; check `/tmp/cycle-auto-exec.out`.
 
 ## Cadence discipline
 

@@ -1,20 +1,19 @@
 import { query } from './lib/db';
 import { loadAccounts } from './lib/accounts';
 import { getRest, ping } from './lib/bybit';
+import { getDayPnl } from './lib/pnl';
 import { log } from './lib/logger';
 
 // Risk constants — must match CLAUDE.md § Risk budget v3
 export const RISK = {
-  riskPctBase: 0.375,                       // 1.5% heat cap / 4 parallel = 0.375%
+  riskPctBase: 0.375,                       // 2.25% heat cap / 6 parallel = 0.375%
   riskPctCap: 0.6,                          // hard cap if scaled up by vol multiplier
-  maxParallelPositions: 4,                  // one per pair, across 10-pair universe
-  totalHeatCapPct: 1.5,
+  maxParallelPositions: 6,                  // 11-pair universe, cap-6 (calibrated 2026-05-12: +115% / MaxDD 4.17%)
+  totalHeatCapPct: 2.25,                    // 6×0.375 = 2.25
   dailyDrawdownSoftKillPct: -2.5,
   dailyDrawdownHardKillPct: -4.0,
   totalKillPct: -8.0,
   maxSlPerPairPerDay: 2,
-  deadZoneStartHourUtc: 22,
-  deadZoneEndHourUtc: 24,
   fundingWindows: [0, 8, 16] as const,    // UTC hours
   fundingWindowMinutes: 10,
   hyrotraderDailyDdPct: -5.0,
@@ -40,7 +39,6 @@ export interface RiskState {
   totalHeatPct: number;
   pairBlocked: Record<string, string>;     // 'BTCUSDT' → reason
   inFundingWindow: boolean;
-  inDeadZone: boolean;
   softKillTriggered: boolean;
   hardKillTriggered: boolean;
   totalKillTriggered: boolean;
@@ -55,11 +53,6 @@ function isFundingWindow(d: Date): boolean {
     if (h === (fundingHour + 23) % 24 && m >= 60 - RISK.fundingWindowMinutes) return true;
   }
   return false;
-}
-
-function isDeadZone(d: Date): boolean {
-  const h = d.getUTCHours();
-  return h >= RISK.deadZoneStartHourUtc && h < RISK.deadZoneEndHourUtc;
 }
 
 async function fetchTotalEquity(): Promise<number> {
@@ -84,12 +77,17 @@ async function fetchSessionStartEquity(now: Date): Promise<number> {
 }
 
 async function countSlToday(now: Date, symbol: string): Promise<number> {
+  // Count UNIQUE logical SL events per pair, not per-account-row. One signal placed
+  // on N accounts creates N closed-rows when SL hits, all with near-identical opened_at
+  // (Promise.all broadcast → ms-level skew). We dedupe by side + opened_at rounded to
+  // the second so a multi-account broadcast counts as 1 event toward the daily SL cap.
   const sessionStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const r = await query<{ c: string }>(
-    `SELECT COUNT(*)::text AS c FROM trades
+    `SELECT COUNT(DISTINCT (side, date_trunc('second', opened_at)))::text AS c
+     FROM trades
      WHERE symbol = $1 AND status = 'closed'
-     AND closed_at IS NOT NULL AND EXTRACT(EPOCH FROM closed_at) * 1000 >= $2
-     AND realized_r < 0`,
+       AND closed_at IS NOT NULL AND EXTRACT(EPOCH FROM closed_at) * 1000 >= $2
+       AND realized_r < 0`,
     [symbol, sessionStart]
   );
   return parseInt(r.rows[0]?.c ?? '0', 10);
@@ -111,18 +109,28 @@ async function fetchOpenPositions(): Promise<Array<{ symbol: string; riskedUsd: 
 
 export async function getRiskState(now: Date = new Date()): Promise<RiskState> {
   const ts = now.getTime();
-  const equity = await fetchTotalEquity();
-  const sessionEquity = await fetchSessionStartEquity(now);
-  const dailyPnl = sessionEquity > 0 ? equity - sessionEquity : 0;
-  const dailyPnlPct = sessionEquity > 0 ? (dailyPnl / sessionEquity) * 100 : 0;
+  // Use DB-derived day P&L (realized closed today + unrealized from Bybit) instead
+  // of legacy positions_snapshot diff which was never populated.
+  const dayPnl = await getDayPnl(now);
+  const equity = dayPnl.totalEquityUsd;
+  const sessionEquity = equity - dayPnl.netUsd;
+  const dailyPnl = dayPnl.netUsd;
+  const dailyPnlPct = dayPnl.netPct;
   const openPositions = await fetchOpenPositions();
+  // Cap-4 should count UNIQUE pairs, not raw trade rows. One signal placed on N
+  // accounts creates N rows in the DB but it's still ONE pair-position. Strategy
+  // is symmetric across accounts (Promise.all broadcast), so they live and die together.
+  const uniquePairs = new Set(openPositions.map((p) => p.symbol));
+  const uniquePositionsCount = uniquePairs.size;
   const totalRisked = openPositions.reduce((s, p) => s + p.riskedUsd, 0);
   const totalHeatPct = equity > 0 ? (totalRisked / equity) * 100 : 0;
 
   const pairBlocked: Record<string, string> = {};
   const universe = [
-    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'AVAXUSDT',
-    'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'NEARUSDT', 'ATOMUSDT',
+    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
+    'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'ATOMUSDT',
+    'SUIUSDT', 'TONUSDT', 'DOGEUSDT',
+    'APTUSDT', 'ARBUSDT',
   ];
   for (const symbol of universe) {
     const slCount = await countSlToday(now, symbol);
@@ -138,11 +146,10 @@ export async function getRiskState(now: Date = new Date()): Promise<RiskState> {
     dailyOpenEquityUsd: sessionEquity,
     dailyPnlUsd: dailyPnl,
     dailyPnlPct,
-    openPositionsCount: openPositions.length,
+    openPositionsCount: uniquePositionsCount,
     totalHeatPct,
     pairBlocked,
     inFundingWindow: isFundingWindow(now),
-    inDeadZone: isDeadZone(now),
     softKillTriggered: dailyPnlPct <= RISK.dailyDrawdownSoftKillPct,
     hardKillTriggered: dailyPnlPct <= RISK.dailyDrawdownHardKillPct,
     totalKillTriggered: false,                     // requires baseline equity tracking — TODO
@@ -159,9 +166,6 @@ export async function precheckEntry(
   if (state.inFundingWindow) {
     return { allowed: false, reason: `funding window (UTC ${state.iso})` };
   }
-  if (state.inDeadZone) {
-    return { allowed: false, reason: `dead zone 22-00 UTC` };
-  }
   if (state.hardKillTriggered) {
     return { allowed: false, reason: `daily P&L ${state.dailyPnlPct.toFixed(2)}% breached hard kill ${RISK.dailyDrawdownHardKillPct}%` };
   }
@@ -173,6 +177,18 @@ export async function precheckEntry(
   }
   if (state.pairBlocked[symbol]) {
     return { allowed: false, reason: `pair disabled: ${state.pairBlocked[symbol]}` };
+  }
+  // Per-pair uniqueness: only ONE position per symbol across all accounts.
+  // Without this, cron firing on the same actionable signal across 5-min cycles
+  // would re-execute the same trade. The strategy's cooldown is in-process and
+  // doesn't survive across `npx tsx` invocations.
+  const pairOpenR = await query<{ c: string }>(
+    `SELECT COUNT(*)::text AS c FROM trades WHERE status = 'open' AND symbol = $1`,
+    [symbol]
+  );
+  const pairOpenCount = parseInt(pairOpenR.rows[0]?.c ?? '0', 10);
+  if (pairOpenCount > 0) {
+    return { allowed: false, reason: `${symbol} already has ${pairOpenCount} open position(s) — duplicate signal` };
   }
   if (riskPct > RISK.riskPctCap) {
     return { allowed: false, reason: `risk ${riskPct}% exceeds cap ${RISK.riskPctCap}%` };
@@ -195,7 +211,6 @@ export function formatRiskState(s: RiskState): string {
     `  open positions: ${s.openPositionsCount} / ${RISK.maxParallelPositions}`,
     `  total heat:    ${s.totalHeatPct.toFixed(2)}% / ${RISK.totalHeatCapPct}%`,
     `  funding window: ${s.inFundingWindow}`,
-    `  dead zone:      ${s.inDeadZone}`,
     `  soft kill:      ${s.softKillTriggered}`,
     `  hard kill:      ${s.hardKillTriggered}`,
     `  pair blocks:    ${Object.keys(s.pairBlocked).length === 0 ? 'none' : JSON.stringify(s.pairBlocked)}`,

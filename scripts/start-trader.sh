@@ -22,14 +22,18 @@ echo "Creating new tmux session: $SESSION"
 tmux new-session -d -s "$SESSION" -c "$PROJECT_DIR"
 
 # Window 1 — Claude (main interactive). Use `claude --continue` to resume the
-# saved session that holds full context. Trader should immediately type
-# `/loop 5m /trade-watch` to start the event-driven fast-path watcher.
+# saved session for analysis (postmortems, weekly review, news halts).
+# Live execution is handled by cron — Claude is no longer in the hot path.
 tmux rename-window -t "$SESSION:0" claude
 tmux send-keys -t "$SESSION:claude" "cd $PROJECT_DIR && claude --continue" C-m
 
 # Window 2 — cycle.sh log tail (cron-driven hot path)
 tmux new-window -t "$SESSION" -n cycle -c "$PROJECT_DIR"
 tmux send-keys -t "$SESSION:cycle" "tail -f /tmp/cycle.log 2>/dev/null || echo 'no cycle.log yet — run: npm run trader:cron:install'" C-m
+
+# Window 3 — Telegram bot listener (long-polling, /status /positions /cycle /pause /resume)
+tmux new-window -t "$SESSION" -n tg-bot -c "$PROJECT_DIR"
+tmux send-keys -t "$SESSION:tg-bot" "npm run tg-bot" C-m
 
 tmux select-window -t "$SESSION:claude"
 echo "Attaching…  (Ctrl+B then D to detach and leave it running)"

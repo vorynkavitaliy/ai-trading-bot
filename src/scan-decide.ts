@@ -8,7 +8,7 @@
 //   5. Calls VP-SMC decide() → 'hold' | 'enter'
 //
 // For 'enter' decisions:
-//   - Runs risk-guard precheck (heat cap, kill switches, dead zone, funding window, ...)
+//   - Runs risk-guard precheck (heat cap, kill switches, funding window, ...)
 //   - Outputs ready-to-execute parameters (entry, sl, tp1, tp2, sizePct)
 //
 // Output: JSON with { cycle, risk, decisions[] }
@@ -28,20 +28,25 @@ import { refreshForScan } from './data/backfill';
 import { log } from './lib/logger';
 
 const UNIVERSE = [
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'AVAXUSDT',
-  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'NEARUSDT', 'ATOMUSDT',
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
+  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'ATOMUSDT',
+  'SUIUSDT', 'TONUSDT', 'DOGEUSDT',
+  'APTUSDT', 'ARBUSDT',  // 2026-05-12-pm: per-pair bt 365d → APT WR 92.7%/PF 12, ARB WR 92.9%/PF 14
 ];
 
 const PER_SYMBOL: Record<string, Partial<BtcVpSmcParams>> = {
   ETHUSDT:  { maxStopAtrPct: 4.5 },
   SOLUSDT:  { maxStopAtrPct: 5.5 },
   XRPUSDT:  { maxStopAtrPct: 5.5 },
-  AVAXUSDT: { maxStopAtrPct: 5.5 },
   BNBUSDT:  { maxStopAtrPct: 4.0 },
   LTCUSDT:  { maxStopAtrPct: 4.5 },
   LINKUSDT: { maxStopAtrPct: 5.0 },
-  NEARUSDT: { maxStopAtrPct: 5.5 },
   ATOMUSDT: { maxStopAtrPct: 5.0 },
+  SUIUSDT:  { maxStopAtrPct: 5.0 },
+  TONUSDT:  { maxStopAtrPct: 5.0 },
+  DOGEUSDT: { maxStopAtrPct: 5.5 },
+  APTUSDT:  { maxStopAtrPct: 5.0 },
+  ARBUSDT:  { maxStopAtrPct: 5.0 },
 };
 
 async function loadBars(symbol: string, tf: string, lookbackBars: number): Promise<Bar[]> {
@@ -67,6 +72,11 @@ interface ContextResult {
   features5m?: any;
   features15m?: any;
   features4h?: any;
+  // Set when CG load threw OR core gate field (funding_oi_weighted) is null. The strategy
+  // doesn't crash — it skips the funding-extreme filter — but operator should know the
+  // gate is silently disabled. Aggregated at scanDecide level into coinglassStatus.
+  cgMissing?: boolean;
+  cgReason?: string;
 }
 
 const HOUR_MS = 60 * 60_000;
@@ -140,19 +150,38 @@ async function buildContext(symbol: string, nowTs: number, livePrice: number | n
   const features15m = safeFeatures('15m', bars15m);
   const features4h = safeFeatures('240m', bars4h);
 
-  // Coinglass — load if available; null fields are permissive
+  // Coinglass — load if available; null fields are permissive in the strategy, BUT
+  // we now track when the load throws OR when the core gate field (funding_oi_weighted)
+  // is null, so the operator knows the funding-extreme filter is silently off.
   let coinglass: CoinglassFeatures | undefined;
+  let cgMissing = false;
+  let cgReason: string | undefined;
   try {
     const coin = symbol.replace(/USDT$/, '');
     coinglass = await loadCoinglassAt(coin, symbol, decisionBar.ts);
-  } catch { coinglass = undefined; }
+    if (coinglass.funding_oi_weighted == null) {
+      cgMissing = true;
+      cgReason = 'no funding_oi_weighted row at decisionBar.ts';
+    }
+  } catch (e: any) {
+    coinglass = undefined;
+    cgMissing = true;
+    cgReason = `load threw: ${e?.message ?? String(e)}`;
+  }
 
-  // LIVE price for trigger (re-entry / minStop / TP-direction checks).
-  // Features stay on CLOSED bars (no lookahead).
+  // CTX price = last closed 1H bar's close (matches backtest engine semantics:
+  // at iteration i, decide using bar[i-1].close).
+  // Live ticker is FRESHER but creates structural divergence with backtest:
+  // backtest decides at hour-close on closed-bar close, live used to decide every
+  // 5min on live ticker → different decision points = different trades.
+  // To use the same algorithm in backtest and live, we sync on closed bars.
+  // Cron is gated to HH:00-04 minute window so scan-decide runs once per hour
+  // right after the bar closes (see cycle.sh).
+  const _liveTickerNote = livePrice;  // kept for diagnostic/observability only
   const ctx: StrategyContext = {
     symbol,
     ts: nowTs,
-    price: livePrice,
+    price: decisionBar.close,         // matches backtest engine
     features1h,
     features4h,
     featuresD,
@@ -164,7 +193,7 @@ async function buildContext(symbol: string, nowTs: number, livePrice: number | n
     bars1dRecent: closedD.slice(-60),
     bars1wRecent: closedW.slice(-12),
   };
-  return { ctx, features5m, features15m, features4h };
+  return { ctx, features5m, features15m, features4h, cgMissing, cgReason };
 }
 
 // Confluence summary across 5m/15m/60m/240m/1D — for discretionary check
@@ -253,6 +282,11 @@ export interface ScanDecideResult {
   decisions: PairDecision[];
   enterCount: number;
   btcContext: BtcContext | null;
+  coinglassStatus: {
+    missingSymbols: string[];     // pairs where funding_oi_weighted gate is disabled
+    missingCount: number;
+    totalSymbols: number;
+  };
 }
 
 function bbPosition(f: any): number | null {
@@ -451,10 +485,12 @@ export async function scanDecide(): Promise<ScanDecideResult> {
 
   // STEP 3b: per-pair decide with strict gates + enrichment for actionable signals.
   const decisions: PairDecision[] = [];
+  const cgMissingSymbols: string[] = [];
 
   for (const symbol of UNIVERSE) {
     const live = livePrices.get(symbol) ?? null;
     const r = await buildContext(symbol, nowTs, live);
+    if (r.cgMissing) cgMissingSymbols.push(symbol);
     if (!r.ctx) {
       decisions.push({ symbol, price: live ?? 0, action: 'hold', reason: r.reason });
       continue;
@@ -493,12 +529,27 @@ export async function scanDecide(): Promise<ScanDecideResult> {
 
   const enterCount = decisions.filter((d) => d.action === 'enter' && d.riskCheck?.allowed).length;
 
+  // Surface Coinglass degraded state: when funding_oi_weighted is missing for any pair,
+  // the strategy's funding-extreme gate is silently disabled for that pair. Operator
+  // needs to know the strategy is running weaker than designed.
+  if (cgMissingSymbols.length > 0) {
+    log.warn('coinglass degraded — funding-extreme gate off for these symbols', {
+      missing: cgMissingSymbols,
+      total: UNIVERSE.length,
+    });
+  }
+
   return {
     cycle: { ts: nowTs, iso: now.toISOString() },
     risk,
     decisions,
     enterCount,
     btcContext,
+    coinglassStatus: {
+      missingSymbols: cgMissingSymbols,
+      missingCount: cgMissingSymbols.length,
+      totalSymbols: UNIVERSE.length,
+    },
   };
 }
 
@@ -522,7 +573,6 @@ async function main() {
   // Human-readable summary
   console.log(`==== scan-decide @ ${result.cycle.iso} ====`);
   console.log(`equity: $${result.risk.totalEquityUsd.toFixed(0)}  daily P&L: ${result.risk.dailyPnlPct.toFixed(2)}%  open: ${result.risk.openPositionsCount}/${RISK.maxParallelPositions}  heat: ${result.risk.totalHeatPct.toFixed(2)}%/${RISK.totalHeatCapPct}%`);
-  if (result.risk.inDeadZone) console.log('  ⛔ DEAD ZONE');
   if (result.risk.inFundingWindow) console.log('  ⛔ FUNDING WINDOW');
   if (result.risk.softKillTriggered) console.log('  ⛔ SOFT KILL');
   if (result.risk.hardKillTriggered) console.log('  ⛔ HARD KILL');

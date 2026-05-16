@@ -2,16 +2,29 @@ import { query } from '../lib/db';
 import { log } from '../lib/logger';
 import { fetchKlines, fetchFunding, TF_MS, delay, BybitKline } from './bybit-public';
 
-// v3 FINAL universe: 10 pairs (VP-SMC strategy, cap-4 parallel).
+// v3 universe: 13 pairs (VP-SMC strategy, cap-6 parallel).
+// 2026-05-12-am: removed NEARUSDT, OPUSDT, AVAXUSDT (week-1 short bleeding in bull
+//                trend, −$3.7k combined). Also removed ZEC (1 live trade −$1.4k).
+// 2026-05-12-pm: added APTUSDT (bt 365d: WR 92.7%, totalR 29.78R, PF 12.09) and
+//                ARBUSDT (WR 92.9%, totalR 21.34R, PF 14.07). Both top of candidate
+//                pool (5 tested: INJ/WLD/ARB/DOT/APT). Cap raised to 6 same day
+//                (11-pair × cap-6 bt: +115% / MaxDD 4.17%).
 export const SYMBOLS = [
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'AVAXUSDT',
-  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'NEARUSDT', 'ATOMUSDT',
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
+  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'ATOMUSDT',
+  'SUIUSDT', 'TONUSDT', 'DOGEUSDT',
+  'APTUSDT', 'ARBUSDT',
 ];
 const TFS = ['1m', '5m', '15m', '60m', '240m'];
 
-// Lighter incremental for live cycles: only the TFs scan-decide reads.
-// 60m for indicators+VP, 1D/1W for PWL/PWH. Skip 1m/5m/15m/240m (live decision doesn't use).
-export const TFS_FOR_SCAN = ['60m', '1D', '1W'];
+// TFs needed for live cycles AND backtest replay:
+//   - 60m: live strategy decisions, indicators, VP
+//   - 1D/1W: PWL/PWH structural levels
+//   - 1m: required for backtest engine SL/TP fill simulation. Live doesn't use 1m
+//     directly but if we ever run walk-back (recently we did) on stale 1m it lies.
+//     Refreshing 1m every cycle keeps backtest=live aligned.
+//   - 5m/15m/240m: enrichment multi-TF features (used by classifier)
+export const TFS_FOR_SCAN = ['1m', '5m', '15m', '60m', '240m', '1D', '1W'];
 
 export async function refreshForScan(): Promise<void> {
   const now = Date.now();

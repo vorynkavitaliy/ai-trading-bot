@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { loadAccounts, AccountKey } from './lib/accounts';
 import { getRest, withRetry, getInstrumentInfo, roundQtyToStep, roundPriceToTick } from './lib/bybit';
 import { query } from './lib/db';
@@ -97,6 +98,14 @@ async function calcQtyFromRisk(account: AccountKey, args: CliArgs): Promise<numb
 
 async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<AccountResult> {
   const result: AccountResult = { bucket: account.bucket, keyName: account.keyName, ok: false };
+  // Shared random base for orderLinkId so entry + TP1 + TP2 from one placeOnAccount
+  // share a prefix and can be correlated in reconcile/logs. Bybit V5 rejects duplicate
+  // orderLinkId per account, so withRetry's ECONNRESET/ETIMEDOUT retries cannot create
+  // a duplicate position even if Bybit accepted the first attempt and the response was lost.
+  const linkBase = randomUUID().replace(/-/g, '').slice(0, 16);
+  const entryLinkId = `e-${linkBase}`;
+  const tp1LinkId = `tp1-${linkBase}`;
+  const tp2LinkId = `tp2-${linkBase}`;
   try {
     const c = getRest(account);
     // Fetch instrument metadata (qtyStep, tickSize, minOrderQty) — cached per process.
@@ -135,6 +144,10 @@ async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<Accou
       throw new Error(`qty ${qtyNum} below minOrderQty ${info.minOrderQty} for ${args.symbol} — risk too small or stop too wide`);
     }
 
+    // Step 1: open position with SL only. takeProfit on Bybit's order create
+    // closes 100% of position when hit — but strategy v3 wants partial 50% at TP1
+    // + remaining 50% at TP2 + SL→BE move after TP1 fill. So we attach SL only,
+    // then place two reduce-only limit orders for TP1 + TP2 separately.
     const orderParams: any = {
       category: 'linear',
       symbol: args.symbol,
@@ -145,19 +158,113 @@ async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<Accou
       reduceOnly: false,
       stopLoss: roundPriceToTick(args.sl, info),
       slTriggerBy: 'LastPrice',
+      orderLinkId: entryLinkId,
     };
     if (args.orderType === 'limit') {
       orderParams.price = roundPriceToTick(args.entryPrice!, info);
-    }
-    if (args.tp1) {
-      orderParams.takeProfit = roundPriceToTick(args.tp1, info);
-      orderParams.tpTriggerBy = 'LastPrice';
     }
 
     const r = await withRetry(() => c.submitOrder(orderParams), {
       label: `order-${args.symbol}-${account.keyName}`,
     });
     if (r.retCode !== 0) throw new Error(`submitOrder retCode=${r.retCode} ${r.retMsg}`);
+
+    // Race-condition guard: Bybit confirms entry submission but the position itself
+    // may not be credited yet (we observed retCode 110017 "current position is zero,
+    // cannot fix reduce-only order qty"). Poll until position.size > 0 before TP submit.
+    // Limit attempts so we don't hang forever on a non-filling Limit entry order.
+    const expectedSide = args.side === 'buy' ? 'Buy' : 'Sell';
+    let positionReady = false;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await new Promise((res) => setTimeout(res, 500));
+      try {
+        const pr = await c.getPositionInfo({ category: 'linear', symbol: args.symbol });
+        const pos = (pr.result?.list ?? []).find((p: any) => p.symbol === args.symbol && p.side === expectedSide);
+        if (pos && parseFloat(pos.size) > 0) { positionReady = true; break; }
+      } catch {}
+    }
+    if (!positionReady) {
+      log.warn('position not credited after 5s — TP submit may fail', { symbol: args.symbol, account: account.keyName });
+    }
+
+    // Step 2: place TP1 + TP2 reduce-only limit orders (50% / 50% split).
+    // For market orders: position is open instantly (IOC), so we can place them now.
+    // For limit orders: they may not fill immediately, but reduce-only limits can
+    // sit on the book — if the open never fills, the limits are harmless.
+    const closeSide = args.side === 'buy' ? 'Sell' : 'Buy';
+    const tp1 = args.tp1!;
+    const tp2 = args.tp2!;
+    if (args.tp1 != null && args.tp2 != null) {
+      // Split half/half. Round halfQty DOWN to step; remainder gets the slack.
+      const halfRaw = qtyNum / 2;
+      const halfStr = roundQtyToStep(halfRaw, info);
+      const halfNum = parseFloat(halfStr);
+      const remNum = qtyNum - halfNum;
+      const remStr = roundQtyToStep(remNum, info);
+
+      if (halfNum >= info.minOrderQty && parseFloat(remStr) >= info.minOrderQty) {
+        // Two partial reduce-only limits. CRITICAL: any failure here = naked position
+        // without TP — operator must know IMMEDIATELY. We surface failures as warnings
+        // with clear identifying info so position-watcher / reconcile can detect.
+        let tp1Ok = false, tp2Ok = false;
+        try {
+          const r1 = await withRetry(() => c.submitOrder({
+            category: 'linear', symbol: args.symbol,
+            side: closeSide, orderType: 'Limit', qty: halfStr,
+            price: roundPriceToTick(tp1, info),
+            timeInForce: 'GTC', reduceOnly: true,
+            orderLinkId: tp1LinkId,
+          }), { label: `tp1-${args.symbol}-${account.keyName}`, tries: 3 });
+          if (r1.retCode === 0) { tp1Ok = true; }
+          else { log.error('TP1 SUBMIT REJECTED', { symbol: args.symbol, account: account.keyName, retCode: r1.retCode, retMsg: r1.retMsg, qty: halfStr, price: tp1 }); }
+        } catch (e: any) {
+          log.error('TP1 SUBMIT THREW', { symbol: args.symbol, account: account.keyName, err: e?.message ?? String(e), qty: halfStr, price: tp1 });
+        }
+        try {
+          const r2 = await withRetry(() => c.submitOrder({
+            category: 'linear', symbol: args.symbol,
+            side: closeSide, orderType: 'Limit', qty: remStr,
+            price: roundPriceToTick(tp2, info),
+            timeInForce: 'GTC', reduceOnly: true,
+            orderLinkId: tp2LinkId,
+          }), { label: `tp2-${args.symbol}-${account.keyName}`, tries: 3 });
+          if (r2.retCode === 0) { tp2Ok = true; }
+          else { log.error('TP2 SUBMIT REJECTED', { symbol: args.symbol, account: account.keyName, retCode: r2.retCode, retMsg: r2.retMsg, qty: remStr, price: tp2 }); }
+        } catch (e: any) {
+          log.error('TP2 SUBMIT THREW', { symbol: args.symbol, account: account.keyName, err: e?.message ?? String(e), qty: remStr, price: tp2 });
+        }
+        if (!tp1Ok || !tp2Ok) {
+          // Naked position — open with server-side SL but at least one TP missing.
+          // The pino log.error lines above already capture (symbol, account, retCode,
+          // retMsg, qty, price) per leg; position-watcher.ts does the actual recovery
+          // by checking Bybit /open-orders for missing reduce-only Limits and
+          // re-placing from DB (see position-watcher.ts §0.5 NAKED-TP DETECTION).
+          // We log one consolidated error so it's grep-able as a single event.
+          log.error('NAKED TP — execute.ts placed entry but TP leg(s) missing; watcher will recover', {
+            symbol: args.symbol, account: account.keyName, side: args.side,
+            qty: qtyNum, tp1Failed: !tp1Ok, tp2Failed: !tp2Ok,
+          });
+        }
+      } else {
+        // Position too small to split (e.g. 1 contract). Set single full-size TP1.
+        await withRetry(() => c.setTradingStop({
+          category: 'linear', symbol: args.symbol,
+          takeProfit: roundPriceToTick(tp1, info),
+          tpTriggerBy: 'LastPrice', positionIdx: 0,
+        }), { label: `setTp-${args.symbol}-${account.keyName}`, tries: 2 }).catch((e) => {
+          log.warn('single-TP setTradingStop failed', { err: e?.message });
+        });
+      }
+    } else if (args.tp1 != null) {
+      // Only one TP given — set it as full-position TP via setTradingStop.
+      await withRetry(() => c.setTradingStop({
+        category: 'linear', symbol: args.symbol,
+        takeProfit: roundPriceToTick(args.tp1!, info),
+        tpTriggerBy: 'LastPrice', positionIdx: 0,
+      }), { label: `setTp-${args.symbol}-${account.keyName}`, tries: 2 }).catch((e) => {
+        log.warn('single-TP setTradingStop failed', { err: e?.message });
+      });
+    }
 
     result.ok = true;
     result.bybitOrderId = r.result?.orderId;
@@ -225,6 +332,9 @@ async function notifyTelegram(args: CliArgs, results: AccountResult[]): Promise<
   if (!config.telegram.botToken || !config.telegram.chatId) return;
   const succ = results.filter(r => r.ok);
   const fail = results.filter(r => !r.ok);
+  // Don't send OPEN message if NO account succeeded — that's an error, not an entry.
+  // Failed-only result is logged + exits non-zero, which is enough signal for ops.
+  if (succ.length === 0) return;
   const qtyTotal = succ.reduce((s, r) => s + (r.qty ?? 0), 0);
   await notifyOpen({
     symbol: args.symbol,

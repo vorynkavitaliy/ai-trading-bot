@@ -38,10 +38,12 @@
     "trader:cron:install": "scripts/cron-install.sh",
     "trader:cron:uninstall": "scripts/cron-uninstall.sh",
     "trader:status": "scripts/cron-status.sh",
+    "trader:pnl": "tsx src/scripts/pnl-day.ts",
     "trader:logs": "tail -f /tmp/cycle.log",
     "trader:start": "scripts/start-trader.sh",
     "trader:attach": "tmux attach -t claude-trader",
     "trader:stop": "tmux kill-session -t claude-trader",
+    "tg-bot": "tsx src/tg-bot.ts",
 
     "backtest:vpsmc": "tsx src/backtest/cli/btc-vp-smc.ts 85",
     "backtest:vpsmc:y": "tsx src/backtest/cli/btc-vp-smc.ts 365",
