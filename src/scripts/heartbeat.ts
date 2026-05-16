@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import { scanAll } from '../scan-summary';
 import { notifyHeartbeat } from '../lib/tg-templates';
 import { close as closePg } from '../lib/db';
-import { close as closeRedis } from '../lib/redis';
 import { log } from '../lib/logger';
 import { loadAccounts } from '../lib/accounts';
 import { getRest, withRetry } from '../lib/bybit';
@@ -54,7 +53,6 @@ async function main() {
   if (!force && alreadySentThisHour()) {
     log.info('heartbeat skipped — already sent this hour');
     await closePg();
-    await closeRedis();
     return;
   }
 
@@ -145,12 +143,10 @@ async function main() {
     openPositions: snap.risk.openPositionsCount,
   });
   await closePg();
-  await closeRedis();
 }
 
 main().catch(async e => {
   log.error('heartbeat failed', { err: e?.message ?? String(e) });
   try { await closePg(); } catch {}
-  try { await closeRedis(); } catch {}
   process.exit(1);
 });

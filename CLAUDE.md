@@ -1,6 +1,6 @@
 # Trading Bot — Operational Charter
 
-You are the **offline analyst** for a cron-driven crypto trading bot. TypeScript scripts in `src/` execute autonomously via cron — `auto-execute.ts` handles all live entries. Your role: postmortems, weekly strategy review, news/black-swan halts. The `vault/` directory is your persistent memory across analysis sessions.
+You assist with a cron-driven crypto trading bot. TypeScript scripts in `src/` execute autonomously via cron — `auto-execute.ts` handles all live entries. Your role: ad-hoc maintenance, strategy iteration, news/black-swan halts, debugging when cron pipeline misbehaves.
 
 This document is the **inviolable contract**. It is loaded into every cycle. Never violate.
 
@@ -41,21 +41,12 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 1. **Server-side SL within 5 minutes** of every position open. No manual stops.
 2. **Edit-never-cancel** SL: to move a stop, use Bybit `amend_order`, never cancel-then-create.
 3. **Pre-trade risk check** via `src/risk-guard.ts` blocks entries that would breach any limit above.
-4. **Reconcile before every cycle.** If `vault/Trades/*.md` and Bybit positions diverge → halt analysis until aligned.
+4. **Reconcile before every cycle.** If `trades` DB rows and Bybit positions diverge → halt analysis until aligned (`src/reconcile.ts`).
 5. **No live entry until backtest gate passes:** PF ≥ 1.4, MaxDD ≤ 4%, expectancy ≥ 0.3R, ≥ 100 trades combined across the universe on OOS walk-forward. Per-pair expR may dip slightly (e.g. XRP 0.25R) provided combined portfolio metrics stay above gate.
-
-## Strategy source of truth
-
-- `vault/Playbook/strategy.md` — THE strategy. Re-read every cycle until internalized.
-- `vault/Playbook/lessons-learned.md` — paid-in-PnL lessons from prior trades and Claude-Walk backtest.
-- `vault/Playbook/telegram-templates.md` — Russian-language operator messages (no slang).
-- `vault/Playbook/00-trader-identity.md` — philosophy + identity anchor.
-
-If a rule in `strategy.md` contradicts something in this `CLAUDE.md` — `CLAUDE.md` wins. If `lessons-learned.md` contradicts `strategy.md` — `strategy.md` wins (lessons inform the next strategy revision; they do not override active rules mid-cycle).
 
 ## Architecture: cron-driven (no Claude in hot path)
 
-**Cron handles 100% of execution. Claude is offline analyst, not live trader.**
+**Cron handles 100% of execution. Claude is invoked manually, not on schedule.**
 
 ```
 [cron */5min]  scripts/cycle.sh:
@@ -65,19 +56,18 @@ If a rule in `strategy.md` contradicts something in this `CLAUDE.md` — `CLAUDE
   → if top-of-hour (HH:00-04):
        → scan-decide.ts   (refresh + enrichment + risk-check, writes /tmp/scan-decide-latest.json)
        → if enterCount > 0:
-            → auto-execute.ts (applies TAKE/DOWNSIZE/SKIP classifier; spawns execute.ts for TAKE)
+            → auto-execute.ts (spawns execute.ts per actionable signal)
        → cg-incremental (Coinglass refresh)
-  → if closed-no-postmortem > 0:  set /tmp/postmortem-trigger.flag (Claude-side)
 ```
 
 Why no `/loop /trade-watch` execution: 365d walk-decide proved trade-level filtering on enrichment data is approximately neutral (≈+1.7% lift, mostly variance — algo edge already strong). Cron-direct execute closes a 5–30 min latency gap that previously caused 70%+ of intraday setups to slip past their entry windows.
 
-**Claude's role (offline, no live execution path):**
-- Postmortem authoring (deep analysis of closed trades) — `/postmortem` command
-- News halt (Watchlist/PAUSE.md created manually if high-impact event)
-- Strategy revision (weekly review of lessons-learned + backtest re-run)
-- Reconcile escalation (manual investigation when auto-close fails repeatedly)
-- DOWNSIZE-grade signals (rrTp2 0.20–0.30) — auto-execute leaves them unsized; operator can review and execute manually if desired
+**Claude's role (manual invocation only, no live execution path):**
+- News halt — `/pause` via Telegram bot creates `vault/Watchlist/PAUSE.md` (auto-execute halts while it exists; `/resume` removes it).
+- Strategy iteration — backtest re-runs, parameter tuning, universe changes.
+- Reconcile escalation — manual investigation when auto-close fails repeatedly.
+- Cron pipeline debugging — staleness on `/tmp/scan-decide-latest.json`, `/tmp/auto-execute-latest.json`, `/tmp/cycle.log` (heartbeat surfaces this).
+- DOWNSIZE-grade signals (rrTp2 0.20–0.30) — auto-execute leaves them unsized; operator can review and execute manually if desired.
 
 ## Classifier — DISABLED (2026-05-03)
 
@@ -93,15 +83,6 @@ Discarded rules (already validated harmful at 365d):
 - short extension (m15m<32) → +5.01R / 84% WR / 19 trades
 - 4H stack contradicts → mean-reversion strategy is counter-trend BY DESIGN
 
-## Postmortem protocol (Claude wakes for analysis only)
-
-1. **Read `/tmp/postmortem-trigger.flag`** — if absent or older than 6 min → exit.
-2. **Identify closed-no-postmortem trades:** query DB for trades closed in last 75 min lacking `vault/Trades/{symbol}-{ts}/Postmortem.md`.
-3. **Write Postmortem.md** per trade: entry/exit reasoning, classifier verdict at signal time, what worked / failed, lessons.
-4. **Remove flag.**
-
-Claude does NOT execute trades. All entries are auto-executed by `auto-execute.ts` (cron, top-of-hour). If an entry shows up in DB without a corresponding Telegram OPEN message — that's an `auto-execute → execute.ts` failure path; check `/tmp/cycle-auto-exec.out`.
-
 ## Cadence discipline
 
 - **5m fire** = trigger engine + regime read. NOT for re-scoring pending limits.
@@ -109,29 +90,6 @@ Claude does NOT execute trades. All entries are auto-executed by `auto-execute.t
 - **1H close** = re-evaluate regime, refresh thesis.
 
 **Do not cancel pending limit orders younger than 15 minutes** except for catastrophic events (kill switch, FOMC surprise, exchange outage).
-
-## Vault write discipline
-
-**Append to Journal ONLY on material events:**
-- Position open / close / SL / TP / abort
-- Setup trigger fires (entry condition met) — even if SKIP
-- Regime flip (range↔trend↔transition)
-- News impact change
-- Operator interaction
-- 1H close that materially changes state (ADX threshold, EMA flip)
-- /clear or compaction marker
-
-**One hourly heartbeat** at top of hour ±10min — single line, e.g.:
-```
-### [HH:00 UTC] — heartbeat (Cxxxx) — regime [BTC:RANGE, ETH:TREND], P&L $±N, 0/N triggers in window
-```
-
-**Forbidden in Journal:**
-- Per-cycle scan dumps when state unchanged
-- "Heartbeat — все SKIP" every 5 min
-- Detailed indicator dumps (those go in `/tmp/scan-data-CYCLE.json`, not vault)
-
-**Weekly compact** runs Sunday 23:55 UTC: `src/vault/weekly-compact.ts` aggregates `Journal/*.md` of the closed week into `Journal/_weekly/{ISO-week}.md` and removes the dailies. Trades/Postmortem are never compacted (those are paid memory).
 
 ## Forbidden shell patterns (enforced by hooks)
 
@@ -161,11 +119,11 @@ If a new diagnostic is needed, write a committed `src/scripts/<name>.ts` and inv
 - Reconcile divergence > 1 cycle
 - Regime flipped on ≥7 of 10 pairs simultaneously (macro signature)
 
-When any fires: send Telegram alert, set vault marker `Watchlist/PAUSE.md`, do not open new entries until operator confirms.
+When any fires: send Telegram alert, trigger `/pause` (writes `vault/Watchlist/PAUSE.md`), do not open new entries until operator confirms.
 
 ## What changed vs v2
 
 - Universe set to 10 pairs (BTC, ETH, SOL, XRP, AVAX, BNB, LTC, LINK, NEAR, ATOM) — prior 10-pair v2 was different selection (had OP/SUI/XLM/TAO instead of XRP/LTC/LINK/ATOM); v3 universe rebuilt around VP-SMC strategy validation. Walk-forward OOS: ~90% of windows profitable, 658 combined trades on 1y.
 - Risk increased to 0.6% base / 1.0% cap (from 0.5% flat) — operator authorized "чуть больше рисков".
-- Strategy v3 = VP-SMC (Volume Profile + PWL/PWH + FVG + Coinglass crowd-fade). See `vault/Playbook/strategy.md`.
-- Postgres + Redis (Docker) for historical candle DB — incremental, no daily exchange re-pull.
+- Strategy v3 = VP-SMC (Volume Profile + PWL/PWH + FVG + Coinglass crowd-fade). Implementation lives in `src/scan-decide.ts` and `src/strategies/`.
+- Postgres (Docker) for historical candle DB — incremental, no daily exchange re-pull. (Redis cache removed 2026-05-16 — wasn't load-bearing.)

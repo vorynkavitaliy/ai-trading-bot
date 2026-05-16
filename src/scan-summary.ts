@@ -80,10 +80,10 @@ function determineRegime(f: FeatureSnapshot): PairSnapshot['regime'] {
 async function buildPairSnapshot(symbol: string): Promise<PairSnapshot> {
   // Multi-TF features
   const [f5m, f15m, f1h, f4h] = await Promise.all([
-    getFeatures(symbol, '5m', undefined, false).catch(() => null),
-    getFeatures(symbol, '15m', undefined, false).catch(() => null),
-    getFeatures(symbol, '60m', undefined, false),
-    getFeatures(symbol, '240m', undefined, false).catch(() => null),
+    getFeatures(symbol, '5m').catch(() => null),
+    getFeatures(symbol, '15m').catch(() => null),
+    getFeatures(symbol, '60m'),
+    getFeatures(symbol, '240m').catch(() => null),
   ]);
 
   // Funding (Bybit own)

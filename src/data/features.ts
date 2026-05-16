@@ -1,5 +1,4 @@
 import { query } from '../lib/db';
-import { getRedis } from '../lib/redis';
 import {
   BollingerBands,
   RSI,
@@ -170,33 +169,10 @@ export async function getFeatures(
   symbol: string,
   tf: string,
   beforeTs?: number,
-  useCache = true
 ): Promise<FeatureSnapshot> {
   // We need ~250 candles to make ADX/EMA200 stable; pull 300 to be safe.
-  const cacheKey = `feat:${symbol}:${tf}:${beforeTs ?? 'now'}`;
-  if (useCache) {
-    const r = getRedis();
-    const cached = await r.get(cacheKey);
-    if (cached) return JSON.parse(cached) as FeatureSnapshot;
-  }
   const candles = await loadCandles(symbol, tf, 300, beforeTs);
-  const feat = computeFeatures(symbol, tf, candles);
-  if (useCache) {
-    const ttl = tfTtlSeconds(tf);
-    await getRedis().set(cacheKey, JSON.stringify(feat), 'EX', ttl);
-  }
-  return feat;
-}
-
-function tfTtlSeconds(tf: string): number {
-  switch (tf) {
-    case '1m': return 30;
-    case '5m': return 150;
-    case '15m': return 450;
-    case '60m': return 1800;
-    case '240m': return 7200;
-    default: return 300;
-  }
+  return computeFeatures(symbol, tf, candles);
 }
 
 export async function recentFunding(symbol: string, count = 3): Promise<{ ts: number; rate: number }[]> {

@@ -30,10 +30,6 @@ export const config = {
     password: opt('PG_PASS', 'trader_pass'),
     database: opt('PG_DB', 'trading'),
   },
-  redis: {
-    host: opt('REDIS_HOST', 'localhost'),
-    port: intOpt('REDIS_PORT', 6380),
-  },
   telegram: {
     botToken: opt('TELEGRAM_BOT_TOKEN', ''),
     chatId: opt('TELEGRAM_CHAT_ID', ''),
