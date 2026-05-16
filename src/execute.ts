@@ -8,6 +8,7 @@ import { notifyOpen } from './lib/tg-templates';
 import { precheckEntry, RISK } from './risk-guard';
 import { config } from './lib/config';
 import { log } from './lib/logger';
+import { insertPending, markPlaced, markFailed, linkTradeId } from './lib/pending-orders';
 
 interface CliArgs {
   symbol: string;
@@ -66,6 +67,7 @@ interface AccountResult {
   keyName: string;
   ok: boolean;
   bybitOrderId?: string;
+  orderLinkId?: string;            // entry-order linkId — used by persistTrade to link pending_orders → trades.id
   qty?: number;
   fillPrice?: number;
   error?: string;
@@ -106,6 +108,11 @@ async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<Accou
   const entryLinkId = `e-${linkBase}`;
   const tp1LinkId = `tp1-${linkBase}`;
   const tp2LinkId = `tp2-${linkBase}`;
+  // pendingId tracks the pending_orders row for THIS account's entry order. The row
+  // is INSERTed just before submitOrder and updated to 'placed'/'failed' afterward;
+  // a crash anywhere in between leaves a 'pending' row that reconcile or operator
+  // can use to detect orphan positions on Bybit. See migrations/006_pending_orders.sql.
+  let pendingId: number | null = null;
   try {
     const c = getRest(account);
     // Fetch instrument metadata (qtyStep, tickSize, minOrderQty) — cached per process.
@@ -164,10 +171,32 @@ async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<Accou
       orderParams.price = roundPriceToTick(args.entryPrice!, info);
     }
 
+    // ─── Pre-submit intent: write pending_orders BEFORE the Bybit network call ───
+    // If anything between this insert and persistTrade crashes, the row survives
+    // and reconcile / operator can detect the orphan via orderLinkId.
+    pendingId = await insertPending({
+      orderLinkId: entryLinkId,
+      accountBucket: account.bucket,
+      accountKey: account.keyName,
+      symbol: args.symbol,
+      side: orderParams.side,
+      orderType: orderParams.orderType,
+      qty: qtyNum,
+      entryPrice: args.entryPrice ?? null,
+      sl: args.sl,
+      tp1: args.tp1 ?? null,
+      tp2: args.tp2 ?? null,
+      riskPct: args.riskPct ?? null,
+      rationale: args.rationale,
+    });
+
     const r = await withRetry(() => c.submitOrder(orderParams), {
       label: `order-${args.symbol}-${account.keyName}`,
     });
     if (r.retCode !== 0) throw new Error(`submitOrder retCode=${r.retCode} ${r.retMsg}`);
+
+    // Bybit confirmed. Mark the intent satisfied; persistTrade will later link trade_id.
+    await markPlaced(pendingId, r.result?.orderId);
 
     // Race-condition guard: Bybit confirms entry submission but the position itself
     // may not be credited yet (we observed retCode 110017 "current position is zero,
@@ -268,10 +297,19 @@ async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<Accou
 
     result.ok = true;
     result.bybitOrderId = r.result?.orderId;
+    result.orderLinkId = entryLinkId;
     result.qty = parseFloat(qtyStr);
     result.fillPrice = args.orderType === 'market' ? undefined : args.entryPrice;
     return result;
   } catch (e: any) {
+    // Flip pending_orders to 'failed' so reconcile can investigate. If pendingId is
+    // null we never reached the insert — meaning no Bybit call happened either, so
+    // there's nothing to recover; just propagate the error to the caller.
+    if (pendingId != null) {
+      try { await markFailed(pendingId, e?.message ?? String(e)); } catch (mfe: any) {
+        log.warn('markFailed pending_orders failed', { pendingId, err: mfe?.message });
+      }
+    }
     result.error = e?.message ?? String(e);
     return result;
   }
@@ -308,14 +346,16 @@ async function persistTrade(args: CliArgs, results: AccountResult[]): Promise<vo
   ].join('\n');
   fs.writeFileSync(tradeFile, fm);
 
-  // Persist per-account row in trades table
+  // Persist per-account row in trades table, then link pending_orders.trade_id so the
+  // intent row is fully resolved (status='placed' AND trade_id IS NOT NULL).
   for (const r of succ) {
-    await query(
+    const ins = await query<{ id: string }>(
       `INSERT INTO trades (
         account_bucket, account_key, symbol, side, order_type, qty,
         entry_price, sl, tp1, tp2, status, rationale,
         bybit_order_id, vault_trade_file, opened_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, NOW())`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, NOW())
+      RETURNING id`,
       [
         r.bucket, r.keyName, args.symbol, args.side === 'buy' ? 'Buy' : 'Sell',
         args.orderType === 'market' ? 'Market' : 'Limit', r.qty,
@@ -324,6 +364,14 @@ async function persistTrade(args: CliArgs, results: AccountResult[]): Promise<vo
         r.bybitOrderId ?? null, tradeFile,
       ]
     );
+    if (r.orderLinkId) {
+      const tradeId = parseInt(ins.rows[0].id, 10);
+      try { await linkTradeId(r.orderLinkId, tradeId); } catch (e: any) {
+        log.warn('linkTradeId failed (pending row stays un-linked; reconcile will see orphan)', {
+          orderLinkId: r.orderLinkId, tradeId, err: e?.message,
+        });
+      }
+    }
   }
   log.info('trade persisted', { tradeFile, accounts: succ.length });
 }

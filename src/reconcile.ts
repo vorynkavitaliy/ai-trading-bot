@@ -4,6 +4,7 @@ import { getRest, withRetry } from './lib/bybit';
 import { query } from './lib/db';
 import { notifyClose } from './lib/tg-templates';
 import { log } from './lib/logger';
+import { findStaleOrphans, StalePending } from './lib/pending-orders';
 
 type Divergence =
   | { type: 'bybit_without_db'; account: string; symbol: string; size: number }
@@ -16,6 +17,7 @@ interface ReconcileResult {
   bybitPositionsCount: number;
   dbOpenTradesCount: number;
   divergences: Divergence[];
+  staleOrphans: StalePending[];   // pending_orders rows without trade_id older than threshold
 }
 
 interface BybitPos {
@@ -384,12 +386,37 @@ export async function runReconcile(): Promise<ReconcileResult> {
   // Send consolidated Telegram messages: one per (symbol+side+exitReason) group.
   await notifyConsolidatedCloses(closeEvents);
 
+  // ─── Pending-orders sweep: surface intents that never made it to a trades row ───
+  // A 'pending_orders' row with NULL trade_id older than 5 min means either:
+  //   - execute.ts crashed between submitOrder.ok and persistTrade's INSERT
+  //   - Bybit submitOrder threw and pending stays 'failed' but the position may
+  //     still exist on the broker (network race)
+  // We don't auto-resolve (querying Bybit /orders/realtime by orderLinkId is a
+  // separate piece of work); we just report so the operator can investigate.
+  let staleOrphans: StalePending[] = [];
+  try {
+    staleOrphans = await findStaleOrphans(5);
+    if (staleOrphans.length > 0) {
+      log.warn('pending_orders stale orphans detected', {
+        count: staleOrphans.length,
+        items: staleOrphans.map((o) => ({
+          orderLinkId: o.orderLinkId, account: o.accountLabel,
+          symbol: o.symbol, side: o.side, status: o.status,
+          ageMin: Math.round(o.ageMin), bybitOrderId: o.bybitOrderId,
+        })),
+      });
+    }
+  } catch (e: any) {
+    log.warn('pending_orders sweep failed', { err: e?.message });
+  }
+
   return {
-    aligned: divergences.length === 0,
+    aligned: divergences.length === 0 && staleOrphans.length === 0,
     ts: new Date().toISOString(),
     bybitPositionsCount: allBybit.length,
     dbOpenTradesCount: dbOpen.length,
     divergences,
+    staleOrphans,
   };
 }
 
