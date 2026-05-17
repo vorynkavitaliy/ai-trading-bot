@@ -9,7 +9,7 @@ const COMMON = {
   startEquity: 50_000,
   takerFeeRate: 0.00055,
   makerFeeRate: 0.0002,
-  slippagePct: 0.05,
+  slippagePct: parseFloat(process.env.BT_SLIP ?? '0.05'),
   riskPctBase: 0.6,
   leverage: 10,
 };

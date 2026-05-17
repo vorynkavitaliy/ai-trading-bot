@@ -29,10 +29,13 @@ import { log } from '../core/logger';
 
 const UNIVERSE = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
-  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'ATOMUSDT',
-  'SUIUSDT', 'TONUSDT', 'DOGEUSDT',
-  'APTUSDT', 'ARBUSDT',  // 2026-05-12-pm: per-pair bt 365d → APT WR 92.7%/PF 12, ARB WR 92.9%/PF 14
-];
+  'BNBUSDT', 'LTCUSDT', 'ATOMUSDT',
+  'TONUSDT', 'DOGEUSDT',
+  'APTUSDT', 'ARBUSDT',
+  'TAOUSDT', 'INJUSDT',  // 2026-05-17: replace LINK/SUI per regime-decompose audit
+];                       // (LINK weak in trend_bull, SUI no preferred regime).
+                         // TAO bt 365d slip 0.25%: WR 80.4%/PF 3.86/+5.87%.
+                         // INJ bt 365d slip 0.25%: WR 82.5%/PF 4.79/+5.09%.
 
 const PER_SYMBOL: Record<string, Partial<BtcVpSmcParams>> = {
   ETHUSDT:  { maxStopAtrPct: 4.5 },
@@ -40,13 +43,13 @@ const PER_SYMBOL: Record<string, Partial<BtcVpSmcParams>> = {
   XRPUSDT:  { maxStopAtrPct: 5.5 },
   BNBUSDT:  { maxStopAtrPct: 4.0 },
   LTCUSDT:  { maxStopAtrPct: 4.5 },
-  LINKUSDT: { maxStopAtrPct: 5.0 },
   ATOMUSDT: { maxStopAtrPct: 5.0 },
-  SUIUSDT:  { maxStopAtrPct: 5.0 },
   TONUSDT:  { maxStopAtrPct: 5.0 },
   DOGEUSDT: { maxStopAtrPct: 5.5 },
   APTUSDT:  { maxStopAtrPct: 5.0 },
   ARBUSDT:  { maxStopAtrPct: 5.0 },
+  TAOUSDT:  { maxStopAtrPct: 5.0 },
+  INJUSDT:  { maxStopAtrPct: 5.0 },
 };
 
 async function loadBars(symbol: string, tf: string, lookbackBars: number): Promise<Bar[]> {

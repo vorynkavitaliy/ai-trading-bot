@@ -23,8 +23,9 @@ import { ADX, EMA } from 'technicalindicators';
 
 const SYMBOLS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
-  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'ATOMUSDT',
-  'SUIUSDT', 'TONUSDT', 'DOGEUSDT', 'APTUSDT', 'ARBUSDT',
+  'BNBUSDT', 'LTCUSDT', 'ATOMUSDT',
+  'TONUSDT', 'DOGEUSDT', 'APTUSDT', 'ARBUSDT',
+  'TAOUSDT', 'INJUSDT',
 ];
 
 const PER_SYMBOL: Record<string, Partial<BtcVpSmcParams>> = {
@@ -33,18 +34,18 @@ const PER_SYMBOL: Record<string, Partial<BtcVpSmcParams>> = {
   XRPUSDT:  { maxStopAtrPct: 5.5 },
   BNBUSDT:  { maxStopAtrPct: 4.0 },
   LTCUSDT:  { maxStopAtrPct: 4.5 },
-  LINKUSDT: { maxStopAtrPct: 5.0 },
   ATOMUSDT: { maxStopAtrPct: 5.0 },
-  SUIUSDT:  { maxStopAtrPct: 5.0 },
   TONUSDT:  { maxStopAtrPct: 5.0 },
   DOGEUSDT: { maxStopAtrPct: 5.5 },
   APTUSDT:  { maxStopAtrPct: 5.0 },
   ARBUSDT:  { maxStopAtrPct: 5.0 },
+  TAOUSDT:  { maxStopAtrPct: 5.0 },
+  INJUSDT:  { maxStopAtrPct: 5.0 },
 };
 
 const SLIPPAGE_PCT = parseFloat(process.env.RG_SLIP ?? '0.25');
 const RISK_PCT = parseFloat(process.env.RG_RISK_PCT ?? '0.375');
-const MAX_PARALLEL = parseInt(process.env.RG_CAP ?? '4', 10);
+const MAX_PARALLEL = parseInt(process.env.RG_CAP ?? '6', 10);
 
 const COMMON = {
   startEquity: 50_000,

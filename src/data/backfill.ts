@@ -11,9 +11,10 @@ import { fetchKlines, fetchFunding, TF_MS, delay, BybitKline } from './bybit-pub
 //                (11-pair × cap-6 bt: +115% / MaxDD 4.17%).
 export const SYMBOLS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
-  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'ATOMUSDT',
-  'SUIUSDT', 'TONUSDT', 'DOGEUSDT',
+  'BNBUSDT', 'LTCUSDT', 'ATOMUSDT',
+  'TONUSDT', 'DOGEUSDT',
   'APTUSDT', 'ARBUSDT',
+  'TAOUSDT', 'INJUSDT',
 ];
 const TFS = ['1m', '5m', '15m', '60m', '240m'];
 

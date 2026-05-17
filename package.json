@@ -30,7 +30,7 @@
     "scan:decide": "tsx src/runtime/scan-decide.ts",
     "reconcile": "tsx src/runtime/reconcile.ts",
     "execute": "tsx src/runtime/execute.ts",
-    "backtest:portfolio": "tsx src/backtest/cli/portfolio.ts 365 0.375 4",
+    "backtest:portfolio": "tsx src/backtest/cli/portfolio.ts 365 0.375 6",
 
     "trader:cycle": "scripts/cycle.sh",
     "trader:cron:install": "scripts/cron-install.sh",

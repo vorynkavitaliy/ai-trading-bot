@@ -19,7 +19,9 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 ## Targets and Constraints
 
 - **Goal:** ≥ 5% / month on starting balance (target, not guarantee). Current OOS evidence supports ~2–3%/month combined; 5% is aspirational.
-- **Universe (v3):** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, LTCUSDT, LINKUSDT, ATOMUSDT, SUIUSDT, TONUSDT, DOGEUSDT, APTUSDT, ARBUSDT (13 pairs). Bybit perpetual futures, linear. 2026-05-12 timeline: trimmed 14→11 after week-1 live showed short-only pairs (NEAR/OP/AVAX) bleeding in bull-trend market (combined −$3.7k); ZEC tried, 1 live trade −$1.4k → removed; cap raised 5→6 (11×cap-6 bt: +115%/MaxDD 4.17%); APT/ARB added from candidate pool (per-pair bt 365d: APT WR 92.7%/PF 12, ARB WR 92.9%/PF 14). Top weekly performers: DOGE +$5.7k, TON +$2.1k, BTC +$1.7k. Removed pair data retained for re-evaluation.
+- **Universe (v3):** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, LTCUSDT, ATOMUSDT, TONUSDT, DOGEUSDT, APTUSDT, ARBUSDT, TAOUSDT, INJUSDT (13 pairs). Bybit perpetual futures, linear. Timeline:
+  - 2026-05-12: trimmed 14→11 after week-1 live showed short-only pairs (NEAR/OP/AVAX) bleeding in bull-trend market (combined −$3.7k); ZEC tried, 1 live trade −$1.4k → removed; cap raised 5→6 (11×cap-6 bt: +115%/MaxDD 4.17%); APT/ARB added from candidate pool (per-pair bt 365d: APT WR 92.7%/PF 12, ARB WR 92.9%/PF 14).
+  - 2026-05-17: regime-decompose audit flagged LINK (−1.72R in trend_bull) and SUI (no preferred regime, 5.93R total) as weak; replaced with TAO (per-pair bt 365d slip 0.25%: WR 80.4%/PF 3.86/+5.87%) and INJ (WR 82.5%/PF 4.79/+5.09%). Combined bt @ slip 0.25%, cap-6: +100.37%/13mo, PF 4.14, MaxDD 4.64% (slightly over the 4% internal gate; HyroTrader daily 5% still well clear). Top weekly performers (pre-rotation): DOGE +$5.7k, TON +$2.1k, BTC +$1.7k. Removed pair data retained for re-evaluation.
 - **Accounts:** 200k + 50k HyroTrader prop accounts (currently `demoTrading: true`). Trades are broadcast to **every** sub-key inside `accounts.json` via `Promise.all`.
 
 ## HyroTrader prop firm rules (non-negotiable)

@@ -5,9 +5,10 @@ import { log } from '../core/logger';
 
 const SYMBOLS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
-  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'ATOMUSDT',
-  'SUIUSDT', 'TONUSDT', 'DOGEUSDT',
+  'BNBUSDT', 'LTCUSDT', 'ATOMUSDT',
+  'TONUSDT', 'DOGEUSDT',
   'APTUSDT', 'ARBUSDT',
+  'TAOUSDT', 'INJUSDT',
 ];
 const TFS = ['5m', '15m', '60m', '240m'] as const;
 

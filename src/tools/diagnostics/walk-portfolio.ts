@@ -17,8 +17,9 @@ import { log } from '../../core/logger';
 
 const SYMBOLS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
-  'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'ATOMUSDT',
-  'SUIUSDT', 'TONUSDT', 'DOGEUSDT', 'APTUSDT', 'ARBUSDT',
+  'BNBUSDT', 'LTCUSDT', 'ATOMUSDT',
+  'TONUSDT', 'DOGEUSDT', 'APTUSDT', 'ARBUSDT',
+  'TAOUSDT', 'INJUSDT',
 ];
 
 const PER_SYMBOL: Record<string, Partial<BtcVpSmcParams>> = {
@@ -27,13 +28,13 @@ const PER_SYMBOL: Record<string, Partial<BtcVpSmcParams>> = {
   XRPUSDT:  { maxStopAtrPct: 5.5 },
   BNBUSDT:  { maxStopAtrPct: 4.0 },
   LTCUSDT:  { maxStopAtrPct: 4.5 },
-  LINKUSDT: { maxStopAtrPct: 5.0 },
   ATOMUSDT: { maxStopAtrPct: 5.0 },
-  SUIUSDT:  { maxStopAtrPct: 5.0 },
   TONUSDT:  { maxStopAtrPct: 5.0 },
   DOGEUSDT: { maxStopAtrPct: 5.5 },
   APTUSDT:  { maxStopAtrPct: 5.0 },
   ARBUSDT:  { maxStopAtrPct: 5.0 },
+  TAOUSDT:  { maxStopAtrPct: 5.0 },
+  INJUSDT:  { maxStopAtrPct: 5.0 },
 };
 
 const SLIPPAGE_PCT = parseFloat(process.env.WALK_SLIP ?? '0.12');
@@ -49,7 +50,7 @@ const COMMON = {
 };
 
 const RISK_PCT = parseFloat(process.env.WALK_RISK_PCT ?? '0.375');
-const MAX_PARALLEL = parseInt(process.env.WALK_CAP ?? '4', 10);
+const MAX_PARALLEL = parseInt(process.env.WALK_CAP ?? '6', 10);
 const WINDOW_DAYS = parseInt(process.env.WALK_DAYS ?? '30', 10);
 const NUM_WINDOWS = parseInt(process.env.WALK_N ?? '12', 10);
 
