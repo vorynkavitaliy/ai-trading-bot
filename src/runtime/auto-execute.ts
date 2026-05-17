@@ -15,7 +15,10 @@ const SCAN_PATH = '/tmp/scan-decide-latest.json';
 const SUMMARY_PATH = '/tmp/auto-execute-latest.json';
 const HISTORY_PATH = '/tmp/auto-execute-history.jsonl';
 const RATIONALE_PATH = '/tmp/auto-execute-rationale.txt';
-const PAUSE_FILE = path.resolve(__dirname, '..', 'vault', 'Watchlist', 'PAUSE.md');
+// PAUSE.md marker lives at project root (src/runtime → ../.. = root).
+// tg-bot.ts creates this file on /pause and removes it on /resume; presence
+// means auto-execute halts new entries. mkdir is recursive in tg-bot.
+const PAUSE_FILE = path.resolve(__dirname, '..', '..', 'vault', 'Watchlist', 'PAUSE.md');
 const FRESHNESS_MS = 6 * 60_000;
 
 function appendHistory(entry: any): void {
@@ -28,8 +31,11 @@ function appendHistory(entry: any): void {
 
 function execAndCapture(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn('npx', ['tsx', 'src/execute.ts', ...args], {
-      cwd: path.resolve(__dirname, '..'),
+    // execute.ts lives at src/runtime/execute.ts (post-refactor 6ff2094, 2026-05-17).
+    // cwd = project root so the relative path resolves correctly and so that
+    // execute.ts loads .env / accounts.json / migrations from the right place.
+    const child = spawn('npx', ['tsx', 'src/runtime/execute.ts', ...args], {
+      cwd: path.resolve(__dirname, '..', '..'),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';

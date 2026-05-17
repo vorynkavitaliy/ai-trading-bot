@@ -22,7 +22,9 @@ import { getDayPnl, formatDayPnl } from '../core/pnl';
 import { RISK } from '../runtime/risk-guard';
 import { log } from '../core/logger';
 
-const PAUSE_FILE = path.resolve(__dirname, '..', 'vault', 'Watchlist', 'PAUSE.md');
+// PAUSE.md marker at project root (src/bot → ../.. = root). Created on /pause,
+// removed on /resume. auto-execute.ts skips entries while file exists.
+const PAUSE_FILE = path.resolve(__dirname, '..', '..', 'vault', 'Watchlist', 'PAUSE.md');
 const SCAN_PATH = '/tmp/scan-decide-latest.json';
 const AUTO_EXEC_PATH = '/tmp/auto-execute-latest.json';
 const CYCLE_LOG = '/tmp/cycle.log';
