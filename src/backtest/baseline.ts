@@ -1,4 +1,4 @@
-import { query } from '../lib/db';
+import { query } from '../core/db';
 
 // Buy-and-hold baseline: what would 1 unit of capital do
 // invested at startTs and held until endTs? Reports total return + MaxDD.

@@ -1,4 +1,4 @@
-import { query } from '../lib/db';
+import { query } from '../core/db';
 import { computeFeatures, CandleRow } from '../data/features';
 import { loadCoinglassAt, CoinglassFeatures } from '../data/coinglass-features';
 import {
@@ -12,7 +12,7 @@ import {
   StrategyContext,
 } from './types';
 import { computeMetrics } from './metrics';
-import { log } from '../lib/logger';
+import { log } from '../core/logger';
 
 const FUNDING_INTERVAL_MS = 8 * 60 * 60_000;
 

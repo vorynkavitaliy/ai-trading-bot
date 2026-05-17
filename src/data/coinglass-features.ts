@@ -1,4 +1,4 @@
-import { query } from '../lib/db';
+import { query } from '../core/db';
 
 // Cross-exchange aggregates from Coinglass at-or-before atTs.
 // All queries enforce ts <= atTs to prevent lookahead bias.

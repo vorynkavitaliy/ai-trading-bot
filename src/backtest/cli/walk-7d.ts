@@ -5,13 +5,13 @@
 
 import fs from 'node:fs';
 import { runBacktest } from '../engine';
-import { btcVpSmc, DEFAULT_BTC_VP_SMC, BtcVpSmcParams, resetCooldownState } from '../strategies/btc-vp-smc';
+import { btcVpSmc, DEFAULT_BTC_VP_SMC, BtcVpSmcParams, resetCooldownState } from '../../strategies/btc-vp-smc';
 import { Bar, ClosedTrade, StrategyContext } from '../types';
 import { computeFeatures, CandleRow } from '../../data/features';
 import { loadCoinglassAt, CoinglassFeatures } from '../../data/coinglass-features';
 import { buildEnrichment, buildBtcContextFrom, BtcContext, DecisionEnrichment } from '../enrichment';
-import { query, close as closePg } from '../../lib/db';
-import { log } from '../../lib/logger';
+import { query, close as closePg } from '../../core/db';
+import { log } from '../../core/logger';
 
 const SYMBOLS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'AVAXUSDT',

@@ -7,11 +7,11 @@
 // honest question: "what would $50k actually do across all 10 pairs with cap 4?"
 
 import { runBacktest } from '../engine';
-import { btcVpSmc, DEFAULT_BTC_VP_SMC, BtcVpSmcParams } from '../strategies/btc-vp-smc';
+import { btcVpSmc, DEFAULT_BTC_VP_SMC, BtcVpSmcParams } from '../../strategies/btc-vp-smc';
 import { ClosedTrade, BacktestSettings } from '../types';
 import { computeMetrics, formatMetrics } from '../metrics';
-import { close as closePg } from '../../lib/db';
-import { log } from '../../lib/logger';
+import { close as closePg } from '../../core/db';
+import { log } from '../../core/logger';
 
 const SYMBOLS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
@@ -67,13 +67,20 @@ interface PortfolioTrade extends ClosedTrade {
 }
 
 async function main() {
+  // Override window via env: BT_START_ISO=2026-01-01 BT_END_ISO=2026-05-16
+  // (used for frozen-params OOS splits). Falls back to `days`-from-now window.
   const days = parseInt(process.argv[2] ?? '365', 10);
   const now = Date.now();
-  const startTs = now - days * 24 * 60 * 60_000;
-  const endTs = now;
+  const envStart = process.env.BT_START_ISO ? Date.parse(process.env.BT_START_ISO) : NaN;
+  const envEnd   = process.env.BT_END_ISO   ? Date.parse(process.env.BT_END_ISO)   : NaN;
+  const startTs = Number.isFinite(envStart) ? envStart : now - days * 24 * 60 * 60_000;
+  const endTs   = Number.isFinite(envEnd)   ? envEnd   : now;
+  const windowDays = Math.round((endTs - startTs) / 86_400_000);
   log.info('=== portfolio backtest start ===', {
-    days, symbols: SYMBOLS.length, maxParallel: MAX_PARALLEL,
+    days: windowDays, symbols: SYMBOLS.length, maxParallel: MAX_PARALLEL,
     riskPct: RISK_PCT, startEquity: COMMON.startEquity,
+    from: new Date(startTs).toISOString().slice(0,10),
+    to: new Date(endTs).toISOString().slice(0,10),
   });
 
   // 1) Run per-pair backtests, collect trades
@@ -185,8 +192,8 @@ async function main() {
 
   // ---- output ----
   console.log('================================================================');
-  console.log('PORTFOLIO BACKTEST — VP-SMC, 10 pairs, cap-4 parallel, $50k equity');
-  console.log(`window: ${new Date(startTs).toISOString().slice(0,10)} → ${new Date(endTs).toISOString().slice(0,10)} (${days}d)`);
+  console.log(`PORTFOLIO BACKTEST — VP-SMC, ${SYMBOLS.length} pairs, cap-${MAX_PARALLEL} parallel, $${COMMON.startEquity} equity`);
+  console.log(`window: ${new Date(startTs).toISOString().slice(0,10)} → ${new Date(endTs).toISOString().slice(0,10)} (${windowDays}d)`);
   console.log(`risk per trade: ${RISK_PCT}% of equity (compounding)`);
   console.log('================================================================\n');
 

@@ -6,7 +6,7 @@ import {
   ClosedTrade,
   Strategy,
 } from './types';
-import { log } from '../lib/logger';
+import { log } from '../core/logger';
 
 export interface WalkforwardConfig {
   symbol: string;

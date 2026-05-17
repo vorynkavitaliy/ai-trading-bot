@@ -1,9 +1,9 @@
 import { runBacktest } from '../engine';
 import { formatMetrics } from '../metrics';
 import { runWalkforward, formatWalkforward } from '../walkforward';
-import { btcVpSmc, DEFAULT_BTC_VP_SMC, BtcVpSmcParams } from '../strategies/btc-vp-smc';
-import { close as closePg } from '../../lib/db';
-import { log } from '../../lib/logger';
+import { btcVpSmc, DEFAULT_BTC_VP_SMC, BtcVpSmcParams } from '../../strategies/btc-vp-smc';
+import { close as closePg } from '../../core/db';
+import { log } from '../../core/logger';
 
 const COMMON = {
   startEquity: 50_000,

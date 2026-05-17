@@ -1,9 +1,9 @@
 import { runBacktest } from '../engine';
 import { formatMetrics } from '../metrics';
 import { runWalkforward, formatWalkforward } from '../walkforward';
-import { btcVpSmc, DEFAULT_BTC_VP_SMC, BtcVpSmcParams } from '../strategies/btc-vp-smc';
-import { close as closePg } from '../../lib/db';
-import { log } from '../../lib/logger';
+import { btcVpSmc, DEFAULT_BTC_VP_SMC, BtcVpSmcParams } from '../../strategies/btc-vp-smc';
+import { close as closePg } from '../../core/db';
+import { log } from '../../core/logger';
 
 const COMMON = {
   startEquity: 50_000,
@@ -48,8 +48,11 @@ async function main() {
   const days = parseInt(process.argv[3] ?? '85', 10);
   const wfFlag = process.argv[4] === 'wf';
   const now = Date.now();
-  const startTs = now - days * 24 * 60 * 60_000;
-  const endTs = now;
+  // Override window via env: BT_START_ISO=2026-01-01 BT_END_ISO=2026-05-16
+  const envStart = process.env.BT_START_ISO ? Date.parse(process.env.BT_START_ISO) : NaN;
+  const envEnd   = process.env.BT_END_ISO   ? Date.parse(process.env.BT_END_ISO)   : NaN;
+  const startTs = Number.isFinite(envStart) ? envStart : now - days * 24 * 60 * 60_000;
+  const endTs   = Number.isFinite(envEnd)   ? envEnd   : now;
   const params = paramsFor(symbol);
   const strategy = btcVpSmc(params);
   console.log(`== ${strategy.name} ==`);

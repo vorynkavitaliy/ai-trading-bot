@@ -1,6 +1,6 @@
-import { cgGet } from '../lib/coinglass';
-import { query } from '../lib/db';
-import { log } from '../lib/logger';
+import { cgGet } from '../core/coinglass';
+import { query } from '../core/db';
+import { log } from '../core/logger';
 
 // Hobbyist plan: strict 30 req/min. Pace 2.2s between calls (≈27 req/min) for safety.
 const PACE_MS = 2200;

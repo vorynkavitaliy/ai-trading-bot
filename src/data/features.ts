@@ -1,4 +1,4 @@
-import { query } from '../lib/db';
+import { query } from '../core/db';
 import {
   BollingerBands,
   RSI,

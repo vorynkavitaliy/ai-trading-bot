@@ -1,6 +1,6 @@
 import { runBackfill } from '../backfill';
-import { close as closePg } from '../../lib/db';
-import { log } from '../../lib/logger';
+import { close as closePg } from '../../core/db';
+import { log } from '../../core/logger';
 
 async function main() {
   const days = process.argv[2] ? parseInt(process.argv[2], 10) : 365;

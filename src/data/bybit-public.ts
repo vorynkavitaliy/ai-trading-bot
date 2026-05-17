@@ -1,5 +1,5 @@
 import { RestClientV5 } from 'bybit-api';
-import { log } from '../lib/logger';
+import { log } from '../core/logger';
 
 // Public REST client — no auth needed for klines/funding/oi historical data.
 let client: RestClientV5 | null = null;

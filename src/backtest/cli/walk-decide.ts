@@ -3,7 +3,7 @@
 // compounding equity. Outputs comparison: algo-only vs my-curated.
 
 import fs from 'node:fs';
-import { log } from '../../lib/logger';
+import { log } from '../../core/logger';
 
 const RISK_FULL_PCT = 0.375;        // matches strategy / CLAUDE.md
 const RISK_DOWNSIZED_PCT = 0.25;

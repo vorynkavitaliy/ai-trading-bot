@@ -1,6 +1,6 @@
 import { runCgBackfill } from '../coinglass-backfill';
-import { close as closePg } from '../../lib/db';
-import { log } from '../../lib/logger';
+import { close as closePg } from '../../core/db';
+import { log } from '../../core/logger';
 
 async function main() {
   await runCgBackfill();

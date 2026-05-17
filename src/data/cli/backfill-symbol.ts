@@ -3,8 +3,8 @@
 // Defaults to 365 days for intraday TFs and 730 days for 1D/1W (matches DEFAULT in v3).
 
 import { backfillCandles, backfillFunding } from '../backfill';
-import { close as closePg } from '../../lib/db';
-import { log } from '../../lib/logger';
+import { close as closePg } from '../../core/db';
+import { log } from '../../core/logger';
 
 const TFS_INTRADAY = ['1m', '5m', '15m', '60m', '240m'];
 const TFS_HTF = ['1D', '1W'];
