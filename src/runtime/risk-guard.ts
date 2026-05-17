@@ -6,10 +6,10 @@ import { log } from '../core/logger';
 
 // Risk constants — must match CLAUDE.md § Risk budget v3
 export const RISK = {
-  riskPctBase: 0.375,                       // 2.25% heat cap / 6 parallel = 0.375%
+  riskPctBase: 0.375,                       // 3.00% heat cap / 8 parallel = 0.375%
   riskPctCap: 0.6,                          // hard cap if scaled up by vol multiplier
-  maxParallelPositions: 6,                  // 13-pair universe, cap-6 (calibrated 2026-05-12: +115% / MaxDD 4.17%)
-  totalHeatCapPct: 2.25,                    // 6×0.375 = 2.25
+  maxParallelPositions: 8,                  // 13-pair universe, cap-8 (raised 2026-05-17 after CG+cooldown reduced MaxDD from 4.64% → 2.71% bt @ slip 0.25%, leaving room to widen parallelism)
+  totalHeatCapPct: 3.00,                    // 8×0.375 = 3.00 (still well below HyroTrader 5% daily DD limit)
   dailyDrawdownSoftKillPct: -2.5,
   dailyDrawdownHardKillPct: -4.0,
   totalKillPct: -8.0,

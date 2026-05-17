@@ -39,7 +39,7 @@ const PER_SYMBOL: Record<string, Partial<BtcVpSmcParams>> = {
 // Override via CLI: portfolio.ts <days> <riskPct> <maxParallel> [posCapPct] [slippagePct] [tp1SlMode] [bePlusBufferPct]
 // Defaults reflect production config (no_move SL after TP1, slip 0.12%).
 const RISK_PCT = parseFloat(process.argv[3] ?? '0.375');
-const MAX_PARALLEL = parseInt(process.argv[4] ?? '6', 10);
+const MAX_PARALLEL = parseInt(process.argv[4] ?? '8', 10);
 const POS_CAP_PCT = process.argv[5] ? parseFloat(process.argv[5]) : undefined;
 const SLIPPAGE_PCT = process.argv[6] ? parseFloat(process.argv[6]) : 0.12;          // mid-realistic
 const TP1_SL_MODE = (process.argv[7] as 'be' | 'be_plus' | 'no_move' | 'halfway' | undefined) ?? 'no_move';
