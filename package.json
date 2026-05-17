@@ -17,7 +17,6 @@
     "tg:heartbeat": "tsx src/scripts/heartbeat.ts",
     "bybit:test": "tsx src/scripts/bybit-test.ts",
     "cg:test": "tsx src/scripts/coinglass-test.ts",
-    "news:fetch": "tsx src/scripts/news-fetch.ts",
     "risk": "tsx src/scripts/risk-status.ts",
 
     "data:backfill": "tsx src/data/cli/backfill-run.ts",
