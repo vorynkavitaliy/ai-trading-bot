@@ -8,12 +8,20 @@ import { log } from '../core/logger';
 export const RISK = {
   riskPctBase: 0.375,                       // 2.25% heat cap / 6 parallel = 0.375%
   riskPctCap: 0.6,                          // hard cap if scaled up by vol multiplier
-  maxParallelPositions: 6,                  // 11-pair universe, cap-6 (calibrated 2026-05-12: +115% / MaxDD 4.17%)
+  maxParallelPositions: 6,                  // 13-pair universe, cap-6 (calibrated 2026-05-12: +115% / MaxDD 4.17%)
   totalHeatCapPct: 2.25,                    // 6×0.375 = 2.25
   dailyDrawdownSoftKillPct: -2.5,
   dailyDrawdownHardKillPct: -4.0,
   totalKillPct: -8.0,
   maxSlPerPairPerDay: 2,
+  // Cooldown after a SL hit on a pair: block re-entry on that pair for N hours.
+  // Motivated by 2026-05-15→16 live cluster where DOGE LONG SL'd at 13:45 UTC then
+  // auto-execute re-entered LONG at 23:00 UTC same day (within UTC-day SL cap),
+  // also SL'd. The UTC-day SL cap (2) is too coarse for fast back-to-back losses
+  // when intraday regime continuation is active. 12h is a middle ground:
+  //   - long enough to let a directional move complete or reverse cleanly
+  //   - short enough that genuine VAL/VAH re-touch setups next session aren't lost
+  cooldownAfterSlHours: 12,
   fundingWindows: [0, 8, 16] as const,    // UTC hours
   fundingWindowMinutes: 10,
   hyrotraderDailyDdPct: -5.0,
@@ -76,6 +84,24 @@ async function fetchSessionStartEquity(now: Date): Promise<number> {
   return v ? parseFloat(v) : 0;
 }
 
+// Returns a cooldown-block reason string if the pair had a SL within the last
+// `RISK.cooldownAfterSlHours` hours; null otherwise. The cooldown is independent
+// of the UTC-day SL cap — it survives day boundaries.
+async function lastSlCooldown(now: Date, symbol: string): Promise<string | null> {
+  const cutoffMs = now.getTime() - RISK.cooldownAfterSlHours * 3_600_000;
+  const r = await query<{ ts: string }>(
+    `SELECT EXTRACT(EPOCH FROM closed_at) * 1000 AS ts FROM trades
+     WHERE symbol = $1 AND status = 'closed' AND realized_r < 0 AND closed_at IS NOT NULL
+     ORDER BY closed_at DESC LIMIT 1`,
+    [symbol]
+  );
+  const lastTs = r.rows[0]?.ts ? parseFloat(r.rows[0].ts) : null;
+  if (lastTs === null || lastTs < cutoffMs) return null;
+  const minsSince = Math.floor((now.getTime() - lastTs) / 60_000);
+  const minsRemaining = Math.max(0, RISK.cooldownAfterSlHours * 60 - minsSince);
+  return `SL ${minsSince}min ago; cooldown ${minsRemaining}min remaining`;
+}
+
 async function countSlToday(now: Date, symbol: string): Promise<number> {
   // Count UNIQUE logical SL events per pair, not per-account-row. One signal placed
   // on N accounts creates N closed-rows when SL hits, all with near-identical opened_at
@@ -128,14 +154,21 @@ export async function getRiskState(now: Date = new Date()): Promise<RiskState> {
   const pairBlocked: Record<string, string> = {};
   const universe = [
     'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
-    'BNBUSDT', 'LTCUSDT', 'LINKUSDT', 'ATOMUSDT',
-    'SUIUSDT', 'TONUSDT', 'DOGEUSDT',
+    'BNBUSDT', 'LTCUSDT', 'ATOMUSDT',
+    'TONUSDT', 'DOGEUSDT',
     'APTUSDT', 'ARBUSDT',
+    'TAOUSDT', 'INJUSDT',
   ];
   for (const symbol of universe) {
     const slCount = await countSlToday(now, symbol);
     if (slCount >= RISK.maxSlPerPairPerDay) {
       pairBlocked[symbol] = `${slCount} SL today (cap ${RISK.maxSlPerPairPerDay})`;
+    }
+    // Cooldown after a recent SL — finer-grained than the UTC-day cap.
+    // Only set if not already blocked by the daily cap above (avoid stomping the reason).
+    if (!pairBlocked[symbol]) {
+      const cool = await lastSlCooldown(now, symbol);
+      if (cool) pairBlocked[symbol] = cool;
     }
   }
 

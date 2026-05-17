@@ -14,22 +14,26 @@ const HISTORY_LIMIT = 540;
 // it has the deepest data and is consistently available.
 const REF_EXCHANGE = 'Binance';
 
-// v3 FINAL universe: 10 pairs matching VP-SMC strategy.
-const SYMBOLS_COIN = ['BTC', 'ETH', 'SOL', 'XRP', 'AVAX', 'BNB', 'LTC', 'LINK', 'NEAR', 'ATOM'];
+// v3 universe (post 2026-05-17): 10 pairs matching VP-SMC strategy.
+// Hobbyist plan caps us at 10 symbols. Selected by portfolio contribution:
+// keep top contributors so crowd-fade gate (funding extreme, LS-top) actually
+// covers our biggest exposure. ARB/INJ/TAO/SUI fall through and rely on
+// VP + FVG + PWL alone (graceful fallback in strategy).
+const SYMBOLS_COIN = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'LTC', 'ATOM', 'DOGE', 'TON', 'APT'];
 const PAIRS = [
   { symbol: 'BTC',  pair: 'BTCUSDT'  },
   { symbol: 'ETH',  pair: 'ETHUSDT'  },
   { symbol: 'SOL',  pair: 'SOLUSDT'  },
   { symbol: 'XRP',  pair: 'XRPUSDT'  },
-  { symbol: 'AVAX', pair: 'AVAXUSDT' },
   { symbol: 'BNB',  pair: 'BNBUSDT'  },
   { symbol: 'LTC',  pair: 'LTCUSDT'  },
-  { symbol: 'LINK', pair: 'LINKUSDT' },
-  { symbol: 'NEAR', pair: 'NEARUSDT' },
   { symbol: 'ATOM', pair: 'ATOMUSDT' },
+  { symbol: 'DOGE', pair: 'DOGEUSDT' },
+  { symbol: 'TON',  pair: 'TONUSDT'  },
+  { symbol: 'APT',  pair: 'APTUSDT'  },
 ];
-// Old v2 universe pairs left in DB but no longer refreshed:
-// OP, SUI, XLM, TAO. Removed from current SYMBOLS_COIN/PAIRS.
+// Removed from CG refresh (no longer in active universe): AVAX, LINK, NEAR, OP, SUI, XLM, TAO.
+// Data for those pairs left in DB for historical reference / backtest replay.
 
 function delay(ms: number) {
   return new Promise(r => setTimeout(r, ms));
