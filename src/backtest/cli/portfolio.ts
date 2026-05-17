@@ -51,6 +51,9 @@ const COOLDOWN_HOURS = parseFloat(process.env.COOLDOWN_HOURS ?? '0');
 // Loss-cluster diagnostic (2026-05-17) showed Fri-Sun loss-rate 26-29% vs Mon-Wed 4-8%.
 const SKIP_DAYS = (process.env.SKIP_DAYS ?? '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
 const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+// Optional minimum rrTp2 filter: skip entries where (entry→TP2)/(entry→SL) < threshold.
+// 0 disables. Motivated by 2026-05-17 lost-signals analysis: 5/8 lost shorts had rrTp2 < 0.5.
+const MIN_RR_TP2 = parseFloat(process.env.MIN_RR_TP2 ?? '0');
 
 const COMMON: Omit<BacktestSettings, 'symbol' | 'startTs' | 'endTs'> = {
   startEquity: 50_000,
@@ -123,6 +126,16 @@ async function main() {
       if (open[i].exitTs <= t.entryTs) open.splice(i, 1);
     }
 
+    // Block #-2: rrTp2 quality filter (skip if reward-to-risk to TP2 below threshold)
+    if (MIN_RR_TP2 > 0 && t.tp2 !== undefined) {
+      const stopDist = Math.abs(t.entry - t.sl);
+      const tp2Dist = t.side === 'long' ? (t.tp2 - t.entry) : (t.entry - t.tp2);
+      const rrTp2 = stopDist > 0 ? tp2Dist / stopDist : 0;
+      if (rrTp2 < MIN_RR_TP2) {
+        skipped.push({ ...t, portfolioRiskUsd: 0, portfolioPnlUsd: 0, equityAtEntry: equity, equityAtExit: equity, skipped: true, skipReason: 'low-rr' });
+        continue;
+      }
+    }
     // Block #-1: weekend (or any configured day) skip
     if (SKIP_DAYS.length > 0) {
       const dayName = DAY_NAMES[new Date(t.entryTs).getUTCDay()];
@@ -223,6 +236,7 @@ async function main() {
   const skipCap = skipped.filter((s) => s.skipReason === 'cap-4').length;
   const skipCooldown = skipped.filter((s) => s.skipReason === 'cooldown').length;
   const skipDay = skipped.filter((s) => s.skipReason === 'day-skip').length;
+  const skipLowRr = skipped.filter((s) => s.skipReason === 'low-rr').length;
 
   // ---- output ----
   console.log('================================================================');
@@ -241,6 +255,9 @@ async function main() {
   }
   if (SKIP_DAYS.length > 0) {
     console.log(`  skipped (days ${SKIP_DAYS.join(',')}): ${skipDay}`);
+  }
+  if (MIN_RR_TP2 > 0) {
+    console.log(`  skipped (rrTp2 < ${MIN_RR_TP2}): ${skipLowRr}`);
   }
   console.log(`  take-rate:            ${((realized.length / allTrades.length) * 100).toFixed(1)}%\n`);
 

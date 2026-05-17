@@ -47,6 +47,8 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 | Hard kill (daily) | −4% → halt + manual review |
 | Total kill | −8% → halt + manual review |
 | Max SL/pair/day | 2 → pair disabled until next UTC day |
+| Cooldown after SL | 12h on the same pair (survives UTC day boundary) |
+| Min rrTp2 to take | 0.3 — setups with reward-to-TP2 below 0.3× risk skipped as low-quality |
 | Funding window | ±10 min around 00/08/16 UTC → skip new entries |
 
 ## Inviolable execution rules

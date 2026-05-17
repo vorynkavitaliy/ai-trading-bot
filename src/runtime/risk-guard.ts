@@ -22,6 +22,13 @@ export const RISK = {
   //   - long enough to let a directional move complete or reverse cleanly
   //   - short enough that genuine VAL/VAH re-touch setups next session aren't lost
   cooldownAfterSlHours: 12,
+  // Minimum risk-reward to TP2: skip setups where (entry→TP2)/(entry→SL) < this.
+  // Motivated by 2026-05-17 lost-signals analysis (8 signals dropped by path bug;
+  // 5/8 had rrTp2 < 0.5, all losing or breakeven). Backtest cap-10 + cooldown +
+  // slip 0.25%, MIN_RR_TP2=0.3: +108.06%/13mo (vs baseline +107.55%), PF 4.45
+  // (vs 4.04), MaxDD 2.52% (vs 2.79%) — Pareto improvement: same return, lower
+  // DD, higher PF, just by filtering rrTp2 < 0.3 setups (~15% of signals).
+  minRrTp2: 0.3,
   fundingWindows: [0, 8, 16] as const,    // UTC hours
   fundingWindowMinutes: 10,
   hyrotraderDailyDdPct: -5.0,

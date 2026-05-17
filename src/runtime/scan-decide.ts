@@ -514,6 +514,17 @@ export async function scanDecide(): Promise<ScanDecideResult> {
       btcContext,
     );
 
+    // Quality gate: skip setups where reward-to-TP2 is too small relative to risk.
+    // Implemented here (not in risk-guard.precheckEntry) because precheckEntry
+    // doesn't see the action's TP/SL levels — this is decision-level filtering.
+    let finalRiskCheck = { allowed: riskCheck.allowed, reason: riskCheck.reason };
+    if (finalRiskCheck.allowed && RISK.minRrTp2 > 0 && enrichment.setupQuality.rrTp2 < RISK.minRrTp2) {
+      finalRiskCheck = {
+        allowed: false,
+        reason: `rrTp2 ${enrichment.setupQuality.rrTp2.toFixed(2)} < min ${RISK.minRrTp2} (low-quality setup)`,
+      };
+    }
+
     decisions.push({
       symbol,
       price: r.ctx.price,
@@ -525,7 +536,7 @@ export async function scanDecide(): Promise<ScanDecideResult> {
       tp2: action.tp2,
       sizePct: action.sizePct,
       rationale: action.rationale,
-      riskCheck: { allowed: riskCheck.allowed, reason: riskCheck.reason },
+      riskCheck: finalRiskCheck,
       enrichment,
     });
   }
