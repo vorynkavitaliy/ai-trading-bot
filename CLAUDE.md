@@ -1,6 +1,16 @@
 # Trading Bot — Operational Charter
 
-You assist with a cron-driven crypto trading bot. TypeScript scripts in `src/` execute autonomously via cron — `auto-execute.ts` handles all live entries. Your role: ad-hoc maintenance, strategy iteration, news/black-swan halts, debugging when cron pipeline misbehaves.
+You assist with a cron-driven crypto trading bot. TypeScript scripts in `src/` execute autonomously via cron — `src/runtime/auto-execute.ts` handles all live entries. Your role: ad-hoc maintenance, strategy iteration, news/black-swan halts, debugging when cron pipeline misbehaves.
+
+**Source layout:**
+- `src/core/` — shared infra (db, bybit, telegram, accounts, config, logger, …)
+- `src/runtime/` — hot path: `scan-decide`, `auto-execute`, `execute`, `position-watcher`, `reconcile`, `risk-guard`
+- `src/reporting/` — `scan-summary` (read-only snapshot)
+- `src/bot/` — Telegram bot (`tg-bot`)
+- `src/strategies/` — pure strategy logic (VP-SMC etc.)
+- `src/backtest/` — engine + `cli/` (active runners) + `archive/` (legacy)
+- `src/data/` — backfill, features, Coinglass + `cli/`
+- `src/tools/` — utilities split into `db/`, `admin/`, `diagnostics/`, `ops/`
 
 This document is the **inviolable contract**. It is loaded into every cycle. Never violate.
 
@@ -40,8 +50,8 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 
 1. **Server-side SL within 5 minutes** of every position open. No manual stops.
 2. **Edit-never-cancel** SL: to move a stop, use Bybit `amend_order`, never cancel-then-create.
-3. **Pre-trade risk check** via `src/risk-guard.ts` blocks entries that would breach any limit above.
-4. **Reconcile before every cycle.** If `trades` DB rows and Bybit positions diverge → halt analysis until aligned (`src/reconcile.ts`).
+3. **Pre-trade risk check** via `src/runtime/risk-guard.ts` blocks entries that would breach any limit above.
+4. **Reconcile before every cycle.** If `trades` DB rows and Bybit positions diverge → halt analysis until aligned (`src/runtime/reconcile.ts`).
 5. **No live entry until backtest gate passes:** PF ≥ 1.4, MaxDD ≤ 4%, expectancy ≥ 0.3R, ≥ 100 trades combined across the universe on OOS walk-forward. Per-pair expR may dip slightly (e.g. XRP 0.25R) provided combined portfolio metrics stay above gate.
 
 ## Architecture: cron-driven (no Claude in hot path)
@@ -99,10 +109,10 @@ Discarded rules (already validated harmful at 365d):
 - **`$?` exit-code echoes** (`; echo "exit $?"`) — same reason. The npx/tsx tool output already shows success/failure. Just run the command, then use Read tool on the output file.
 - **Process substitution `<(...)` and `>(...)`** — Claude Code prompts. Use `cmd > /tmp/out 2>&1; jq ... /tmp/out` instead.
 - `--rationale "... $value ..."` with shell-special chars — use `--rationale-file /tmp/r.txt` instead (Write the file first via the Write tool)
-- `curl -X POST api.telegram.org` — use `npx tsx src/scripts/tg-test.ts` or `src/lib/telegram.ts`
+- `curl -X POST api.telegram.org` — use `npx tsx src/tools/diagnostics/tg-test.ts` or `src/core/telegram.ts`
 - Multi-line `echo "..." >> file` — use the Edit tool
 
-If a new diagnostic is needed, write a committed `src/scripts/<name>.ts` and invoke it via `npx tsx`.
+If a new diagnostic is needed, write a committed `src/tools/diagnostics/<name>.ts` and invoke it via `npx tsx`.
 
 ## Telegram style (Russian, no slang)
 
@@ -125,5 +135,5 @@ When any fires: send Telegram alert, trigger `/pause` (writes `vault/Watchlist/P
 
 - Universe set to 10 pairs (BTC, ETH, SOL, XRP, AVAX, BNB, LTC, LINK, NEAR, ATOM) — prior 10-pair v2 was different selection (had OP/SUI/XLM/TAO instead of XRP/LTC/LINK/ATOM); v3 universe rebuilt around VP-SMC strategy validation. Walk-forward OOS: ~90% of windows profitable, 658 combined trades on 1y.
 - Risk increased to 0.6% base / 1.0% cap (from 0.5% flat) — operator authorized "чуть больше рисков".
-- Strategy v3 = VP-SMC (Volume Profile + PWL/PWH + FVG + Coinglass crowd-fade). Implementation lives in `src/scan-decide.ts` and `src/strategies/`.
+- Strategy v3 = VP-SMC (Volume Profile + PWL/PWH + FVG + Coinglass crowd-fade). Implementation lives in `src/runtime/scan-decide.ts` and `src/strategies/`.
 - Postgres (Docker) for historical candle DB — incremental, no daily exchange re-pull. (Redis cache removed 2026-05-16 — wasn't load-bearing.)

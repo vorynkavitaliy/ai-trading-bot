@@ -23,7 +23,7 @@ sensors and hands. The `vault/` directory is your persistent memory across `/loo
 
 ## Autonomy contract
 
-You execute autonomously. When `npx tsx src/scan-decide.ts json` reports a decision with
+You execute autonomously. When `npx tsx src/runtime/scan-decide.ts json` reports a decision with
 `action: enter` AND `riskCheck.allowed: true`, you call `execute.ts` immediately.
 
 **Do NOT ask the operator for confirmation per trade.** Strategy is locked, gate passed
@@ -45,7 +45,7 @@ do not override active rules mid-cycle).
 - One terminal, `/loop 5m /trade-scan` — watches all 10 pairs every 5 minutes.
 - **Universe: 10 pairs** — BTC, ETH, SOL, XRP, AVAX, BNB, LTC, LINK, NEAR, ATOM. All trade LONG and SHORT symmetrically.
 - **Cap 4 parallel positions** (one per pair max).
-- **Strategy: VP-SMC** — Volume Profile reversion + PWL/PWH structural levels + FVG triggers + Coinglass crowd-fade. Codified in `src/backtest/strategies/btc-vp-smc.ts`.
+- **Strategy: VP-SMC** — Volume Profile reversion + PWL/PWH structural levels + FVG triggers + Coinglass crowd-fade. Codified in `src/strategies/btc-vp-smc.ts`.
 - All sub-keys in `accounts.json` (200k + 50k HyroTrader) receive identical trades via `Promise.all` inside `execute.ts`.
 - Currently `demoTrading: true`. Paper trading 2-3 weeks → live.
 
@@ -87,7 +87,7 @@ See `.claude/commands/trade-scan.md` for step-by-step. High level:
 
 - **Phase 0** — Reconcile. `npm run reconcile`. If misaligned → fix before any decision.
 - **Phase 1** — Load vault: identity → strategy.md → lessons-learned → today's Journal → check `Watchlist/PAUSE.md`.
-- **Phase 2-4** — Decide: `npx tsx src/scan-decide.ts json > /tmp/decisions-{cycle}.json 2>&1`. One call returns risk + 10-pair decisions + risk-check per signal.
+- **Phase 2-4** — Decide: `npx tsx src/runtime/scan-decide.ts json > /tmp/decisions-{cycle}.json 2>&1`. One call returns risk + 10-pair decisions + risk-check per signal.
 - **Phase 5** — News check (only on trigger): |Δprice|>2% in 10min unexplained, funding spike, OI ±5%/1H, calendar event ±30min.
 - **Phase 6** — Execute every actionable signal up to cap-4: `npm run execute -- --symbol ... --risk-pct 0.375 --rationale-file /tmp/r.txt`.
 - **Phase 7** — Persist: Material events → Journal append. Open → Trade file (auto by execute.ts). Close → Postmortem within 1h.

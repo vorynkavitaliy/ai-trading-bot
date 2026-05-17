@@ -12,8 +12,7 @@
 # Allowed alternatives:
 #   - Edit tool (for appending/modifying existing files)
 #   - Write tool (for creating new files)
-#   - npx tsx src/journal-append.ts (for journal appends specifically)
-#   - npx tsx src/scan-summary.ts (for JSON inspection)
+#   - npx tsx src/reporting/scan-summary.ts (for JSON inspection)
 #
 # Input: JSON on stdin with tool_input.command
 # Output: exit 2 + stderr message to block the tool call; exit 0 to allow.
@@ -58,12 +57,11 @@ they trigger Claude Code permission prompts on every /loop cycle, breaking auton
 
 Use one of these instead:
 
-  • Journal append → Edit tool (find last line, append new entry)
-                  OR npx tsx src/journal-append.ts --file /tmp/entry.md
+  • Append to existing file → Edit tool (find last line, append new entry)
 
   • Create new file → Write tool
 
-  • JSON inspection → npx tsx src/scan-summary.ts (saves to /tmp, read via Read tool)
+  • JSON inspection → npx tsx src/reporting/scan-summary.ts (saves to /tmp, read via Read tool)
 
 See CLAUDE.md § "Autonomous Execution — Command Discipline" for full rules.
 MSG
@@ -85,9 +83,9 @@ quoted argument" security detection → permission prompt every cycle → bot ha
 Use one of these instead:
 
   • Need structured data from JSON?
-    → Save to /tmp with Write tool OR npx tsx src/scan-summary.ts
+    → Save to /tmp with Write tool OR npx tsx src/reporting/scan-summary.ts
     → Read with Read tool (handles JSON natively)
-    → If recurring need: add the field to src/scan-data.ts + scan-summary.ts,
+    → If recurring need: extend src/reporting/scan-summary.ts,
       commit as reusable infra. NEVER shell out inline.
 
   • Need to process a committed file?
@@ -113,8 +111,8 @@ and `$(...)` (command substitution). This breaks /loop autonomy.
 
 Use these patterns instead:
 
-  ❌ npx tsx src/scan-decide.ts > /tmp/x.json 2>&1; echo "exit $?"; ls -la /tmp/x.json
-  ✅ npx tsx src/scan-decide.ts > /tmp/x.json 2>&1
+  ❌ npx tsx src/runtime/scan-decide.ts > /tmp/x.json 2>&1; echo "exit $?"; ls -la /tmp/x.json
+  ✅ npx tsx src/runtime/scan-decide.ts > /tmp/x.json 2>&1
      [then use Read tool on /tmp/x.json — exit code is in tool output, file size visible there]
 
   ❌ DATA="$(cat /tmp/x.json)"
@@ -136,8 +134,8 @@ if echo "$command" | grep -qE '(^|[^[:alnum:]_])[<>]\('; then
 Claude Code's built-in classifier prompts on every cycle for process substitution,
 which breaks /loop autonomy. Use the two-step pattern instead:
 
-  ❌ jq ... <(npx tsx src/scan-decide.ts json)
-  ✅ npx tsx src/scan-decide.ts json > /tmp/decisions.json 2>&1
+  ❌ jq ... <(npx tsx src/runtime/scan-decide.ts json)
+  ✅ npx tsx src/runtime/scan-decide.ts json > /tmp/decisions.json 2>&1
      jq ... /tmp/decisions.json
 
 This pattern is already in the allow-list (`Bash(* > /tmp/*; *)`).

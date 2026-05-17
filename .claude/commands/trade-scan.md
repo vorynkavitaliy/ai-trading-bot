@@ -83,7 +83,7 @@ Skip any `archive/` subdirectories. Per-pair Thesis files are deprecated for v3 
 npm run scan:decide
 ```
 
-(Or `npx tsx src/scan-decide.ts` — same thing.) **Do NOT redirect** with `> /tmp/...` — `scan-decide.ts` automatically writes its JSON output to `/tmp/scan-decide-latest.json` as a side effect. Stdout is the human-readable summary, the file is machine-readable.
+(Or `npx tsx src/runtime/scan-decide.ts` — same thing.) **Do NOT redirect** with `> /tmp/...` — `scan-decide.ts` automatically writes its JSON output to `/tmp/scan-decide-latest.json` as a side effect. Stdout is the human-readable summary, the file is machine-readable.
 
 After the command runs:
 - Read `/tmp/scan-decide-latest.json` via the **Read tool** (not `cat`, not `tail`).
@@ -236,10 +236,10 @@ external/reconstructed trades.
 - `node -e '...'`, `python3 -c '...'`.
 - `"$(cat file)"` — command substitution inside args.
 - `--rationale "... $870 ..."` — use `--rationale-file` instead.
-- `curl -X POST api.telegram.org` — use `npx tsx src/scripts/tg-test.ts` or `src/lib/telegram.ts`.
+- `curl -X POST api.telegram.org` — use `npx tsx src/tools/diagnostics/tg-test.ts` or `src/core/telegram.ts`.
 - `echo "..." >> file` multi-line — use the Edit tool.
 
-If a new diagnostic is needed, write a committed `src/scripts/<name>.ts`, invoke `npx tsx`.
+If a new diagnostic is needed, write a committed `src/tools/diagnostics/<name>.ts`, invoke `npx tsx`.
 
 ---
 

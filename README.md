@@ -3,35 +3,29 @@
 1. Инфраструктура (Docker)
 
 cd /root/Projects/ai-trading-bot
-npm run infra:up # Postgres 5433 + Redis 6380
-npm run db:migrate # накатить все миграции 001/002/003
+npm run infra:up # Postgres 5433
+npm run db:migrate # накатить все миграции
 
 2. Данные (если БД пустая)
 
-npm run data:backfill # OHLCV за 365д для 10 пар (~10-15 мин)
+npm run data:backfill # OHLCV за 365д для 13 пар (~10-15 мин)
 npm run data:dw # 1D/1W за 730 дней
-npm run cg:backfill # Coinglass для 10 пар (~3-5 мин)
+npm run cg:backfill # Coinglass для 13 пар (~3-5 мин)
 
 3. Cron (фоновый цикл)
 
 npm run trader:cron:install # _/5 _ \* \* \* cycle.sh
 npm run trader:status # проверь что cron установлен
 
-4. tmux + Claude
+4. (опционально) tmux + Claude для ручного сопровождения
 
-npm run trader:start # новая tmux сессия + claude
---continue
+Cron уже исполняет hot-path. Claude нужен только для ad-hoc:
+news-halt (PAUSE.md), бэктестов, отладки.
 
+npm run trader:start # новая tmux сессия + claude --continue
 # (если уже есть сессия — `npm run trader:attach`)
 
-5. Запуск /loop в окне claude
-
-В окне claude (внутри tmux) набери:
-/loop 5m /trade-watch
-
-6. Detach
-
-Ctrl+B → D
+Detach: Ctrl+B → D
 
 ---
 
@@ -47,7 +41,8 @@ Ctrl+B → D
 │ Дневной P&L │ npm run trader:pnl │
 ├────────────────────────────┼────────────────────────────────────┤
 │ Все сделки за 48ч │ npx tsx │
-│ │ src/scripts/trades-status.ts │
+│ │ src/tools/diagnostics/ │
+│ │ trades-status.ts │
 ├────────────────────────────┼────────────────────────────────────┤
 │ Reconcile вручную │ npm run reconcile │
 ├────────────────────────────┼────────────────────────────────────┤
