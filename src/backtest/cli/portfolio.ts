@@ -44,6 +44,13 @@ const POS_CAP_PCT = process.argv[5] ? parseFloat(process.argv[5]) : undefined;
 const SLIPPAGE_PCT = process.argv[6] ? parseFloat(process.argv[6]) : 0.12;          // mid-realistic
 const TP1_SL_MODE = (process.argv[7] as 'be' | 'be_plus' | 'no_move' | 'halfway' | undefined) ?? 'no_move';
 const BE_PLUS_BUFFER_PCT = process.argv[8] ? parseFloat(process.argv[8]) : 0.10;
+// Optional cooldown after a SL on a pair (in hours). 0 disables. Mirrors RISK.cooldownAfterSlHours
+// in src/runtime/risk-guard.ts so backtest can simulate the live block.
+const COOLDOWN_HOURS = parseFloat(process.env.COOLDOWN_HOURS ?? '0');
+// Optional weekend skip: SKIP_DAYS=fri,sat,sun blocks entries on those UTC days.
+// Loss-cluster diagnostic (2026-05-17) showed Fri-Sun loss-rate 26-29% vs Mon-Wed 4-8%.
+const SKIP_DAYS = (process.env.SKIP_DAYS ?? '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
 const COMMON: Omit<BacktestSettings, 'symbol' | 'startTs' | 'endTs'> = {
   startEquity: 50_000,
@@ -106,11 +113,31 @@ async function main() {
   const open: { symbol: string; exitTs: number }[] = [];
   const taken: PortfolioTrade[] = [];
   const skipped: PortfolioTrade[] = [];
+  // Track last SL exitTs per pair for cooldown enforcement (only if COOLDOWN_HOURS > 0)
+  const lastSlByPair = new Map<string, number>();
+  const cooldownMs = COOLDOWN_HOURS * 3_600_000;
 
   for (const t of allTrades) {
     // Drop positions that closed before this entry
     for (let i = open.length - 1; i >= 0; i--) {
       if (open[i].exitTs <= t.entryTs) open.splice(i, 1);
+    }
+
+    // Block #-1: weekend (or any configured day) skip
+    if (SKIP_DAYS.length > 0) {
+      const dayName = DAY_NAMES[new Date(t.entryTs).getUTCDay()];
+      if (SKIP_DAYS.includes(dayName)) {
+        skipped.push({ ...t, portfolioRiskUsd: 0, portfolioPnlUsd: 0, equityAtEntry: equity, equityAtExit: equity, skipped: true, skipReason: 'day-skip' });
+        continue;
+      }
+    }
+    // Block #0: cooldown after recent SL on this pair (optional)
+    if (cooldownMs > 0) {
+      const lastSl = lastSlByPair.get(t.symbol);
+      if (lastSl !== undefined && t.entryTs - lastSl < cooldownMs) {
+        skipped.push({ ...t, portfolioRiskUsd: 0, portfolioPnlUsd: 0, equityAtEntry: equity, equityAtExit: equity, skipped: true, skipReason: 'cooldown' });
+        continue;
+      }
     }
 
     // Block #1: same-pair already open
@@ -136,6 +163,10 @@ async function main() {
       ...t, portfolioRiskUsd, portfolioPnlUsd, equityAtEntry, equityAtExit,
     });
     open.push({ symbol: t.symbol, exitTs: t.exitTs });
+    // Record SL exit for cooldown tracking (real loss only; tp1_then_sl_be with positive R is BE-tail, not a loss)
+    if (cooldownMs > 0 && t.pnlR < 0) {
+      lastSlByPair.set(t.symbol, t.exitTs);
+    }
   }
 
   // 4) Walk taken trades by exitTs to compound equity correctly
@@ -190,6 +221,8 @@ async function main() {
   // 7) Skip diagnostics
   const skipPair = skipped.filter((s) => s.skipReason === 'pair-open').length;
   const skipCap = skipped.filter((s) => s.skipReason === 'cap-4').length;
+  const skipCooldown = skipped.filter((s) => s.skipReason === 'cooldown').length;
+  const skipDay = skipped.filter((s) => s.skipReason === 'day-skip').length;
 
   // ---- output ----
   console.log('================================================================');
@@ -202,7 +235,13 @@ async function main() {
   console.log(`  total signals:        ${allTrades.length}`);
   console.log(`  taken:                ${realized.length}`);
   console.log(`  skipped (pair open):  ${skipPair}`);
-  console.log(`  skipped (cap-4):      ${skipCap}`);
+  console.log(`  skipped (cap-${MAX_PARALLEL}):      ${skipCap}`);
+  if (COOLDOWN_HOURS > 0) {
+    console.log(`  skipped (cooldown ${COOLDOWN_HOURS}h): ${skipCooldown}`);
+  }
+  if (SKIP_DAYS.length > 0) {
+    console.log(`  skipped (days ${SKIP_DAYS.join(',')}): ${skipDay}`);
+  }
   console.log(`  take-rate:            ${((realized.length / allTrades.length) * 100).toFixed(1)}%\n`);
 
   console.log('per-pair (only TAKEN trades):');
