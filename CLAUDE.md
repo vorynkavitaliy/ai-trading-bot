@@ -22,7 +22,7 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 - **Universe (v3):** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, LTCUSDT, ATOMUSDT, TONUSDT, DOGEUSDT, APTUSDT, ARBUSDT, TAOUSDT, INJUSDT (13 pairs). Bybit perpetual futures, linear. Timeline:
   - 2026-05-12: trimmed 14→11 after week-1 live showed short-only pairs (NEAR/OP/AVAX) bleeding in bull-trend market (combined −$3.7k); ZEC tried, 1 live trade −$1.4k → removed; cap raised 5→6 (11×cap-6 bt: +115%/MaxDD 4.17%); APT/ARB added from candidate pool (per-pair bt 365d: APT WR 92.7%/PF 12, ARB WR 92.9%/PF 14).
   - 2026-05-17 (rotation): regime-decompose audit flagged LINK (−1.72R in trend_bull) and SUI (no preferred regime, 5.93R total) as weak; replaced with TAO (per-pair bt 365d slip 0.25%: WR 80.4%/PF 3.86/+5.87%) and INJ (WR 82.5%/PF 4.79/+5.09%).
-  - 2026-05-17 (risk lift): after Coinglass coverage was swapped to active universe (DOGE/TON/APT in, AVAX/LINK/NEAR out) and a 12-hour cooldown-after-SL was added (motivated by the 2026-05-15→16 DOGE-cluster live losses), backtest MaxDD dropped from 4.64% → 2.01% bt @ slip 0.25%. With that buffer in hand, cap raised 6 → 8 and total heat cap 2.25 → 3.00. Combined bt @ slip 0.25%, cap-8 + CG + cooldown 12h: +102.37%/13mo, PF 4.02, MaxDD 2.71% — still well under HyroTrader 5% daily DD. Top weekly performers (pre-rotation): DOGE +$5.7k, TON +$2.1k, BTC +$1.7k. Removed pair data retained for re-evaluation.
+  - 2026-05-17 (risk lift): after Coinglass coverage was swapped to active universe (DOGE/TON/APT in, AVAX/LINK/NEAR out) and a 12-hour cooldown-after-SL was added (motivated by the 2026-05-15→16 DOGE-cluster live losses), backtest MaxDD dropped from 4.64% → 2.01% bt @ slip 0.25%. With that buffer in hand, cap was raised 6 → 8 (heat 2.25 → 3.00), then a second step 8 → 10 (heat 3.00 → 3.75). Combined bt @ slip 0.25%, cap-10 + CG + cooldown 12h: +107.53%/13mo, PF 4.04, MaxDD 2.79%. Worst-case stress @ slip 0.40%: MaxDD 3.96% (HyroTrader 5% buffer ~1pp — tighter than cap-8, mind it). cap-10 is rarely binding (6/682 signals blocked) so it's effectively close to no-cap at current volume. Top weekly performers (pre-rotation): DOGE +$5.7k, TON +$2.1k, BTC +$1.7k. Removed pair data retained for re-evaluation.
 - **Accounts:** 200k + 50k HyroTrader prop accounts (currently `demoTrading: true`). Trades are broadcast to **every** sub-key inside `accounts.json` via `Promise.all`.
 
 ## HyroTrader prop firm rules (non-negotiable)
@@ -38,11 +38,11 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 
 | Parameter | Value |
 |---|---|
-| Risk per trade (base) | 0.375% of equity (8×0.375% = 3.00% max heat) |
+| Risk per trade (base) | 0.375% of equity (10×0.375% = 3.75% max heat) |
 | Volatility scalar range | 0.7× – 1.2× of base |
 | Hard cap per trade | 0.6% of equity |
-| Max parallel positions | 8 (one per pair max, across 13-pair universe) — raised 2026-05-17 from cap-6 after CG+cooldown reduced MaxDD from 4.64% → 2.71%, leaving room to widen parallelism |
-| Total heat cap | 3.00% of equity |
+| Max parallel positions | 10 (one per pair max, across 13-pair universe) — raised 2026-05-17 from cap-8 (and earlier 6→8) after CG+cooldown reduced MaxDD; cap-10 is rarely binding (6/682 signals blocked in bt) — effectively close to "no cap" given current signal volume |
+| Total heat cap | 3.75% of equity |
 | Soft kill (daily) | −2.5% → flat until next UTC day |
 | Hard kill (daily) | −4% → halt + manual review |
 | Total kill | −8% → halt + manual review |
