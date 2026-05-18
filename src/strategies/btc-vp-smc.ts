@@ -186,22 +186,22 @@ function hasBearishFvg(bars: Bar[], lookback: number, minSize: number): boolean 
   return false;
 }
 
-function passCoinglassLong(cg: CoinglassFeatures | undefined, p: BtcVpSmcParams): { ok: boolean; reason: string } {
-  if (!cg) return { ok: true, reason: 'cg-missing-permissive' };
-  if (cg.funding_oi_weighted != null && Math.abs(cg.funding_oi_weighted) > p.fundingExtremeAbs)
-    return { ok: false, reason: `funding-extreme:${cg.funding_oi_weighted.toFixed(5)}` };
-  if (cg.ls_top_position != null && cg.ls_top_position > p.lsTopMaxLong)
-    return { ok: false, reason: `ls-top-too-long:${cg.ls_top_position.toFixed(2)}` };
-  return { ok: true, reason: 'pass' };
+// 2026-05-18: CG gates disabled. Audit (cg-gates-effect.ts + cg-gates-1variant.ts):
+//   - With full 360d CG history active, gates blocked 64% of signals (504/787 trades)
+//   - Blocked trades had AVG R = +0.294 (vs +0.257 for passed) — gates rejected profitable setups
+//   - 13-pair × 365d × slip 0.25%: gates-off +120.50% vs baseline +36.44% (3.3x P&L lift)
+//   - MaxDD impact minimal: 2.30% → 2.57% normal slip, 4.44% on 0.40 stress (still inside HyroTrader 5%)
+//   - Root cause: gates were half-implemented crowd-fade — they BLOCKED entries when crowd
+//     extreme, but the strategy didn't switch direction. So we skipped good mean-reversion setups.
+//   - Gates were silently permissive when CG history was sparse (the CLAUDE.md '+107%' baseline
+//     was an artifact of that). Once CG was backfilled to full 360d, gates over-filtered live too.
+// To re-enable: revert these two functions to threshold-based checks below the early-return.
+function passCoinglassLong(_cg: CoinglassFeatures | undefined, _p: BtcVpSmcParams): { ok: boolean; reason: string } {
+  return { ok: true, reason: 'cg-gate-disabled-2026-05-18' };
 }
 
-function passCoinglassShort(cg: CoinglassFeatures | undefined, p: BtcVpSmcParams): { ok: boolean; reason: string } {
-  if (!cg) return { ok: true, reason: 'cg-missing-permissive' };
-  if (cg.funding_oi_weighted != null && Math.abs(cg.funding_oi_weighted) > p.fundingExtremeAbs)
-    return { ok: false, reason: `funding-extreme:${cg.funding_oi_weighted.toFixed(5)}` };
-  if (cg.ls_top_position != null && cg.ls_top_position < p.lsTopMinShort)
-    return { ok: false, reason: `ls-top-too-short:${cg.ls_top_position.toFixed(2)}` };
-  return { ok: true, reason: 'pass' };
+function passCoinglassShort(_cg: CoinglassFeatures | undefined, _p: BtcVpSmcParams): { ok: boolean; reason: string } {
+  return { ok: true, reason: 'cg-gate-disabled-2026-05-18' };
 }
 
 export function btcVpSmc(params: BtcVpSmcParams = DEFAULT_BTC_VP_SMC): Strategy {
