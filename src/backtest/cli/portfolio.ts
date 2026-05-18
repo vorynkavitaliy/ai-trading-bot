@@ -54,6 +54,9 @@ const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 // Optional minimum rrTp2 filter: skip entries where (entry→TP2)/(entry→SL) < threshold.
 // 0 disables. Motivated by 2026-05-17 lost-signals analysis: 5/8 lost shorts had rrTp2 < 0.5.
 const MIN_RR_TP2 = parseFloat(process.env.MIN_RR_TP2 ?? '0');
+// Optional minimum tp1DistPct filter: skip entries where |TP1-entry|/entry < threshold (in %).
+// 0 disables. Motivated by 2026-05-18 setup-autopsy: tp1Dist Q1 (<0.35%) had avgR -0.111 in OOS.
+const MIN_TP1_DIST_PCT = parseFloat(process.env.MIN_TP1_DIST_PCT ?? '0');
 
 const COMMON: Omit<BacktestSettings, 'symbol' | 'startTs' | 'endTs'> = {
   startEquity: 50_000,
@@ -133,6 +136,15 @@ async function main() {
       const rrTp2 = stopDist > 0 ? tp2Dist / stopDist : 0;
       if (rrTp2 < MIN_RR_TP2) {
         skipped.push({ ...t, portfolioRiskUsd: 0, portfolioPnlUsd: 0, equityAtEntry: equity, equityAtExit: equity, skipped: true, skipReason: 'low-rr' });
+        continue;
+      }
+    }
+    // Block #-1.5: tp1DistPct filter (skip if TP1 too close to entry — tight scalps lose in OOS)
+    if (MIN_TP1_DIST_PCT > 0) {
+      const tp1Dist = Math.abs(t.tp1 - t.entry);
+      const tp1DistPct = (tp1Dist / t.entry) * 100;
+      if (tp1DistPct < MIN_TP1_DIST_PCT) {
+        skipped.push({ ...t, portfolioRiskUsd: 0, portfolioPnlUsd: 0, equityAtEntry: equity, equityAtExit: equity, skipped: true, skipReason: 'tight-tp1' });
         continue;
       }
     }

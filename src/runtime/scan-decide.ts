@@ -36,6 +36,9 @@ const UNIVERSE = [
 ];                       // (LINK weak in trend_bull, SUI no preferred regime).
                          // TAO bt 365d slip 0.25%: WR 80.4%/PF 3.86/+5.87%.
                          // INJ bt 365d slip 0.25%: WR 82.5%/PF 4.79/+5.09%.
+                         // HYPE evaluated 2026-05-18: single-pair PF 4.35 looks great
+                         // but 14-pair stress @ 0.40% slip pushed MaxDD 3.96% → 5.15%
+                         // (breaches our 4% gate AND HyroTrader 5% daily DD). Held out.
 
 const PER_SYMBOL: Record<string, Partial<BtcVpSmcParams>> = {
   ETHUSDT:  { maxStopAtrPct: 4.5 },
