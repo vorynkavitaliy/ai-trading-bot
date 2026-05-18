@@ -2,8 +2,11 @@ import { cgGet } from '../core/coinglass';
 import { query } from '../core/db';
 import { log } from '../core/logger';
 
-// Hobbyist plan: strict 30 req/min. Pace 2.2s between calls (≈27 req/min) for safety.
-const PACE_MS = 2200;
+// Standard plan: 300 req/min. Pace 220ms between calls (≈270 req/min) for safety.
+// Upgraded from Hobbyist (30 req/min, 2200ms pace) on 2026-05-18 — operator wanted
+// to unlock HYPE/ARB/INJ/TAO CG coverage and probe new endpoints (large orderbook,
+// hyperliquid whale positions, etc.).
+const PACE_MS = 220;
 
 // Coinglass interval string for 4h
 const TF = '4h';
@@ -14,12 +17,9 @@ const HISTORY_LIMIT = 540;
 // it has the deepest data and is consistently available.
 const REF_EXCHANGE = 'Binance';
 
-// v3 universe (post 2026-05-17): 10 pairs matching VP-SMC strategy.
-// Hobbyist plan caps us at 10 symbols. Selected by portfolio contribution:
-// keep top contributors so crowd-fade gate (funding extreme, LS-top) actually
-// covers our biggest exposure. ARB/INJ/TAO/SUI fall through and rely on
-// VP + FVG + PWL alone (graceful fallback in strategy).
-const SYMBOLS_COIN = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'LTC', 'ATOM', 'DOGE', 'TON', 'APT'];
+// v3 universe (post 2026-05-18, Standard plan): 14 pairs incl. HYPE.
+// Standard plan removes the 10-symbol cap of Hobbyist — full universe now covered.
+const SYMBOLS_COIN = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'LTC', 'ATOM', 'DOGE', 'TON', 'APT', 'ARB', 'INJ', 'TAO', 'HYPE'];
 const PAIRS = [
   { symbol: 'BTC',  pair: 'BTCUSDT'  },
   { symbol: 'ETH',  pair: 'ETHUSDT'  },
@@ -31,9 +31,11 @@ const PAIRS = [
   { symbol: 'DOGE', pair: 'DOGEUSDT' },
   { symbol: 'TON',  pair: 'TONUSDT'  },
   { symbol: 'APT',  pair: 'APTUSDT'  },
+  { symbol: 'ARB',  pair: 'ARBUSDT'  },
+  { symbol: 'INJ',  pair: 'INJUSDT'  },
+  { symbol: 'TAO',  pair: 'TAOUSDT'  },
+  { symbol: 'HYPE', pair: 'HYPEUSDT' },
 ];
-// Removed from CG refresh (no longer in active universe): AVAX, LINK, NEAR, OP, SUI, XLM, TAO.
-// Data for those pairs left in DB for historical reference / backtest replay.
 
 function delay(ms: number) {
   return new Promise(r => setTimeout(r, ms));
@@ -180,6 +182,24 @@ async function backfillLiqPair() {
   }
 }
 
+// Orderbook depth (Standard plan): bids/asks within ±5% of market price.
+// 4h interval, 360d coverage. Used to compute imbalance ratios for entry-quality research.
+async function backfillOrderbook() {
+  for (const { pair } of PAIRS) {
+    const r = await cgGet<any[]>('/futures/orderbook/ask-bids-history', {
+      exchange: REF_EXCHANGE, symbol: pair, interval: TF, range: 5, limit: HISTORY_LIMIT,
+    });
+    await bulkInsert('cg_orderbook_pair',
+      ['exchange', 'pair', 'ts', 'bids_usd', 'asks_usd', 'bids_qty', 'asks_qty'],
+      (r.data ?? []).map((d: any) => [
+        REF_EXCHANGE, pair, d.time,
+        d.bids_usd, d.asks_usd, d.bids_quantity, d.asks_quantity,
+      ]));
+    log.info('cg orderbook backfilled', { pair, n: (r.data ?? []).length });
+    await delay(PACE_MS);
+  }
+}
+
 async function snapshotLiquidations() {
   // Real-time coin list snapshot
   const coinList = await cgGet<any[]>('/futures/liquidation/coin-list', {});
@@ -225,6 +245,7 @@ export async function runCgBackfill(): Promise<void> {
   await backfillLongShort();
   await backfillTaker();
   await backfillLiqPair();
+  await backfillOrderbook();
   await snapshotLiquidations();
 
   // Print summary stats
@@ -237,6 +258,7 @@ export async function runCgBackfill(): Promise<void> {
     'cg_ls_top_position',
     'cg_taker_pair',
     'cg_liq_pair',
+    'cg_orderbook_pair',
     'cg_liq_coin_snapshot',
     'cg_liq_exchange_snapshot',
   ];

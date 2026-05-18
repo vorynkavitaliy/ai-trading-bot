@@ -12,3 +12,6 @@ accounts.json
 # Pure runtime — no value in git history
 vault/state/cycle-counter.json     # resets per /clear
 .claude/scheduled_tasks.lock        # harness state
+
+# 2026-05-18: vault/ wiped; ignore re-creation by stale tools
+vault/

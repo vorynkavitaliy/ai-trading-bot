@@ -50,9 +50,11 @@ const COMMON = {
 };
 
 const RISK_PCT = parseFloat(process.env.WALK_RISK_PCT ?? '0.375');
-const MAX_PARALLEL = parseInt(process.env.WALK_CAP ?? '6', 10);
+const MAX_PARALLEL = parseInt(process.env.WALK_CAP ?? '10', 10);
 const WINDOW_DAYS = parseInt(process.env.WALK_DAYS ?? '30', 10);
 const NUM_WINDOWS = parseInt(process.env.WALK_N ?? '12', 10);
+// Mirror RISK.cooldownAfterSlHours in live risk-guard so windows reflect production behaviour
+const COOLDOWN_HOURS = parseFloat(process.env.WALK_COOLDOWN_HOURS ?? '12');
 
 interface WindowResult {
   fromTs: number;
@@ -77,15 +79,22 @@ async function runWindow(startTs: number, endTs: number): Promise<WindowResult> 
   }
   all.sort((a, b) => a.entryTs - b.entryTs);
 
-  // Portfolio sim with cap + pair-unique
+  // Portfolio sim with cap + pair-unique + cooldown-after-SL (mirrors live)
   const open: { symbol: string; exitTs: number }[] = [];
   const taken: ClosedTrade[] = [];
+  const lastSlByPair = new Map<string, number>();
+  const cooldownMs = COOLDOWN_HOURS * 3_600_000;
   for (const t of all) {
     for (let i = open.length - 1; i >= 0; i--) if (open[i].exitTs <= t.entryTs) open.splice(i, 1);
+    if (cooldownMs > 0) {
+      const lastSl = lastSlByPair.get(t.symbol);
+      if (lastSl !== undefined && t.entryTs - lastSl < cooldownMs) continue;
+    }
     if (open.some((p) => p.symbol === t.symbol)) continue;
     if (open.length >= MAX_PARALLEL) continue;
     taken.push(t);
     open.push({ symbol: t.symbol, exitTs: t.exitTs });
+    if (cooldownMs > 0 && t.pnlR < 0) lastSlByPair.set(t.symbol, t.exitTs);
   }
 
   // Compound equity by event order
@@ -140,7 +149,7 @@ async function main() {
   const totalDays = WINDOW_DAYS * NUM_WINDOWS;
 
   console.log('==================================================================================');
-  console.log(`WALK-FORWARD PORTFOLIO — ${SYMBOLS.length} pairs, cap-${MAX_PARALLEL}, risk ${RISK_PCT}%, slip ${SLIPPAGE_PCT}%`);
+  console.log(`WALK-FORWARD PORTFOLIO — ${SYMBOLS.length} pairs, cap-${MAX_PARALLEL}, risk ${RISK_PCT}%, slip ${SLIPPAGE_PCT}%, cooldown ${COOLDOWN_HOURS}h`);
   console.log(`${NUM_WINDOWS} × ${WINDOW_DAYS}d windows = ${totalDays}d total`);
   console.log(`anchor end: ${new Date(envEnd).toISOString().slice(0, 10)}`);
   console.log('==================================================================================\n');
