@@ -4,7 +4,8 @@
 //
 // Usage: npx tsx src/tools/diagnostics/tg-send-file.ts /tmp/tg-msg.txt
 
-import { sendFromFile } from '../../core/telegram';
+import fs from 'node:fs';
+import { send } from '../../core/telegram';
 
 async function main() {
   const filePath = process.argv[2];
@@ -12,7 +13,9 @@ async function main() {
     console.error('usage: npx tsx src/tools/diagnostics/tg-send-file.ts <path>');
     process.exit(1);
   }
-  await sendFromFile(filePath);
+  const text = fs.readFileSync(filePath, 'utf-8');
+  // raw=true: file content is already pre-formatted HTML (b/i/code/etc tags work).
+  await send(text, { raw: true });
   console.log('sent from ' + filePath);
 }
 
