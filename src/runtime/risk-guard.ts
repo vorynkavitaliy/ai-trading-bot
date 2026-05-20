@@ -22,6 +22,11 @@ export const RISK = {
   //   - long enough to let a directional move complete or reverse cleanly
   //   - short enough that genuine VAL/VAH re-touch setups next session aren't lost
   cooldownAfterSlHours: 12,
+  // Cooldown after ANY close (TP1/TP2/manual) — prevents immediate re-entry on
+  // pair where setup just played out. 2026-05-20: LTC TP1'd at 13:03, strategy
+  // saw new VAH touch and re-entered at 14:00 (57min). Same pair right after
+  // close → likely exhausted setup, wait for genuine fresh structure.
+  cooldownAfterAnyCloseHours: 4,
   // Minimum risk-reward to TP2: skip setups where (entry→TP2)/(entry→SL) < this.
   // Motivated by 2026-05-17 lost-signals analysis (8 signals dropped by path bug;
   // 5/8 had rrTp2 < 0.5, all losing or breakeven). Backtest cap-10 + cooldown +
@@ -95,18 +100,33 @@ async function fetchSessionStartEquity(now: Date): Promise<number> {
 // `RISK.cooldownAfterSlHours` hours; null otherwise. The cooldown is independent
 // of the UTC-day SL cap — it survives day boundaries.
 async function lastSlCooldown(now: Date, symbol: string): Promise<string | null> {
-  const cutoffMs = now.getTime() - RISK.cooldownAfterSlHours * 3_600_000;
-  const r = await query<{ ts: string }>(
+  // Check 1: post-SL cooldown (long, default 12h) — only for losing closes
+  const slCutoff = now.getTime() - RISK.cooldownAfterSlHours * 3_600_000;
+  const slR = await query<{ ts: string }>(
     `SELECT EXTRACT(EPOCH FROM closed_at) * 1000 AS ts FROM trades
      WHERE symbol = $1 AND status = 'closed' AND realized_r < 0 AND closed_at IS NOT NULL
      ORDER BY closed_at DESC LIMIT 1`,
     [symbol]
   );
+  const slTs = slR.rows[0]?.ts ? parseFloat(slR.rows[0].ts) : null;
+  if (slTs !== null && slTs >= slCutoff) {
+    const minsSince = Math.floor((now.getTime() - slTs) / 60_000);
+    return `SL cooldown: ${minsSince}min since SL, need ${RISK.cooldownAfterSlHours * 60}min`;
+  }
+
+  // Check 2: post-any-close cooldown (short, default 4h) — for TP1/TP2/manual closes
+  const anyCutoff = now.getTime() - RISK.cooldownAfterAnyCloseHours * 3_600_000;
+  const r = await query<{ ts: string }>(
+    `SELECT EXTRACT(EPOCH FROM closed_at) * 1000 AS ts FROM trades
+     WHERE symbol = $1 AND status = 'closed' AND closed_at IS NOT NULL
+     ORDER BY closed_at DESC LIMIT 1`,
+    [symbol]
+  );
   const lastTs = r.rows[0]?.ts ? parseFloat(r.rows[0].ts) : null;
-  if (lastTs === null || lastTs < cutoffMs) return null;
+  if (lastTs === null || lastTs < anyCutoff) return null;
   const minsSince = Math.floor((now.getTime() - lastTs) / 60_000);
-  const minsRemaining = Math.max(0, RISK.cooldownAfterSlHours * 60 - minsSince);
-  return `SL ${minsSince}min ago; cooldown ${minsRemaining}min remaining`;
+  const minsRemaining = Math.max(0, RISK.cooldownAfterAnyCloseHours * 60 - minsSince);
+  return `closed ${minsSince}min ago; any-close cooldown ${minsRemaining}min remaining`;
 }
 
 async function countSlToday(now: Date, symbol: string): Promise<number> {
