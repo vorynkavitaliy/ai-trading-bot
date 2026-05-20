@@ -53,12 +53,10 @@ if ! npx tsx src/tools/ops/heartbeat.ts > /tmp/cycle-hb.out 2>&1; then
   log "heartbeat failed (see /tmp/cycle-hb.out)"
 fi
 
-# 3a) structure-watch: alert Telegram if open positions show signs of structural break.
-#     Operator-decision (not auto-close — auto-close variants all hurt P&L in backtest).
-#     Self-dedupes via /tmp/structure-watch-alerted.json (one alert per trade per 24h).
-if ! npx tsx src/runtime/structure-watch.ts > /tmp/cycle-watch.out 2>&1; then
-  log "structure-watch failed (see /tmp/cycle-watch.out)"
-fi
+# Note: structure-watch.ts exists but is NOT in cron. Operator preference:
+# Claude (in autonomous /loop) monitors positions with contextual judgment
+# and sends Telegram alerts when he sees structural concerns. Automated
+# threshold-based alerts proved less useful than Claude's contextual analysis.
 
 # 4) HEAVY: scan-decide ONLY on top-of-hour (HH:00-04).
 #    This makes live use the SAME decision points as backtest engine: one per hour.
