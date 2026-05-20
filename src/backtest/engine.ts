@@ -381,7 +381,9 @@ export async function runBacktest(
       }
     }
 
-    if (position) continue;
+    // 2026-05-20: previously `if (position) continue` skipped strategy entirely while
+    // position open. Now we still call strategy with position context — strategy may
+    // return 'exit' if a reverse-direction setup is detected (thesis flipped).
     if (i < 1) continue;
 
     // 2) Build features from bars 0..i-1 (all CLOSED).
@@ -449,7 +451,7 @@ export async function runBacktest(
       featuresD: featD,
       featuresW: featW,
       fundingRate,
-      position: null,
+      position,  // 2026-05-20: strategy now sees its own open position for reverse-signal exits
       coinglass,
       recentBars,
       bars1hRecent,
@@ -457,7 +459,38 @@ export async function runBacktest(
       bars1wRecent,
     };
     const action = strategy.decide(ctx);
-    if (action.kind !== 'enter') continue;
+
+    // Reverse-signal exit: strategy asks to close current position
+    if (action.kind === 'exit' && position) {
+      const next1mIdx = tsTo1mIdx.get(nowTs) ?? data.bars1m.findIndex((b) => b.ts >= nowTs);
+      if (next1mIdx >= 0) {
+        const exitBar = data.bars1m[next1mIdx];
+        const fillPrice = applySlippage(exitBar.open, position.side, 'exit', settings.slippagePct);
+        const exitFee = position.qty * fillPrice * fees.taker;
+        const grossPnl = position.side === 'long'
+          ? (fillPrice - position.entry) * position.qty
+          : (position.entry - fillPrice) * position.qty;
+        const totalFees = position.openFeesUsd + exitFee;
+        const netPnl = grossPnl - totalFees - position.fundingPaidUsd;
+        const pnlR = position.riskedUsd > 0 ? netPnl / position.riskedUsd : 0;
+        trades.push({
+          side: position.side, symbol: settings.symbol,
+          entry: position.entry, exit: fillPrice,
+          entryTs: position.entryTs, exitTs: exitBar.ts,
+          qty: position.initialQty,
+          sl: position.initialSl, tp1: position.tp1, tp2: position.tp2,
+          pnlUsd: netPnl, feesUsd: totalFees, fundingUsd: position.fundingPaidUsd,
+          pnlR, exitReason: 'strategy_exit', rationale: action.reason,
+        });
+        equityRef.value += netPnl;
+        equityCurve.push({ ts: exitBar.ts, equity: equityRef.value });
+        position = null;
+      }
+      continue;
+    }
+
+    // Skip if hold OR if position still open (don't pyramid)
+    if (action.kind !== 'enter' || position) continue;
 
     // 3) Open position at nowBar's first 1m bar (= bar[i].ts).
     const next1mIdx = tsTo1mIdx.get(nowTs) ?? data.bars1m.findIndex((b) => b.ts >= nowTs);

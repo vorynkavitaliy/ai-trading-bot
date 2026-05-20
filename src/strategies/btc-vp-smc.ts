@@ -42,6 +42,8 @@ export interface BtcVpSmcParams {
   riskPct: number;            // 0.6
   // Trade-frequency control
   cooldownHours: number;      // 6 — minimum hours between entries on same side
+  reverseSignalMinHours: number;  // 4 — min position age before reverse-signal exit can fire (avoid thrashing on noise)
+  reverseSignalMinDrawdownFrac: number;  // 0.30 — position must be ≥30% of stop-distance underwater (avoid killing winners)
 }
 
 export const DEFAULT_BTC_VP_SMC: BtcVpSmcParams = {
@@ -63,6 +65,8 @@ export const DEFAULT_BTC_VP_SMC: BtcVpSmcParams = {
   minTpSpreadPct: 0.3,
   riskPct: 0.375,            // = 1.5% heat cap / 4 parallel positions (CLAUDE.md)
   cooldownHours: 6,
+  reverseSignalMinHours: 18,  // 18h — cut positions older than this if still red
+  reverseSignalMinDrawdownFrac: 0.30,  // unused for time-stop-if-red
 };
 
 // Module-level cooldown tracker. Reset implicitly when a new backtest is run
@@ -237,13 +241,40 @@ export function btcVpSmc(params: BtcVpSmcParams = DEFAULT_BTC_VP_SMC): Strategy 
       const cg = ctx.coinglass as CoinglassFeatures | undefined;
       const minFvgSize = f.atr * params.fvgMinSizeAtrFrac;
 
-      // ---- LONG setup ----
+      // Compute BOTH side's setup conditions up front. Used (a) for entry below
+      // and (b) for reverse-signal exit when a position is already open.
+      // 2026-05-20 (operator-requested): if strategy sees a setup in the OPPOSITE
+      // direction to a currently open position, that position's structural thesis
+      // has flipped — exit instead of holding until SL/time-stop.
       const valTouched = levelTouchedRecently(bars1h, vp.val, params.vpVaTouchLookback, 'val');
       const reentryLong = !params.vpReentryRequired || ctx.price > vp.val;
       const fvgBull = hasBullishFvg(bars1h, params.fvgLookback, minFvgSize);
       const aboveSwl = ctx.price > pwl;
+      const longSetupActive = valTouched && reentryLong && fvgBull && aboveSwl;
 
-      if (valTouched && reentryLong && fvgBull && aboveSwl) {
+      const vahTouched = levelTouchedRecently(bars1h, vp.vah, params.vpVaTouchLookback, 'vah');
+      const reentryShort = !params.vpReentryRequired || ctx.price < vp.vah;
+      const fvgBear = hasBearishFvg(bars1h, params.fvgLookback, minFvgSize);
+      const belowPwh = ctx.price < pwh;
+      const shortSetupActive = vahTouched && reentryShort && fvgBear && belowPwh;
+
+      // 2026-05-20: tested 6 variants of "smart early exit" (reverse-signal, structure
+      // invalidation via POC/VA cross, time-stop-if-red, multi-confirmation). ALL hurt
+      // P&L vs baseline. VP-SMC's edge is patience in drawdown — winners often
+      // pass through "structure broken" intermediate phases and recover via mean
+      // reversion. Cutting locks in losses that would have been TP wins.
+      //
+      // Yesterday's 4 bad trades (BTC/ETH/SOL/TAO shorts) looked like clean exit
+      // candidates in hindsight, but applying same criterion to all 600+ year's
+      // trades costs 30-90pp of P&L. Selection bias on the losers.
+      //
+      // Keeping position-aware context (ctx.position) so future research has it,
+      // but no auto-exit. Operator may manually close via /close-symbol if a
+      // specific position looks structurally broken.
+      if (ctx.position) return { kind: 'hold' };
+
+      // ---- LONG setup ----
+      if (longSetupActive) {
         if (inCooldown(ctx.symbol, 'long', ctx.ts, params.cooldownHours)) return { kind: 'hold' };
 
         const cgRes = passCoinglassLong(cg, params);
@@ -280,12 +311,7 @@ export function btcVpSmc(params: BtcVpSmcParams = DEFAULT_BTC_VP_SMC): Strategy 
       }
 
       // ---- SHORT setup ----
-      const vahTouched = levelTouchedRecently(bars1h, vp.vah, params.vpVaTouchLookback, 'vah');
-      const reentryShort = !params.vpReentryRequired || ctx.price < vp.vah;
-      const fvgBear = hasBearishFvg(bars1h, params.fvgLookback, minFvgSize);
-      const belowPwh = ctx.price < pwh;
-
-      if (vahTouched && reentryShort && fvgBear && belowPwh) {
+      if (shortSetupActive) {
         if (inCooldown(ctx.symbol, 'short', ctx.ts, params.cooldownHours)) return { kind: 'hold' };
 
         const cgRes = passCoinglassShort(cg, params);
