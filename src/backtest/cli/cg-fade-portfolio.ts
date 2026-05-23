@@ -22,7 +22,7 @@ const TIER1: PairCfg[] = [
   { pair: 'ATOMUSDT', strategy: fundingFade() },
   { pair: 'ARBUSDT',  strategy: fundingFade() },
   { pair: 'XRPUSDT',  strategy: fundingTaConfluence() },
-  { pair: 'LTCUSDT',  strategy: fundingFade() },
+  { pair: 'LTCUSDT',  strategy: lsTopPositionFade({ pctHi: 0.85, pctLo: 0.15, usePairTrend: false, useBtcTrend: true, slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12, riskPct: 0.5 }) },
 ];
 
 const COMMON = {

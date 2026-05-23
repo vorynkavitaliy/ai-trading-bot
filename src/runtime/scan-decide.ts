@@ -5,7 +5,8 @@
 //   2. Computes features at all TFs
 //   3. Loads Coinglass features (if available — null otherwise, strategy permissive)
 //   4. Builds StrategyContext identical to backtest engine
-//   5. Calls VP-SMC decide() → 'hold' | 'enter'
+//   5. Calls per-pair strategy decide() → 'hold' | 'enter'
+//      (strategy assignment in src/runtime/pair-strategies.ts; CG-fade v4)
 //
 // For 'enter' decisions:
 //   - Runs risk-guard precheck (heat cap, kill switches, funding window, ...)

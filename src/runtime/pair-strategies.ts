@@ -37,8 +37,13 @@ export const TIER1_PORTFOLIO: PairStrategyCfg[] = [
     strategy: fundingFade({ riskPct: LIVE_RISK_PCT }) },
   { pair: 'ATOMUSDT', enabled: true,
     strategy: fundingFade({ riskPct: LIVE_RISK_PCT }) },
+  // LTC 2026-05-23 audit: funding fade gave PF 1.02 / sumR +0.83 in portfolio
+  // (vs single-pair +8.85). Switched to S2 (L/S TopPos fade + BTC trend) which
+  // gave PF 1.31 / sumR +11.98 / WR 56.3% in pair sweep.
   { pair: 'LTCUSDT', enabled: true,
-    strategy: fundingFade({ riskPct: LIVE_RISK_PCT }) },
+    strategy: lsTopPositionFade({ pctHi: 0.85, pctLo: 0.15,
+      usePairTrend: false, useBtcTrend: true,
+      slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12, riskPct: LIVE_RISK_PCT }) },
   { pair: 'ARBUSDT', enabled: true,
     strategy: fundingFade({ riskPct: LIVE_RISK_PCT }) },
   // S4: Funding + L/S Top Account confluence (XRP — walk-forward WR 66.7% OOS, PF 2.50)

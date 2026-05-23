@@ -104,7 +104,7 @@ export async function notifyOpen(a: OpenTradeArgs): Promise<void> {
   lines.push(escapeHtml(rat));
   lines.push(``);
   lines.push(SEP);
-  lines.push(`<i>VP-SMC v3 • ${escapeHtml(a.cycle ?? '')} • ${nowUtcShort()}</i>`);
+  lines.push(`<i>CG-fade v4 • ${escapeHtml(a.cycle ?? '')} • ${nowUtcShort()}</i>`);
 
   await send(lines.join('\n'), { raw: true });
 }
@@ -182,7 +182,7 @@ export async function notifyClose(a: CloseArgs): Promise<void> {
   }
   lines.push(``);
   lines.push(SEP);
-  lines.push(`<i>VP-SMC v3 • ${nowUtcShort()}</i>`);
+  lines.push(`<i>CG-fade v4 • ${nowUtcShort()}</i>`);
 
   await send(lines.join('\n'), { raw: true });
 }
@@ -296,7 +296,7 @@ export async function notifyHeartbeat(h: HeartbeatArgs): Promise<void> {
   }
   lines.push(``);
   lines.push(SEP);
-  lines.push(`<i>VP-SMC v3 • ${nowUtcShort()}</i>`);
+  lines.push(`<i>CG-fade v4 • ${nowUtcShort()}</i>`);
 
   await send(lines.join('\n'), { raw: true });
 }
