@@ -18,13 +18,17 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 
 ## Targets and Constraints
 
-- **Goal:** ≥ 5% / month on starting balance (target, not guarantee). Current OOS evidence supports ~2–3%/month combined; 5% is aspirational.
-- **Universe (v3):** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, LTCUSDT, ATOMUSDT, TONUSDT, DOGEUSDT, APTUSDT, ARBUSDT, TAOUSDT, INJUSDT (13 pairs). Bybit perpetual futures, linear. Timeline:
-  - 2026-05-12: trimmed 14→11 after week-1 live showed short-only pairs (NEAR/OP/AVAX) bleeding in bull-trend market (combined −$3.7k); ZEC tried, 1 live trade −$1.4k → removed; cap raised 5→6 (11×cap-6 bt: +115%/MaxDD 4.17%); APT/ARB added from candidate pool (per-pair bt 365d: APT WR 92.7%/PF 12, ARB WR 92.9%/PF 14).
-  - 2026-05-17 (rotation): regime-decompose audit flagged LINK (−1.72R in trend_bull) and SUI (no preferred regime, 5.93R total) as weak; replaced with TAO (per-pair bt 365d slip 0.25%: WR 80.4%/PF 3.86/+5.87%) and INJ (WR 82.5%/PF 4.79/+5.09%).
-  - 2026-05-17 (risk lift): after Coinglass coverage was swapped to active universe (DOGE/TON/APT in, AVAX/LINK/NEAR out) and a 12-hour cooldown-after-SL was added (motivated by the 2026-05-15→16 DOGE-cluster live losses), backtest MaxDD dropped from 4.64% → 2.01% bt @ slip 0.25%. With that buffer in hand, cap was raised 6 → 8 (heat 2.25 → 3.00), then a second step 8 → 10 (heat 3.00 → 3.75). Combined bt @ slip 0.25%, cap-10 + CG + cooldown 12h: +107.53%/13mo claimed — but see 2026-05-18 caveat. Top weekly performers (pre-rotation): DOGE +$5.7k, TON +$2.1k, BTC +$1.7k. Removed pair data retained for re-evaluation.
-  - **2026-05-18 (CG gates disabled — major P&L recovery):** post-mortem on '+107%' claim showed it was an artifact of *sparse* CG history at the time. After deep CG backfill to full 360d (CG Standard tier), gates started firing on old timestamps too — backtest collapsed to +36% / 272 trades. Audit (`src/tools/diagnostics/cg-gates-effect.ts`): gates blocked 64% of signals (504/787), and **blocked setups had avgR +0.294 vs +0.257 for passed** — gates were silently dropping the *better* trades. Root cause: gates were half-implemented crowd-fade (block extreme-side entries but never switch direction). Decision: disable `passCoinglassLong/Short` (always return `ok=true`). Backtest 13-pair × 365d × slip 0.25% with gates off: **+120.50%/13mo, PF 3.76, MaxDD 2.57%, 635 trades**. Stress @ slip 0.40%: MaxDD **4.44%** (within HyroTrader 5%, ~0.56pp buffer — mind it on volatile days). Risk-side filters (cooldown 12h + rrTp2 ≥ 0.3) kept active; only the strategy-level CG gates removed.
+- **Goal:** +60–80% / year on starting balance (validated 2026-05-23 walk-forward — backtest +88%/year on $200k, MaxDD 6.73%, PF 1.53). Realistic OOS expectation 50–70% with degradation.
+- **Strategy (v4, 2026-05-23):** CG-fade portfolio — per-pair strategy assigned via `src/runtime/pair-strategies.ts`. Decision cadence 4H (240m). Uses Coinglass percentile signals (L/S Top Position, funding rate, L/S Top Account) faded against pair-trend + BTC macro trend. SL = 1.5 × ATR(14), TP = 2.0 × ATR. Max hold 12 × 4H bars (48h).
+- **Universe (Tier-1, 7 pairs):** BTCUSDT, INJUSDT, TAOUSDT, ATOMUSDT, LTCUSDT, ARBUSDT, XRPUSDT. All passed walk-forward (50/50 train/test, both halves positive). Per-pair strategy mapping:
+  - **BTCUSDT** → `lsTopPositionFade` + pair trend (S1) — WR 61.5%, sumR +38.16/yr, PF 2.03
+  - **INJUSDT** → `lsTopPositionFade` + BTC macro (S2) — WR 55.3%, sumR +19.59/yr
+  - **TAOUSDT, ATOMUSDT, LTCUSDT, ARBUSDT** → `fundingFade` pct 0.75 + both trends (S3)
+  - **XRPUSDT** → `fundingTaConfluence` pct 0.70 + both trends (S4) — WR 67.7%, PF 2.50 (highest quality)
+- **Tier-2 (3/4 quarters, paused):** ETHUSDT, SOLUSDT, DOGEUSDT, BNBUSDT — passed walk-forward but per-quarter consistency lower (3/4 vs 4/4). Consider after Tier-1 stable in live.
+- **Excluded (failed walk-forward 2026-05-23):** APTUSDT, TONUSDT — OOS sumR negative. Keep out of universe.
 - **Accounts:** 200k + 50k HyroTrader prop accounts (currently `demoTrading: true`). Trades are broadcast to **every** sub-key inside `accounts.json` via `Promise.all`.
+- **History:** v3 (VP-SMC) retired 2026-05-23 — backtest engine fixes (intra-bar resolution, D/W bar look-ahead, slip semantics, limit-entry) revealed VP-SMC edge was largely a data-bug artifact. CG-fade portfolio replaced it. See git log around 2026-05-23 for details.
 
 ## HyroTrader prop firm rules (non-negotiable)
 
@@ -35,21 +39,21 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 | Min leverage | ≥ 10× | Margin requirement |
 | Server-side SL | within 5 min of position open | Compliance |
 
-## Risk budget v3 (our internal limits, tighter than HyroTrader)
+## Risk budget v4 (our internal limits, tighter than HyroTrader)
 
 | Parameter | Value |
 |---|---|
-| Risk per trade (base) | 0.375% of equity (10×0.375% = 3.75% max heat) |
-| Volatility scalar range | 0.7× – 1.2× of base |
-| Hard cap per trade | 0.6% of equity |
-| Max parallel positions | 10 (one per pair max, across 13-pair universe) — raised 2026-05-17 from cap-8 (and earlier 6→8) after CG+cooldown reduced MaxDD; cap-10 is rarely binding (6/682 signals blocked in bt) — effectively close to "no cap" given current signal volume |
-| Total heat cap | 3.75% of equity |
+| Risk per trade (live trial) | **0.25% of equity** (7 pairs × 0.25% = 1.75% max heat) |
+| Risk per trade (post-trial) | 0.5% if live metrics match backtest (WR ~55%, PF ~1.5, MaxDD < 5%) |
+| Max parallel positions | 7 (one per Tier-1 pair max — natural cap = universe size) |
+| Total heat cap | 3.75% of equity (legacy, room for Tier-2 expansion) |
 | Soft kill (daily) | −2.5% → flat until next UTC day |
 | Hard kill (daily) | −4% → halt + manual review |
 | Total kill | −8% → halt + manual review |
 | Max SL/pair/day | 2 → pair disabled until next UTC day |
 | Cooldown after SL | 12h on the same pair (survives UTC day boundary) |
-| Min rrTp2 to take | 0.3 — setups with reward-to-TP2 below 0.3× risk skipped as low-quality |
+| Cooldown after any close | 4h on the same pair (prevents immediate re-entry on TP1/TP2/manual) |
+| Strategy cooldown | 6h same-direction (in cg-fade.ts; prevents bouncing on same percentile extreme) |
 | Funding window | ±10 min around 00/08/16 UTC → skip new entries |
 
 ## Inviolable execution rules
@@ -85,27 +89,27 @@ Why no `/loop /trade-watch` execution: 365d walk-decide proved trade-level filte
 - Cron pipeline debugging — staleness on `/tmp/scan-decide-latest.json`, `/tmp/auto-execute-latest.json`, `/tmp/cycle.log` (heartbeat surfaces this).
 - DOWNSIZE-grade signals (rrTp2 0.20–0.30) — auto-execute leaves them unsized; operator can review and execute manually if desired.
 
-## Classifier — DISABLED (2026-05-03)
+## Strategy mechanics (v4 — CG-fade, 2026-05-23)
 
-Every actionable signal (`action='enter' && riskCheck.allowed`) → TAKE at full 0.375% size. No SKIP/DOWNSIZE filtering.
+Strategies live in `src/strategies/cg-fade.ts` (4 factories: `lsTopPositionFade`, `fundingFade`, `fundingTaConfluence`, plus base class). Per-pair assignment in `src/runtime/pair-strategies.ts`.
 
-**Why removed:**
-- Backtest cap-6 @ 0.375% delivered +88.45%/365d **without** the classifier.
-- Walk-decide showed only ~+1.7% lift, within noise of the full-strategy variance.
-- Live trial 2026-05-02 → 2026-05-03: 5/5 actionable signals SKIP'd (rrTp2 hovering at 0.198 — borderline by 0.002). Classifier was rejecting ~all live setups, defeating its purpose.
+**Common setup logic:**
+1. Compute percentile of CG signal over last 180 × 4H bars (30 days rolling).
+2. If percentile ≥ pctHi → **SHORT** (fade extreme crowd long). If ≤ pctLo → **LONG**.
+3. Apply trend filter: pair 4H EMA20 vs EMA50 (and/or BTC same).
+4. SL = `entry ± slAtrMult × ATR(14)`. TP = `entry ± tpAtrMult × ATR`. Decision is at 4H bar close.
+5. 6h in-strategy cooldown (same direction). Risk-guard `cooldownAfterSlHours=12` + `cooldownAfterAnyCloseHours=4` still active.
 
-Discarded rules (already validated harmful at 365d):
-- counter-BTC short → +27.58R / 87% WR / 100 trades (this is the strategy's core edge)
-- short extension (m15m<32) → +5.01R / 84% WR / 19 trades
-- 4H stack contradicts → mean-reversion strategy is counter-trend BY DESIGN
+**Signal sources & pct thresholds per strategy:**
+- S1/S2 use `cg.ls_top_position_history` (whale positioning)
+- S3 uses `cg.funding_oi_weighted_history` (funding extreme)
+- S4 requires BOTH funding + L/S Top Account confluent in same direction (high conviction)
 
 ## Cadence discipline
 
-- **5m fire** = trigger engine + regime read. NOT for re-scoring pending limits.
-- **15m close** = re-score limits, re-check proactive exits.
-- **1H close** = re-evaluate regime, refresh thesis.
-
-**Do not cancel pending limit orders younger than 15 minutes** except for catastrophic events (kill switch, FOMC surprise, exchange outage).
+- **5m fire** = reconcile + position-watcher only. NOT decision-making.
+- **1H close** = scan-decide runs (HH:00-04 cron). Strategy.decide() polls CG/bars; for 4H-based CG strategies, returns 'hold' unless 4H boundary has just closed → effectively triggers at 00/04/08/12/16/20 UTC.
+- **Do not cancel pending limit orders younger than 15 minutes** except for catastrophic events (kill switch, FOMC surprise, exchange outage).
 
 ## Forbidden shell patterns (enforced by hooks)
 
@@ -137,9 +141,24 @@ If a new diagnostic is needed, write a committed `src/tools/diagnostics/<name>.t
 
 When any fires: send Telegram alert, trigger `/pause` (writes `vault/Watchlist/PAUSE.md`), do not open new entries until operator confirms.
 
-## What changed vs v2
+## What changed 2026-05-23 (v4 migration)
 
-- Universe set to 10 pairs (BTC, ETH, SOL, XRP, AVAX, BNB, LTC, LINK, NEAR, ATOM) — prior 10-pair v2 was different selection (had OP/SUI/XLM/TAO instead of XRP/LTC/LINK/ATOM); v3 universe rebuilt around VP-SMC strategy validation. Walk-forward OOS: ~90% of windows profitable, 658 combined trades on 1y.
-- Risk increased to 0.6% base / 1.0% cap (from 0.5% flat) — operator authorized "чуть больше рисков".
-- Strategy v3 = VP-SMC (Volume Profile + PWL/PWH + FVG + Coinglass crowd-fade). Implementation lives in `src/runtime/scan-decide.ts` and `src/strategies/`.
-- Postgres (Docker) for historical candle DB — incremental, no daily exchange re-pull. (Redis cache removed 2026-05-16 — wasn't load-bearing.)
+**Discovery:** 7 days of honest debugging revealed VP-SMC's claimed +120%/year was a data-bug artifact:
+- `backfill.ts` uses `ON CONFLICT DO NOTHING` → weekly/daily bars frozen at first insert (~30s after open)
+- Backtest engine `b.ts < cutoff` filter included those frozen bars → strategy used **future full-week H/L** in historical periods (look-ahead bias)
+- Without look-ahead, VP-SMC on honest data: −10.74%/year (Fix D')
+- Investigation: see backtest engine fixes A, B, C, D, D' (intra-bar resolution, TP slip semantics, limit entry, D/W bar reconstruction from hourly)
+
+**Replacement:** CG-fade portfolio. Backtest validated:
+- 7 pairs walk-forward 50/50 split: all 7 OOS positive, gap < 0.20
+- Engine validation: 511 trades / year, WR 54.8%, PF 1.53, MaxDD 6.73%, +88.88% on $200k
+- Live trial started 2026-05-23 at 0.25% per trade
+
+**Live runtime:**
+- `src/runtime/pair-strategies.ts` — per-pair strategy assignment (Tier-1 = 7 pairs)
+- `src/strategies/cg-fade.ts` — 4 strategy factories (S1/S2/S3/S4)
+- `src/data/coinglass-features.ts` — extended with `*_history` arrays for percentile
+
+**Known outstanding issues (to fix):**
+- `cg-fade.ts` returns `tp1 = tp2` (single target) but `execute.ts` places 2 separate limit orders. Need true partial split (TP1 = 1× ATR partial, TP2 = 2.5× ATR runner) + re-backtest.
+- `src/runtime/reconcile.ts:188` uses `t.qty` (remaining qty after TP1 partial) for `riskedUsd` calc → inflates live `realized_r` by ~2× on TP1-partial trades. Fix: use `initial_qty` field. (Independent fix.)

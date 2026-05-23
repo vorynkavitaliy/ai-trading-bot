@@ -23,6 +23,7 @@ interface DataBundle {
   bars4h?: Bar[];
   bars1d?: Bar[];
   bars1w?: Bar[];
+  btcBars4h?: Bar[];                   // BTC 4H bars when strategy needs cross-pair macro filter
   fundingByTs: Map<number, number>;
 }
 
@@ -43,7 +44,7 @@ async function loadBars(symbol: string, tf: string, fromTs: number, toTs: number
   }));
 }
 
-async function loadData(symbol: string, startTs: number, endTs: number, decisionTf: string): Promise<DataBundle> {
+async function loadData(symbol: string, startTs: number, endTs: number, decisionTf: string, needsBtcContext = false): Promise<DataBundle> {
   // Warmup needed for indicator stability:
   //   1H: 300 bars × 1h ≈ 12.5 days
   //   4H: 300 bars × 4h ≈ 50 days
@@ -74,6 +75,16 @@ async function loadData(symbol: string, startTs: number, endTs: number, decision
   for (const row of rf.rows) fundingByTs.set(parseInt(row.ts, 10), parseFloat(row.rate));
 
   const barsDecision = decisionTf === '240m' ? bars4h : bars1h;
+
+  // BTC 4H bars — only when strategy needs cross-pair macro context AND symbol != BTCUSDT.
+  // For BTCUSDT backtest the pair bars ARE the BTC bars, so loading separately is redundant.
+  let btcBars4h: Bar[] | undefined;
+  if (needsBtcContext && symbol !== 'BTCUSDT') {
+    btcBars4h = await loadBars('BTCUSDT', '240m', startTs - warmupDailyMs, endTs);
+  } else if (needsBtcContext && symbol === 'BTCUSDT') {
+    btcBars4h = bars4h;
+  }
+
   return {
     barsDecision,
     bars1h,
@@ -81,8 +92,46 @@ async function loadData(symbol: string, startTs: number, endTs: number, decision
     bars4h: wantsMtf ? bars4h : undefined,
     bars1d,
     bars1w,
+    btcBars4h,
     fundingByTs,
   };
+}
+
+// Aggregate hourly bars within [periodStart, cutoff) into a single synthetic
+// higher-TF bar. Returns null if no hourly bars fall in the window. Used to
+// reconstruct the CURRENT incomplete day/week bar's week-to-date H/L at any
+// cutoff during the period — avoids look-ahead bias from DB-stored full-period
+// snapshots, and matches what live would observe with realtime data.
+function aggregateHourlyTo(hourly: Bar[], periodStart: number, cutoff: number): Bar | null {
+  let open: number | null = null;
+  let high = -Infinity;
+  let low = Infinity;
+  let close = 0;
+  let vol = 0;
+  let any = false;
+  for (const b of hourly) {
+    if (b.ts < periodStart) continue;
+    if (b.ts >= cutoff) break;     // hourly bars are sorted ascending
+    if (!any) { open = b.open; any = true; }
+    if (b.high > high) high = b.high;
+    if (b.low < low) low = b.low;
+    close = b.close;
+    vol += b.volume;
+  }
+  if (!any) return null;
+  return { ts: periodStart, open: open!, high, low, close, volume: vol };
+}
+
+// UTC period boundaries for the current incomplete day / week containing ts.
+function dayStartUtc(ts: number): number {
+  const d = new Date(ts);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+function weekStartUtc(ts: number): number {
+  const d = new Date(ts);
+  // Bybit weekly bars open on Monday 00:00 UTC. Convert getUTCDay() (Sun=0) so Monday=0.
+  const daysFromMonday = (d.getUTCDay() + 6) % 7;
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - daysFromMonday);
 }
 
 function applySlippage(price: number, side: 'long' | 'short', kind: 'entry' | 'exit', slipPct: number): number {
@@ -162,139 +211,112 @@ function resolvePosition(
       fundingPaid += positionUsd * fr * sideSign;
     }
 
-    // Touch order in 1 minute is ambiguous — assume worst-case:
-    //   long: low first, then high (SL before TP unless gap up)
-    //   short: high first, then low
-    // Common backtester convention: SL takes priority over TP within same bar.
-    if (pos.side === 'long') {
-      if (b.low <= pos.sl) {
-        // SL hit. Include banked TP1 partial if it fired earlier.
-        const fillPrice = applySlippage(pos.sl, 'long', 'exit', slipPct);
-        const exitFee = pos.qty * fillPrice * fees.taker;
-        const tailPnl = (fillPrice - pos.entry) * pos.qty;
-        const banked = (pos as any).bankedPnl ?? 0;
-        const grossPnl = banked + tailPnl;
-        const reason: ClosedTrade['exitReason'] = pos.tp1Hit ? 'tp1_then_sl_be' : 'sl';
-        const totalFees = pos.openFeesUsd + exitFee;
-        const pnlR = (grossPnl - totalFees - fundingPaid) / riskedUsd;
-        return {
-          side: 'long', symbol, entry: pos.entry, exit: fillPrice,
-          entryTs: pos.entryTs, exitTs: b.ts, qty: pos.tp1Hit ? pos.qty * 2 : pos.qty,
-          sl: pos.sl, tp1: pos.tp1, tp2: pos.tp2,
-          pnlUsd: grossPnl, feesUsd: totalFees, fundingUsd: fundingPaid,
-          pnlR, exitReason: reason, rationale,
-        };
+    // Intrabar resolution: when SL and TP are both touched within the same 1m bar,
+    // use the bar's direction (close vs open) as a heuristic for which fired first.
+    //   bullish minute (close > open): price went UP first  → for long check TP first, for short check SL first
+    //   bearish minute (close < open): price went DOWN first → for long check SL first, for short check TP first
+    //   doji  (close == open): keep worst-case (SL first) — symmetric, no information.
+    // This replaces the previous "always SL first" worst-case bias which systematically
+    // turned wins-that-touched-SL-and-TP-in-same-minute into losses.
+    const minuteBullish = b.close > b.open;
+    const minuteBearish = b.close < b.open;
+    const tpFirst = pos.side === 'long' ? minuteBullish : minuteBearish;
+
+    // Differential slip: TP1/TP2 are limit orders sitting in the book — when price
+    // touches them, the maker fee applies and there is no adverse slippage (the
+    // limit is the fill price by construction). SL fills are market-trigger market
+    // orders — they take the worst within the slippage window. This matches live
+    // behaviour and removes a systematic underestimation of TP fills.
+    const tpSlipPct = 0;
+    // --- Helper closures that perform the actual fill & return ClosedTrade ---
+    const fireSl = (): ClosedTrade => {
+      const fillPrice = applySlippage(pos.sl, pos.side, 'exit', slipPct);
+      const exitFee = pos.qty * fillPrice * fees.taker;
+      const tailPnl = pos.side === 'long'
+        ? (fillPrice - pos.entry) * pos.qty
+        : (pos.entry - fillPrice) * pos.qty;
+      const banked = (pos as any).bankedPnl ?? 0;
+      const grossPnl = banked + tailPnl;
+      const reason: ClosedTrade['exitReason'] = pos.tp1Hit ? 'tp1_then_sl_be' : 'sl';
+      const totalFees = pos.openFeesUsd + exitFee;
+      const pnlR = (grossPnl - totalFees - fundingPaid) / riskedUsd;
+      return {
+        side: pos.side, symbol, entry: pos.entry, exit: fillPrice,
+        entryTs: pos.entryTs, exitTs: b.ts, qty: pos.tp1Hit ? pos.qty * 2 : pos.qty,
+        sl: pos.sl, tp1: pos.tp1, tp2: pos.tp2,
+        pnlUsd: grossPnl, feesUsd: totalFees, fundingUsd: fundingPaid,
+        pnlR, exitReason: reason, rationale,
+      };
+    };
+    const fireTp2Tail = (): ClosedTrade => {
+      const fillPrice = applySlippage(pos.tp2!, pos.side, 'exit', tpSlipPct);
+      const tailPnl = pos.side === 'long'
+        ? (fillPrice - pos.entry) * pos.qty
+        : (pos.entry - fillPrice) * pos.qty;
+      const tailFee = pos.qty * fillPrice * fees.maker;
+      const totalFees = pos.openFeesUsd + tailFee;
+      const grossPnl = ((pos as any).bankedPnl ?? 0) + tailPnl;
+      const pnlR = (grossPnl - tailFee - fundingPaid) / riskedUsd;
+      return {
+        side: pos.side, symbol, entry: pos.entry, exit: fillPrice,
+        entryTs: pos.entryTs, exitTs: b.ts, qty: pos.qty * 2,
+        sl: pos.sl, tp1: pos.tp1, tp2: pos.tp2,
+        pnlUsd: grossPnl, feesUsd: totalFees, fundingUsd: fundingPaid,
+        pnlR, exitReason: 'tp2', rationale,
+      };
+    };
+    // Fill TP1 partial (mutates pos). Returns true if a same-bar TP2 also filled.
+    const fireTp1Partial = (): boolean => {
+      const fillPrice = applySlippage(pos.tp1, pos.side, 'exit', tpSlipPct);
+      const halfQty = pos.qty / 2;
+      const halfPnl = pos.side === 'long'
+        ? (fillPrice - pos.entry) * halfQty
+        : (pos.entry - fillPrice) * halfQty;
+      const halfFee = halfQty * fillPrice * fees.maker;
+      pos.openFeesUsd += halfFee;
+      pos.qty -= halfQty;
+      pos.tp1Hit = true;
+      pos.sl = newSlAfterTp1(pos.side, pos.entry, pos.initialSl, tp1SlMode, bePlusBufferPct);
+      (pos as any).bankedPnl = ((pos as any).bankedPnl ?? 0) + halfPnl - halfFee;
+      // Same-bar TP2?
+      if (pos.tp2 !== undefined) {
+        if (pos.side === 'long' && b.high >= pos.tp2) return true;
+        if (pos.side === 'short' && b.low <= pos.tp2) return true;
       }
-      if (!pos.tp1Hit && b.high >= pos.tp1) {
-        // TP1 — close 50%, move SL per configured tp1SlMode
-        const fillPrice = applySlippage(pos.tp1, 'long', 'exit', slipPct);
-        const halfQty = pos.qty / 2;
-        const halfPnl = (fillPrice - pos.entry) * halfQty;
-        const halfFee = halfQty * fillPrice * fees.maker; // TP1 is a limit order
-        pos.openFeesUsd += halfFee;
-        // Reduce position
-        pos.qty -= halfQty;
-        pos.tp1Hit = true;
-        pos.sl = newSlAfterTp1('long', pos.entry, pos.initialSl, tp1SlMode, bePlusBufferPct);
-        // Track partial pnl as if banked into the trade's outcome at end
-        // Simpler: treat TP1 + remainder as one "trade" with weighted pnl.
-        // Track "banked" via reducing future exit pnl by this halfPnl baseline.
-        // We accumulate via pos.fundingPaidUsd reuse hack? No — store separately.
-        (pos as any).bankedPnl = ((pos as any).bankedPnl ?? 0) + halfPnl - halfFee;
-        if (pos.tp2 && b.high >= pos.tp2) {
-          // TP2 also hit in same bar → close fully
-          const tp2Fill = applySlippage(pos.tp2, 'long', 'exit', slipPct);
-          const tp2Pnl = (tp2Fill - pos.entry) * pos.qty;
-          const tp2Fee = pos.qty * tp2Fill * fees.maker;
-          const totalFees = pos.openFeesUsd + tp2Fee;
-          const grossPnl = ((pos as any).bankedPnl ?? 0) + tp2Pnl;
-          const pnlR = (grossPnl - tp2Fee - fundingPaid) / riskedUsd;
-          return {
-            side: 'long', symbol, entry: pos.entry, exit: tp2Fill,
-            entryTs: pos.entryTs, exitTs: b.ts, qty: pos.qty * 2,
-            sl: pos.sl, tp1: pos.tp1, tp2: pos.tp2,
-            pnlUsd: grossPnl, feesUsd: totalFees, fundingUsd: fundingPaid,
-            pnlR, exitReason: 'tp2', rationale,
-          };
-        }
+      return false;
+    };
+
+    // Touch detection (raw)
+    const slTouched = pos.side === 'long' ? b.low <= pos.sl : b.high >= pos.sl;
+    const tp1Touchable = !pos.tp1Hit
+      && (pos.side === 'long' ? b.high >= pos.tp1 : b.low <= pos.tp1);
+    const tp2TailTouchable = pos.tp1Hit && pos.tp2 !== undefined
+      && (pos.side === 'long' ? b.high >= pos.tp2 : b.low <= pos.tp2);
+
+    if (tpFirst) {
+      // BULL minute (for long) / BEAR minute (for short): TP fires before SL in same bar.
+      if (tp1Touchable) {
+        const tp2InSameBar = fireTp1Partial();
+        if (tp2InSameBar) return fireTp2Tail();
+        // After TP1 partial, SL has moved (no_move/be/be_plus). Check whether
+        // the (possibly new) SL still gets hit in this bar — only if the bar
+        // ALSO crossed it. For 'no_move' SL is unchanged, so the same low/high
+        // applies. For 'be' / 'be_plus' the new SL is near entry — also could be hit.
+        const slHitNow = pos.side === 'long' ? b.low <= pos.sl : b.high >= pos.sl;
+        if (slHitNow) return fireSl();
         continue;
       }
-      if (pos.tp1Hit && pos.tp2 && b.high >= pos.tp2) {
-        const fillPrice = applySlippage(pos.tp2, 'long', 'exit', slipPct);
-        const tailPnl = (fillPrice - pos.entry) * pos.qty;
-        const tailFee = pos.qty * fillPrice * fees.maker;
-        const totalFees = pos.openFeesUsd + tailFee;
-        const grossPnl = ((pos as any).bankedPnl ?? 0) + tailPnl;
-        const pnlR = (grossPnl - tailFee - fundingPaid) / riskedUsd;
-        return {
-          side: 'long', symbol, entry: pos.entry, exit: fillPrice,
-          entryTs: pos.entryTs, exitTs: b.ts, qty: pos.qty * 2,
-          sl: pos.sl, tp1: pos.tp1, tp2: pos.tp2,
-          pnlUsd: grossPnl, feesUsd: totalFees, fundingUsd: fundingPaid,
-          pnlR, exitReason: 'tp2', rationale,
-        };
-      }
+      if (tp2TailTouchable) return fireTp2Tail();
+      if (slTouched) return fireSl();
     } else {
-      // SHORT side mirror
-      if (b.high >= pos.sl) {
-        const fillPrice = applySlippage(pos.sl, 'short', 'exit', slipPct);
-        const exitFee = pos.qty * fillPrice * fees.taker;
-        const tailPnl = (pos.entry - fillPrice) * pos.qty;
-        const banked = (pos as any).bankedPnl ?? 0;
-        const grossPnl = banked + tailPnl;
-        const reason: ClosedTrade['exitReason'] = pos.tp1Hit ? 'tp1_then_sl_be' : 'sl';
-        const totalFees = pos.openFeesUsd + exitFee;
-        const pnlR = (grossPnl - totalFees - fundingPaid) / riskedUsd;
-        return {
-          side: 'short', symbol, entry: pos.entry, exit: fillPrice,
-          entryTs: pos.entryTs, exitTs: b.ts, qty: pos.tp1Hit ? pos.qty * 2 : pos.qty,
-          sl: pos.sl, tp1: pos.tp1, tp2: pos.tp2,
-          pnlUsd: grossPnl, feesUsd: totalFees, fundingUsd: fundingPaid,
-          pnlR, exitReason: reason, rationale,
-        };
-      }
-      if (!pos.tp1Hit && b.low <= pos.tp1) {
-        const fillPrice = applySlippage(pos.tp1, 'short', 'exit', slipPct);
-        const halfQty = pos.qty / 2;
-        const halfPnl = (pos.entry - fillPrice) * halfQty;
-        const halfFee = halfQty * fillPrice * fees.maker;
-        pos.openFeesUsd += halfFee;
-        pos.qty -= halfQty;
-        pos.tp1Hit = true;
-        pos.sl = newSlAfterTp1('short', pos.entry, pos.initialSl, tp1SlMode, bePlusBufferPct);
-        (pos as any).bankedPnl = ((pos as any).bankedPnl ?? 0) + halfPnl - halfFee;
-        if (pos.tp2 && b.low <= pos.tp2) {
-          const tp2Fill = applySlippage(pos.tp2, 'short', 'exit', slipPct);
-          const tp2Pnl = (pos.entry - tp2Fill) * pos.qty;
-          const tp2Fee = pos.qty * tp2Fill * fees.maker;
-          const totalFees = pos.openFeesUsd + tp2Fee;
-          const grossPnl = ((pos as any).bankedPnl ?? 0) + tp2Pnl;
-          const pnlR = (grossPnl - tp2Fee - fundingPaid) / riskedUsd;
-          return {
-            side: 'short', symbol, entry: pos.entry, exit: tp2Fill,
-            entryTs: pos.entryTs, exitTs: b.ts, qty: pos.qty * 2,
-            sl: pos.sl, tp1: pos.tp1, tp2: pos.tp2,
-            pnlUsd: grossPnl, feesUsd: totalFees, fundingUsd: fundingPaid,
-            pnlR, exitReason: 'tp2', rationale,
-          };
-        }
+      // BEAR minute (for long) / BULL minute (for short) / doji: SL fires before TP in same bar.
+      if (slTouched) return fireSl();
+      if (tp1Touchable) {
+        const tp2InSameBar = fireTp1Partial();
+        if (tp2InSameBar) return fireTp2Tail();
         continue;
       }
-      if (pos.tp1Hit && pos.tp2 && b.low <= pos.tp2) {
-        const fillPrice = applySlippage(pos.tp2, 'short', 'exit', slipPct);
-        const tailPnl = (pos.entry - fillPrice) * pos.qty;
-        const tailFee = pos.qty * fillPrice * fees.maker;
-        const totalFees = pos.openFeesUsd + tailFee;
-        const grossPnl = ((pos as any).bankedPnl ?? 0) + tailPnl;
-        const pnlR = (grossPnl - tailFee - fundingPaid) / riskedUsd;
-        return {
-          side: 'short', symbol, entry: pos.entry, exit: fillPrice,
-          entryTs: pos.entryTs, exitTs: b.ts, qty: pos.qty * 2,
-          sl: pos.sl, tp1: pos.tp1, tp2: pos.tp2,
-          pnlUsd: grossPnl, feesUsd: totalFees, fundingUsd: fundingPaid,
-          pnlR, exitReason: 'tp2', rationale,
-        };
-      }
+      if (tp2TailTouchable) return fireTp2Tail();
     }
   }
   // No SL/TP touch in the scanned window — position remains open.
@@ -315,7 +337,7 @@ export async function runBacktest(
     startEquity: settings.startEquity,
   });
   const decisionTf = settings.decisionTf ?? '60m';
-  const data = await loadData(settings.symbol, settings.startTs, settings.endTs, decisionTf);
+  const data = await loadData(settings.symbol, settings.startTs, settings.endTs, decisionTf, strategy.needsBtcContext);
   const trades: ClosedTrade[] = [];
   const equityCurve: { ts: number; equity: number }[] = [];
   const equityRef = { value: settings.startEquity };
@@ -401,7 +423,18 @@ export async function runBacktest(
     let feat4h: any = undefined;
     let featD: any = undefined;
     let featW: any = undefined;
-    const cutoff1h = nowTs;                                    // bars closed strictly before nowTs
+    const cutoff1h = nowTs;
+    // D/W bars in DB store full-bar H/L (Bybit snapshot of closed candle, or for
+    // recently-inserted bars: frozen at open due to ON CONFLICT DO NOTHING). Both
+    // cases are wrong for backtest:
+    //   - Historical bars (full H/L): including the current incomplete bar leaks
+    //     future H/L to strategy → structural stops artificially wide → inflated WR
+    //   - Recent bars (frozen at open): useless data
+    // Fix: keep DB bars only for fully-CLOSED periods; reconstruct the current
+    // incomplete period's bar from hourly data, capped at cutoff. This gives
+    // strategy a faithful week-to-date / day-to-date snapshot.
+    const ONE_DAY_MS = 86_400_000;
+    const ONE_WEEK_MS = 7 * ONE_DAY_MS;
     if (decisionTf === '240m') {
       feat4h = featDecision;
       const closed1h = data.bars1h.filter((b) => b.ts < cutoff1h);
@@ -411,15 +444,21 @@ export async function runBacktest(
       if (slice1h.length >= 100) feat1h = computeFeatures(settings.symbol, '60m', slice1h);
     }
     if (data.bars1d) {
-      const closedD = data.bars1d.filter((b) => b.ts < cutoff1h);
-      const sliceD = closedD.slice(-250).map<CandleRow>((b) => ({
+      const closedD = data.bars1d.filter((b) => b.ts + ONE_DAY_MS <= cutoff1h);
+      const curDayStart = dayStartUtc(cutoff1h);
+      const synthD = aggregateHourlyTo(data.bars1h, curDayStart, cutoff1h);
+      const allD = synthD ? [...closedD, synthD] : closedD;
+      const sliceD = allD.slice(-250).map<CandleRow>((b) => ({
         ts: b.ts, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
       }));
       if (sliceD.length >= 50) featD = computeFeatures(settings.symbol, '1D', sliceD);
     }
     if (data.bars1w) {
-      const closedW = data.bars1w.filter((b) => b.ts < cutoff1h);
-      const sliceW = closedW.slice(-60).map<CandleRow>((b) => ({
+      const closedW = data.bars1w.filter((b) => b.ts + ONE_WEEK_MS <= cutoff1h);
+      const curWeekStart = weekStartUtc(cutoff1h);
+      const synthW = aggregateHourlyTo(data.bars1h, curWeekStart, cutoff1h);
+      const allW = synthW ? [...closedW, synthW] : closedW;
+      const sliceW = allW.slice(-60).map<CandleRow>((b) => ({
         ts: b.ts, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
       }));
       if (sliceW.length >= 20) featW = computeFeatures(settings.symbol, '1W', sliceW);
@@ -436,11 +475,24 @@ export async function runBacktest(
     }
 
     // Recent bars at decisionTf — used by strategies for structural SL placement.
-    const recentBars = allDecision.slice(Math.max(0, i - 30), i);
-    // HTF recent slices: last N closed bars at each TF, strictly before nowTs.
-    const bars1hRecent = data.bars1h.filter((b) => b.ts < cutoff1h).slice(-200);
-    const bars1dRecent = data.bars1d ? data.bars1d.filter((b) => b.ts < cutoff1h).slice(-60) : [];
-    const bars1wRecent = data.bars1w ? data.bars1w.filter((b) => b.ts < cutoff1h).slice(-12) : [];
+    // 200 bars: enough for EMA50 trend on 4H, EMA200 on 1H. Strategies that need
+    // only the last N take slice(-N) themselves.
+    const recentBars = allDecision.slice(Math.max(0, i - 200), i);
+    // HTF recent slices: closed bars + synthetic current-period bar from hourly aggregation.
+    // 400 bars = ~16 days of hourly. Strategies that compute "previous closed week
+    // H/L" from hourly need >= 14 days of history.
+    const bars1hRecent = data.bars1h.filter((b) => b.ts < cutoff1h).slice(-400);
+    const closedDRecent = data.bars1d ? data.bars1d.filter((b) => b.ts + ONE_DAY_MS <= cutoff1h) : [];
+    const synthDRecent = data.bars1d ? aggregateHourlyTo(data.bars1h, dayStartUtc(cutoff1h), cutoff1h) : null;
+    const bars1dRecent = (synthDRecent ? [...closedDRecent, synthDRecent] : closedDRecent).slice(-60);
+    const closedWRecent = data.bars1w ? data.bars1w.filter((b) => b.ts + ONE_WEEK_MS <= cutoff1h) : [];
+    const synthWRecent = data.bars1w ? aggregateHourlyTo(data.bars1h, weekStartUtc(cutoff1h), cutoff1h) : null;
+    const bars1wRecent = (synthWRecent ? [...closedWRecent, synthWRecent] : closedWRecent).slice(-12);
+    // BTC 4H bars for cross-pair macro filter (CG-fade altcoin strategies).
+    // Only populated when strategy.needsBtcContext = true (engine loaded BTC bars in loadData).
+    const btcBars4hRecent = data.btcBars4h
+      ? data.btcBars4h.filter((b) => b.ts < cutoff1h).slice(-200)
+      : undefined;
 
     const ctx: StrategyContext = {
       symbol: settings.symbol,
@@ -457,6 +509,7 @@ export async function runBacktest(
       bars1hRecent,
       bars1dRecent,
       bars1wRecent,
+      btcBars4hRecent,
     };
     const action = strategy.decide(ctx);
 

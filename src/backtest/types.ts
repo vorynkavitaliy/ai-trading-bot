@@ -134,6 +134,9 @@ export interface StrategyContext {
   bars1hRecent?: Bar[];        // last 200 closed 1H bars — for intraday VP construction
   bars1dRecent?: Bar[];        // last 60 closed 1D bars — for daily VP / structural levels
   bars1wRecent?: Bar[];        // last 12 closed 1W bars — for PWL/PWH
+  // BTC 4H bars for cross-pair macro filters (CG fade strategies use this on altcoins).
+  // Always loaded for non-BTC symbols when strategy.needsBtcContext = true.
+  btcBars4hRecent?: Bar[];
 }
 
 export interface Strategy {
@@ -141,5 +144,8 @@ export interface Strategy {
   // True if strategy needs Coinglass features in ctx. Engine pre-loads them only for these.
   // Strategies without this flag get ctx.coinglass = undefined (cheaper).
   needsCoinglass?: boolean;
+  // True if strategy needs BTC 4H bars for cross-pair macro filter (CG-fade altcoin strategies).
+  // Engine loads BTCUSDT 4H bars and populates ctx.btcBars4hRecent. For BTC backtests this is a no-op.
+  needsBtcContext?: boolean;
   decide(ctx: StrategyContext): Action;
 }

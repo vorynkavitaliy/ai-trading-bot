@@ -219,9 +219,7 @@ export function btcVpSmc(params: BtcVpSmcParams = DEFAULT_BTC_VP_SMC): Strategy 
       if (!f || f.atr == null || f.atr_pct == null) return { kind: 'hold' };
 
       const bars1h = ctx.bars1hRecent ?? [];
-      const bars1w = ctx.bars1wRecent ?? [];
       if (bars1h.length < params.vpLookbackHours + params.vpVaTouchLookback) return { kind: 'hold' };
-      if (bars1w.length < 1) return { kind: 'hold' };
 
       // 1) Build "previous day" VP from the 1H bars BEFORE the recent touch window.
       // This way VP is a "level set" computed on prior session, and the touch happens NOW.
@@ -231,10 +229,31 @@ export function btcVpSmc(params: BtcVpSmcParams = DEFAULT_BTC_VP_SMC): Strategy 
       const vp = buildVolumeProfile(vpBars, params.vpBins, params.vpValueAreaPct);
       if (!vp) return { kind: 'hold' };
 
-      // 2) PWL/PWH from last closed 1W bar
-      const lastW = bars1w[bars1w.length - 1];
-      const pwl = lastW.low;
-      const pwh = lastW.high;
+      // 2) PWL/PWH = previous CLOSED week's high/low computed from hourly bars.
+      // Why not bars1w[-1]: DB-cached weekly bars are frozen at insertion time
+      // (backfill.ts uses ON CONFLICT DO NOTHING → bar's H/L equals the first hour
+      // after Monday open and never updates). Computing from hourly gives the real
+      // structural extreme of the previous week. The decision boundary lives one
+      // weekly boundary in the past, so there is NO look-ahead.
+      const ONE_DAY_MS = 86_400_000;
+      const ONE_WEEK_MS = 7 * ONE_DAY_MS;
+      const nowDate = new Date(ctx.ts);
+      const cutDayMs = Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), nowDate.getUTCDate());
+      const daysFromMonday = (nowDate.getUTCDay() + 6) % 7;
+      const curWeekStart = cutDayMs - daysFromMonday * ONE_DAY_MS;
+      const prevWeekStart = curWeekStart - ONE_WEEK_MS;
+      let pwl = Infinity;
+      let pwh = -Infinity;
+      let pwBarCount = 0;
+      for (const b of bars1h) {
+        if (b.ts < prevWeekStart) continue;
+        if (b.ts >= curWeekStart) break;
+        if (b.low < pwl) pwl = b.low;
+        if (b.high > pwh) pwh = b.high;
+        pwBarCount++;
+      }
+      if (pwBarCount < 24) return { kind: 'hold' };  // need at least 1 day of prev week
+      if (!isFinite(pwl) || !isFinite(pwh)) return { kind: 'hold' };
 
       // 3) Recent touch window
       const touchBars = bars1h.slice(-params.vpVaTouchLookback);
@@ -303,7 +322,10 @@ export function btcVpSmc(params: BtcVpSmcParams = DEFAULT_BTC_VP_SMC): Strategy 
 
         markEntry(ctx.symbol, 'long', ctx.ts);
         return {
-          kind: 'enter', side: 'long', orderType: 'market',
+          // Live runtime (src/runtime/auto-execute.ts:117) forces --order-type limit
+          // for every signal. Backtest must mirror this — market would add 0.25%
+          // slip on entry that does not exist in production.
+          kind: 'enter', side: 'long', orderType: 'limit',
           entryPrice: ctx.price, sl, tp1, tp2,
           sizePct: params.riskPct,
           rationale: `BTC-VP-SMC LONG: VAL ${vp.val.toFixed(0)} touched, re-entry above; bull-FVG within ${params.fvgLookback}H; PWL ${pwl.toFixed(0)} structural SL; POC ${vp.poc.toFixed(0)}; funding ${cg?.funding_oi_weighted ?? 'n/a'}, LS-top ${cg?.ls_top_position?.toFixed(2) ?? 'n/a'}.`,
@@ -336,7 +358,8 @@ export function btcVpSmc(params: BtcVpSmcParams = DEFAULT_BTC_VP_SMC): Strategy 
 
         markEntry(ctx.symbol, 'short', ctx.ts);
         return {
-          kind: 'enter', side: 'short', orderType: 'market',
+          // Live forces limit entries (see long branch above); backtest matches.
+          kind: 'enter', side: 'short', orderType: 'limit',
           entryPrice: ctx.price, sl, tp1, tp2,
           sizePct: params.riskPct,
           rationale: `BTC-VP-SMC SHORT: VAH ${vp.vah.toFixed(0)} touched, re-entry below; bear-FVG within ${params.fvgLookback}H; PWH ${pwh.toFixed(0)} structural SL; POC ${vp.poc.toFixed(0)}; funding ${cg?.funding_oi_weighted ?? 'n/a'}, LS-top ${cg?.ls_top_position?.toFixed(2) ?? 'n/a'}.`,

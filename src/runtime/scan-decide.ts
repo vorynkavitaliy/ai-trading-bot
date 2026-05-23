@@ -19,7 +19,9 @@ import fs from 'node:fs';
 import { query, close as closePg } from '../core/db';
 import { computeFeatures, CandleRow } from '../data/features';
 import { loadCoinglassAt, CoinglassFeatures } from '../data/coinglass-features';
-import { btcVpSmc, DEFAULT_BTC_VP_SMC, BtcVpSmcParams, buildVolumeProfile } from '../strategies/btc-vp-smc';
+// buildVolumeProfile still used below for structural enrichment (independent of strategy).
+import { buildVolumeProfile } from '../strategies/btc-vp-smc';
+import { getStrategyForPair, tier1Pairs } from './pair-strategies';
 import { Action, Bar, StrategyContext } from '../backtest/types';
 import { getRiskState, precheckEntry, RISK, RiskState } from './risk-guard';
 import { getLiveTickers } from '../core/bybit';
@@ -27,33 +29,13 @@ import { loadAccounts } from '../core/accounts';
 import { refreshForScan } from '../data/backfill';
 import { log } from '../core/logger';
 
-const UNIVERSE = [
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
-  'BNBUSDT', 'LTCUSDT', 'ATOMUSDT',
-  'TONUSDT', 'DOGEUSDT',
-  'APTUSDT', 'ARBUSDT',
-  'TAOUSDT', 'INJUSDT',  // 2026-05-17: replace LINK/SUI per regime-decompose audit
-];                       // (LINK weak in trend_bull, SUI no preferred regime).
-                         // TAO bt 365d slip 0.25%: WR 80.4%/PF 3.86/+5.87%.
-                         // INJ bt 365d slip 0.25%: WR 82.5%/PF 4.79/+5.09%.
-                         // HYPE evaluated 2026-05-18: single-pair PF 4.35 looks great
-                         // but 14-pair stress @ 0.40% slip pushed MaxDD 3.96% → 5.15%
-                         // (breaches our 4% gate AND HyroTrader 5% daily DD). Held out.
+// 2026-05-23: pivot from VP-SMC to Tier-1 CG-fade portfolio.
+// Universe = 7 pairs validated via walk-forward (cg-fade.ts strategies).
+// Per-pair strategy mapping lives in src/runtime/pair-strategies.ts.
+const UNIVERSE = tier1Pairs();
 
-const PER_SYMBOL: Record<string, Partial<BtcVpSmcParams>> = {
-  ETHUSDT:  { maxStopAtrPct: 4.5 },
-  SOLUSDT:  { maxStopAtrPct: 5.5 },
-  XRPUSDT:  { maxStopAtrPct: 5.5 },
-  BNBUSDT:  { maxStopAtrPct: 4.0 },
-  LTCUSDT:  { maxStopAtrPct: 4.5 },
-  ATOMUSDT: { maxStopAtrPct: 5.0 },
-  TONUSDT:  { maxStopAtrPct: 5.0 },
-  DOGEUSDT: { maxStopAtrPct: 5.5 },
-  APTUSDT:  { maxStopAtrPct: 5.0 },
-  ARBUSDT:  { maxStopAtrPct: 5.0 },
-  TAOUSDT:  { maxStopAtrPct: 5.0 },
-  INJUSDT:  { maxStopAtrPct: 5.0 },
-};
+// 2026-05-23: PER_SYMBOL VP-SMC overrides removed (legacy strategy retired).
+// Per-pair params now live inside the strategy factory call in pair-strategies.ts.
 
 async function loadBars(symbol: string, tf: string, lookbackBars: number): Promise<Bar[]> {
   const r = await query<any>(
@@ -89,7 +71,7 @@ const HOUR_MS = 60 * 60_000;
 const DAY_MS = 24 * HOUR_MS;
 const STALE_TOLERANCE_MS = 5 * 60_000;    // 1H bar must close within 65 min ago = current bar fresh enough
 
-async function buildContext(symbol: string, nowTs: number, livePrice: number | null): Promise<ContextResult> {
+async function buildContext(symbol: string, nowTs: number, livePrice: number | null, btcBars4h?: Bar[]): Promise<ContextResult> {
   if (livePrice == null) {
     return { ctx: null, reason: 'live-price-unavailable' };
   }
@@ -184,6 +166,11 @@ async function buildContext(symbol: string, nowTs: number, livePrice: number | n
   // Cron is gated to HH:00-04 minute window so scan-decide runs once per hour
   // right after the bar closes (see cycle.sh).
   const _liveTickerNote = livePrice;  // kept for diagnostic/observability only
+
+  // recentBars at decisionTf — for CG-fade strategies decisionTf=4H, so use 4H bars.
+  // For 1H strategies (legacy VP-SMC) keep 1H. We slice 200 bars for EMA50 support.
+  const recentBars4h = bars4h.filter((b) => b.ts < nowTs).slice(-200);
+
   const ctx: StrategyContext = {
     symbol,
     ts: nowTs,
@@ -194,10 +181,13 @@ async function buildContext(symbol: string, nowTs: number, livePrice: number | n
     featuresW,
     position: null,
     coinglass,
-    recentBars: closed1h.slice(-30),
+    // recentBars at the strategy's decisionTf. CG-fade strategies = 4H. Engine
+    // backtest uses 4H bars here too (slice 200). For VP-SMC we kept 1H below.
+    recentBars: recentBars4h,
     bars1hRecent: closed1h.slice(-200),
     bars1dRecent: closedD.slice(-60),
     bars1wRecent: closedW.slice(-12),
+    btcBars4hRecent: btcBars4h ? btcBars4h.filter((b) => b.ts < nowTs).slice(-200) : undefined,
   };
   return { ctx, features5m, features15m, features4h, cgMissing, cgReason };
 }
@@ -493,16 +483,23 @@ export async function scanDecide(): Promise<ScanDecideResult> {
   const decisions: PairDecision[] = [];
   const cgMissingSymbols: string[] = [];
 
+  // BTC 4H bars loaded ONCE — passed to buildContext for every pair that needs
+  // cross-pair macro filter (CG-fade strategies with useBtcTrend).
+  const btcBars4h = await loadBars('BTCUSDT', '240m', 300);
+
   for (const symbol of UNIVERSE) {
+    const strategy = getStrategyForPair(symbol);
+    if (!strategy) {
+      decisions.push({ symbol, price: livePrices.get(symbol) ?? 0, action: 'hold', reason: 'no-strategy-mapped' });
+      continue;
+    }
     const live = livePrices.get(symbol) ?? null;
-    const r = await buildContext(symbol, nowTs, live);
+    const r = await buildContext(symbol, nowTs, live, btcBars4h);
     if (r.cgMissing) cgMissingSymbols.push(symbol);
     if (!r.ctx) {
       decisions.push({ symbol, price: live ?? 0, action: 'hold', reason: r.reason });
       continue;
     }
-    const params = { ...DEFAULT_BTC_VP_SMC, ...(PER_SYMBOL[symbol] ?? {}) };
-    const strategy = btcVpSmc(params);
     const action: Action = strategy.decide(r.ctx);
 
     if (action.kind !== 'enter') {

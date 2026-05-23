@@ -17,6 +17,11 @@ export interface CoinglassFeatures {
   taker_buy_24h_usd: number | null;
   taker_sell_24h_usd: number | null;
   taker_delta_24h_usd: number | null;
+  // History arrays (ascending by ts, up to 200 4H points before atTs).
+  // Used by CG-fade strategies (S1/S2/S3/S4) to compute rolling percentile (180 bars = 30d).
+  ls_top_position_history: number[];
+  ls_top_account_history: number[];
+  funding_oi_weighted_history: number[];
 }
 
 export const EMPTY_CG_FEATURES: CoinglassFeatures = {
@@ -25,6 +30,9 @@ export const EMPTY_CG_FEATURES: CoinglassFeatures = {
   ls_global_account: null, ls_top_account: null, ls_top_position: null,
   liq_long_24h_usd: null, liq_short_24h_usd: null,
   taker_buy_24h_usd: null, taker_sell_24h_usd: null, taker_delta_24h_usd: null,
+  ls_top_position_history: [],
+  ls_top_account_history: [],
+  funding_oi_weighted_history: [],
 };
 
 const MS_24H = 24 * 3600_000;
@@ -82,6 +90,28 @@ export async function loadCoinglassAt(coin: string, pair: string, atTs: number):
   const takerBuy = takerRows.rows.reduce((s, r) => s + parseFloat(r.buy_usd), 0);
   const takerSell = takerRows.rows.reduce((s, r) => s + parseFloat(r.sell_usd), 0);
 
+  // History series for percentile-based fade strategies. Pull last 200 4H points
+  // BEFORE atTs (ascending order). Strategies use 180-bar window for percentile.
+  const HIST_LIMIT = 200;
+  const lsTopPosHist = await query<{ ratio: string }>(
+    `SELECT ratio::text FROM cg_ls_top_position
+     WHERE pair = $1 AND exchange = 'Binance' AND ts <= $2
+     ORDER BY ts DESC LIMIT $3`,
+    [pair, atTs, HIST_LIMIT]
+  );
+  const lsTopAccHist = await query<{ ratio: string }>(
+    `SELECT ratio::text FROM cg_ls_top_account
+     WHERE pair = $1 AND exchange = 'Binance' AND ts <= $2
+     ORDER BY ts DESC LIMIT $3`,
+    [pair, atTs, HIST_LIMIT]
+  );
+  const fundingHist = await query<{ fr_close: string }>(
+    `SELECT fr_close::text FROM cg_funding_oi_weighted
+     WHERE symbol = $1 AND ts <= $2
+     ORDER BY ts DESC LIMIT $3`,
+    [coin, atTs, HIST_LIMIT]
+  );
+
   return {
     oi_close: oiClose,
     oi_delta_24h: oiDelta,
@@ -96,5 +126,9 @@ export async function loadCoinglassAt(coin: string, pair: string, atTs: number):
     taker_buy_24h_usd: takerBuy > 0 ? Math.round(takerBuy) : null,
     taker_sell_24h_usd: takerSell > 0 ? Math.round(takerSell) : null,
     taker_delta_24h_usd: takerBuy + takerSell > 0 ? Math.round(takerBuy - takerSell) : null,
+    // History reversed to ascending (DB returned DESC LIMIT N).
+    ls_top_position_history: lsTopPosHist.rows.map(r => parseFloat(r.ratio)).reverse(),
+    ls_top_account_history: lsTopAccHist.rows.map(r => parseFloat(r.ratio)).reverse(),
+    funding_oi_weighted_history: fundingHist.rows.map(r => parseFloat(r.fr_close)).reverse(),
   };
 }

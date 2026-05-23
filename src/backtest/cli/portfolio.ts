@@ -13,13 +13,18 @@ import { computeMetrics, formatMetrics } from '../metrics';
 import { close as closePg } from '../../core/db';
 import { log } from '../../core/logger';
 
-const SYMBOLS = [
+// Default 13-pair live universe. Can be overridden for research via env:
+//   BT_SYMBOLS="BTCUSDT,ETHUSDT,..." npx tsx ... — restrict / extend universe
+const DEFAULT_SYMBOLS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
   'BNBUSDT', 'LTCUSDT', 'ATOMUSDT',
   'TONUSDT', 'DOGEUSDT',
   'APTUSDT', 'ARBUSDT',
   'TAOUSDT', 'INJUSDT',
 ];
+const SYMBOLS = process.env.BT_SYMBOLS
+  ? process.env.BT_SYMBOLS.split(',').map((s) => s.trim()).filter(Boolean)
+  : DEFAULT_SYMBOLS;
 
 const PER_SYMBOL: Record<string, Partial<BtcVpSmcParams>> = {
   ETHUSDT:  { maxStopAtrPct: 4.5 },
