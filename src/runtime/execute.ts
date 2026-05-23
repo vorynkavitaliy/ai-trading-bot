@@ -294,14 +294,39 @@ async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<Accou
         });
       }
     } else if (args.tp1 != null) {
-      // Only one TP given — set it as full-position TP via setTradingStop.
-      await withRetry(() => c.setTradingStop({
-        category: 'linear', symbol: args.symbol,
-        takeProfit: roundPriceToTick(args.tp1!, info),
-        tpTriggerBy: 'LastPrice', positionIdx: 0,
-      }), { label: `setTp-${args.symbol}-${account.keyName}`, tries: 2 }).catch((e) => {
-        log.warn('single-TP setTradingStop failed', { err: e?.message });
-      });
+      // Single TP target. Place a FULL-position reduce-only LIMIT order at the TP
+      // price — matches backtest assumption (maker fee, no slip). The previous
+      // setTradingStop path used Bybit native TP which triggers a market exit
+      // (taker fee + slip), worse than the modeled fill.
+      try {
+        const r1 = await withRetry(() => c.submitOrder({
+          category: 'linear', symbol: args.symbol,
+          side: closeSide, orderType: 'Limit', qty: qtyStr,
+          price: roundPriceToTick(args.tp1!, info),
+          timeInForce: 'GTC', reduceOnly: true,
+          orderLinkId: tp1LinkId,
+        }), { label: `single-tp-${args.symbol}-${account.keyName}`, tries: 3 });
+        if (r1.retCode !== 0) {
+          log.error('SINGLE-TP SUBMIT REJECTED — falling back to setTradingStop', {
+            symbol: args.symbol, account: account.keyName,
+            retCode: r1.retCode, retMsg: r1.retMsg, qty: qtyStr, price: args.tp1,
+          });
+          await c.setTradingStop({
+            category: 'linear', symbol: args.symbol,
+            takeProfit: roundPriceToTick(args.tp1!, info),
+            tpTriggerBy: 'LastPrice', positionIdx: 0,
+          }).catch((e) => log.warn('setTradingStop fallback failed', { err: e?.message }));
+        }
+      } catch (e: any) {
+        log.error('SINGLE-TP SUBMIT THREW — falling back to setTradingStop', {
+          symbol: args.symbol, account: account.keyName, err: e?.message ?? String(e),
+        });
+        await c.setTradingStop({
+          category: 'linear', symbol: args.symbol,
+          takeProfit: roundPriceToTick(args.tp1!, info),
+          tpTriggerBy: 'LastPrice', positionIdx: 0,
+        }).catch((ee) => log.warn('setTradingStop fallback failed', { err: ee?.message }));
+      }
     }
 
     result.ok = true;
