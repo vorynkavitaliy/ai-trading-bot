@@ -33,6 +33,9 @@ const COMMON = {
   riskPctBase: 0.5,
   leverage: 10,
   decisionTf: '240m' as const,
+  // CG-fade uses single TP target (tp1==tp2). Engine fires both at the same
+  // price → full position close. tp1SlMode is moot (only relevant for true
+  // partial splits).
   tp1SlMode: 'no_move' as const,
   bePlusBufferPct: 0.10,
 };

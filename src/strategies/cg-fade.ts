@@ -30,7 +30,12 @@ export interface CgFadeParams {
   windowBars: number;     // 180 = 30d × 6 (4H bars)
   atrPeriod: number;      // 14
   slAtrMult: number;      // 1.5
-  tpAtrMult: number;      // 2.0
+  // Single TP target at tpAtrMult × ATR. Strategy returns tp1=tp2; execute.ts
+  // detects this and places ONE reduce-only limit (full qty), avoiding the
+  // two-orders-same-price issue we saw on 2026-05-23 live BTC short.
+  // Backtest (TP1=TP2 single target): WR 54.8%, PF 1.53, +88.88%/yr — winner
+  // vs true partial split (worse on every variant tested).
+  tpAtrMult: number;      // 2.0 — R/R 1.33
   maxHoldBars: number;    // 12 (= 48h)
   riskPct: number;        // 0.25–0.5 (config-time)
   // Trend filters
@@ -44,7 +49,8 @@ export interface CgFadeParams {
 
 const DEFAULTS: CgFadeParams = {
   pctHi: 0.85, pctLo: 0.15, windowBars: 180,
-  atrPeriod: 14, slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12,
+  atrPeriod: 14, slAtrMult: 1.5, tpAtrMult: 2.0,
+  maxHoldBars: 12,
   riskPct: 0.5,
   usePairTrend: false, useBtcTrend: false,
   emaFast: 20, emaSlow: 50,
@@ -138,7 +144,7 @@ function buildEnter(
     orderType: 'limit',        // matches live auto-execute.ts:117 hardcode
     entryPrice: ctx.price,
     sl,
-    tp1: tp, tp2: tp,           // single target (engine uses tp1; tp2 same gives full-position close at TP)
+    tp1: tp, tp2: tp,           // single target — execute.ts places ONE limit when tp1==tp2
     sizePct: p.riskPct,
     rationale,
   };

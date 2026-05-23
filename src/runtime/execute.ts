@@ -223,7 +223,14 @@ async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<Accou
     const closeSide = args.side === 'buy' ? 'Sell' : 'Buy';
     const tp1 = args.tp1!;
     const tp2 = args.tp2!;
-    if (args.tp1 != null && args.tp2 != null) {
+    // Single-target case (tp1 == tp2): some strategies (e.g. cg-fade) emit one
+    // TP level. Two reduce-only limits at the same price create the redundancy
+    // we observed live 2026-05-23 — one fills, the other becomes a naked-TP-ish
+    // residual. Treat as single full-position TP via setTradingStop, identical
+    // to "only tp1" path below.
+    const tpEqual = args.tp1 != null && args.tp2 != null
+      && Math.abs(args.tp1 - args.tp2) < (info.tickSize || 0.0001);
+    if (args.tp1 != null && args.tp2 != null && !tpEqual) {
       // Split half/half. Round halfQty DOWN to step; remainder gets the slack.
       const halfRaw = qtyNum / 2;
       const halfStr = roundQtyToStep(halfRaw, info);
