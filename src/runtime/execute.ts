@@ -22,6 +22,7 @@ interface CliArgs {
   tp2?: number;
   rationale: string;
   dryRun: boolean;
+  skipRiskCheck?: boolean;                  // operator-authorized manual override (bypass cooldowns/heat/kill)
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -46,6 +47,7 @@ function parseArgs(argv: string[]): CliArgs {
       case '--rationale': args.rationale = next(); break;
       case '--rationale-file': args.rationale = fs.readFileSync(next(), 'utf-8'); break;
       case '--dry-run': args.dryRun = true; break;
+      case '--skip-risk-check': args.skipRiskCheck = true; break;
       default: throw new Error(`unknown flag: ${a}`);
     }
   }
@@ -414,16 +416,25 @@ async function main() {
     riskPct: args.riskPct, qty: args.qty, entry: args.entryPrice, sl: args.sl,
   });
 
-  // Pre-trade risk check
-  const check = await precheckEntry(args.symbol, args.riskPct ?? RISK.riskPctBase);
-  if (!check.allowed) {
-    log.error('execute blocked by risk-guard', { reason: check.reason });
-    console.error(`BLOCKED: ${check.reason}`);
-    process.exit(2);
+  // Pre-trade risk check. --skip-risk-check is an explicit operator-authorized
+  // override (e.g. testing manual entry during a pair cooldown). Logs prominently
+  // so the audit trail makes the bypass intent obvious.
+  if (args.skipRiskCheck) {
+    log.warn('⚠ MANUAL OVERRIDE — risk-guard bypassed by --skip-risk-check', {
+      symbol: args.symbol, side: args.side, riskPct: args.riskPct,
+    });
+    console.warn(`⚠ Risk-guard bypassed (--skip-risk-check). Operator-authorized.`);
+  } else {
+    const check = await precheckEntry(args.symbol, args.riskPct ?? RISK.riskPctBase);
+    if (!check.allowed) {
+      log.error('execute blocked by risk-guard', { reason: check.reason });
+      console.error(`BLOCKED: ${check.reason}`);
+      process.exit(2);
+    }
   }
 
   if (args.dryRun) {
-    log.info('dry-run: would place order', { args, check });
+    log.info('dry-run: would place order', { args });
     console.log(JSON.stringify({ dryRun: true, allowed: true }, null, 2));
     process.exit(0);
   }
