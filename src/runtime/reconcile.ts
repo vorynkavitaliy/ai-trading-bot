@@ -185,7 +185,10 @@ async function autoCloseTrade(t: DbOpenTrade, fills: ClosedFill[]): Promise<Clos
 
   const exitReason = inferExitReason(t, wAvgExit);
   const stopDist = t.sl != null && t.entry_price != null ? Math.abs(t.entry_price - t.sl) : 0;
-  const riskedUsd = stopDist * t.qty;
+  // 2026-05-23 fix: was `stopDist * t.qty` which inflated realized_r ~2× on
+  // TP1-partial trades (t.qty is remaining qty after TP1 close). Use initial_qty
+  // (DB column added migration 005; older rows COALESCE to qty in fetch).
+  const riskedUsd = stopDist * t.initial_qty;
   const pnlR = riskedUsd > 0 ? totalPnl / riskedUsd : 0;
 
   await query(
