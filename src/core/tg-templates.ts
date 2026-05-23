@@ -85,8 +85,15 @@ export async function notifyOpen(a: OpenTradeArgs): Promise<void> {
     `📍 Цена входа: <b>$${fmtNum(ep)}</b>`,
     `🛡 Стоп:       $${fmtNum(a.sl)}  (${fmtPctSigned(slPct)})`,
   ];
-  if (a.tp1) lines.push(`🎯 Тейк-1:     $${fmtNum(a.tp1)}  (${fmtPctSigned(tp1Pct)})  — 50% объёма, reduce-only лимит`);
-  if (a.tp2) lines.push(`🎯 Тейк-2:     $${fmtNum(a.tp2)}  (${fmtPctSigned(tp2Pct)})  — 50% объёма, reduce-only лимит`);
+  // Single TP case (tp1 == tp2): strategy uses one target → execute.ts places
+  // ONE limit; show as a single "🎯 Тейк" line instead of two duplicates.
+  const singleTp = a.tp1 != null && a.tp2 != null && Math.abs(a.tp1 - a.tp2) < 0.5;
+  if (singleTp) {
+    lines.push(`🎯 Тейк:       $${fmtNum(a.tp1!)}  (${fmtPctSigned(tp1Pct)})  — full position, reduce-only лимит`);
+  } else {
+    if (a.tp1) lines.push(`🎯 Тейк-1:     $${fmtNum(a.tp1)}  (${fmtPctSigned(tp1Pct)})  — 50% объёма, reduce-only лимит`);
+    if (a.tp2) lines.push(`🎯 Тейк-2:     $${fmtNum(a.tp2)}  (${fmtPctSigned(tp2Pct)})  — 50% объёма, reduce-only лимит`);
+  }
   lines.push(``);
   lines.push(`💼 <b>Размер:</b> ${fmtNum(a.qtyTotal, 2)} ${tag}`);
   if (a.riskPct) lines.push(`⚖ <b>Риск:</b> ${a.riskPct}% от equity`);
