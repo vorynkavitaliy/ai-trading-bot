@@ -37,20 +37,10 @@ const UNIVERSE = tier1Pairs();
 // 2026-05-23: PER_SYMBOL VP-SMC overrides removed (legacy strategy retired).
 // Per-pair params now live inside the strategy factory call in pair-strategies.ts.
 
+import { loadBars as loadBarsCanonical } from '../data/candles';
+
 async function loadBars(symbol: string, tf: string, lookbackBars: number): Promise<Bar[]> {
-  const r = await query<any>(
-    `SELECT ts::text, open, high, low, close, volume FROM candles
-     WHERE symbol = $1 AND tf = $2 ORDER BY ts DESC LIMIT $3`,
-    [symbol, tf, lookbackBars]
-  );
-  return r.rows.reverse().map((row: any): Bar => ({
-    ts: parseInt(row.ts, 10),
-    open: parseFloat(row.open),
-    high: parseFloat(row.high),
-    low: parseFloat(row.low),
-    close: parseFloat(row.close),
-    volume: parseFloat(row.volume),
-  }));
+  return loadBarsCanonical(symbol, tf, { limit: lookbackBars });
 }
 
 interface ContextResult {

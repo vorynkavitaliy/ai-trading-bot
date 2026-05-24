@@ -23,6 +23,7 @@
  */
 import { Action, Strategy, StrategyContext, Bar } from '../backtest/types';
 import { CoinglassFeatures } from '../data/coinglass-features';
+import { atr, percentile, trendUp } from '../core/indicators';
 
 export interface CgFadeParams {
   pctHi: number;          // 0.85 / 0.75 / 0.70 — percentile threshold for "extreme high"
@@ -58,38 +59,9 @@ const DEFAULTS: CgFadeParams = {
 };
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
-function atr(bars: Bar[], period: number): number | null {
-  if (bars.length < period + 1) return null;
-  let s = 0;
-  for (let i = bars.length - period; i < bars.length; i++) {
-    s += Math.max(
-      bars[i].high - bars[i].low,
-      Math.abs(bars[i].high - bars[i - 1].close),
-      Math.abs(bars[i].low - bars[i - 1].close),
-    );
-  }
-  return s / period;
-}
-function ema(values: number[], period: number): number | null {
-  if (values.length < period) return null;
-  const k = 2 / (period + 1);
-  let e = values[0];
-  for (let i = 1; i < values.length; i++) e = values[i] * k + e * (1 - k);
-  return e;
-}
-function trendUp(closes: number[], fast: number, slow: number): boolean | null {
-  const eF = ema(closes, fast);
-  const eS = ema(closes, slow);
-  if (eF == null || eS == null) return null;
-  return eF > eS;
-}
-function percentile(series: number[], value: number): number {
-  let cnt = 0;
-  for (const v of series) if (v <= value) cnt++;
-  return cnt / series.length;
-}
+// Indicators (atr/ema/percentile/trendUp) moved to src/core/indicators.ts.
 
-// In-process cooldown state (mirror of btc-vp-smc.ts pattern).
+// In-process cooldown state.
 // Resets on process restart, which is fine — live restart is rare and small misses are OK.
 const lastEntryByPair: Map<string, { side: 'long' | 'short'; ts: number }> = new Map();
 export function resetCgFadeCooldownState() { lastEntryByPair.clear(); }

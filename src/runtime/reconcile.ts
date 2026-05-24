@@ -5,6 +5,7 @@ import { query } from '../core/db';
 import { notifyClose } from '../core/tg-templates';
 import { log } from '../core/logger';
 import { findStaleOrphans, StalePending } from '../core/pending-orders';
+import { tradeRepo, OpenTrade } from '../data/trade-repo';
 
 type Divergence =
   | { type: 'bybit_without_db'; account: string; symbol: string; size: number }
@@ -46,46 +47,10 @@ async function fetchAccountPositions(a: AccountKey): Promise<BybitPos[]> {
     }));
 }
 
-interface DbOpenTrade {
-  id: number;
-  account_key: string;
-  account_bucket: string;
-  symbol: string;
-  side: string;
-  qty: number;
-  initial_qty: number;        // original qty at open (before TP1 partial fill)
-  entry_price: number | null;
-  sl: number | null;
-  tp1: number | null;
-  tp2: number | null;
-  opened_at: string;
-  tp1_filled: boolean;        // tp1_filled_at IS NOT NULL → partial fill already processed
-}
+type DbOpenTrade = OpenTrade;
 
 async function fetchDbOpenTrades(): Promise<DbOpenTrade[]> {
-  const r = await query<any>(
-    `SELECT id, account_bucket, account_key, symbol, side, qty::text,
-            COALESCE(initial_qty, qty)::text AS initial_qty,
-            entry_price::text, sl::text, tp1::text, tp2::text,
-            opened_at::text,
-            tp1_filled_at IS NOT NULL AS tp1_filled
-     FROM trades WHERE status = 'open'`
-  );
-  return r.rows.map((row) => ({
-    id: row.id,
-    account_bucket: row.account_bucket,
-    account_key: row.account_key,
-    symbol: row.symbol,
-    side: row.side,
-    qty: parseFloat(row.qty),
-    initial_qty: parseFloat(row.initial_qty),
-    entry_price: row.entry_price ? parseFloat(row.entry_price) : null,
-    sl: row.sl ? parseFloat(row.sl) : null,
-    tp1: row.tp1 ? parseFloat(row.tp1) : null,
-    tp2: row.tp2 ? parseFloat(row.tp2) : null,
-    opened_at: row.opened_at,
-    tp1_filled: row.tp1_filled === true,
-  }));
+  return tradeRepo.openTrades();
 }
 
 interface ClosedFill {

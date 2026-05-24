@@ -3,6 +3,8 @@ import { loadAccounts } from '../core/accounts';
 import { getRest, ping } from '../core/bybit';
 import { getDayPnl } from '../core/pnl';
 import { log } from '../core/logger';
+import { tradeRepo } from '../data/trade-repo';
+import { tier1Pairs } from './pair-strategies';
 
 // Risk constants — must match CLAUDE.md § Risk budget v3
 export const RISK = {
@@ -96,33 +98,20 @@ async function fetchSessionStartEquity(now: Date): Promise<number> {
   return v ? parseFloat(v) : 0;
 }
 
-// Returns a cooldown-block reason string if the pair had a SL within the last
-// `RISK.cooldownAfterSlHours` hours; null otherwise. The cooldown is independent
-// of the UTC-day SL cap — it survives day boundaries.
+// Returns a cooldown-block reason string if the pair is in cooldown; null otherwise.
+// Combines two cooldown windows: (a) long post-SL (default 12h, losing closes only),
+// (b) short post-any-close (default 4h, any TP/manual close). The 12h survives the
+// UTC-day boundary so back-to-back SL clusters can't re-enter.
 async function lastSlCooldown(now: Date, symbol: string): Promise<string | null> {
-  // Check 1: post-SL cooldown (long, default 12h) — only for losing closes
   const slCutoff = now.getTime() - RISK.cooldownAfterSlHours * 3_600_000;
-  const slR = await query<{ ts: string }>(
-    `SELECT EXTRACT(EPOCH FROM closed_at) * 1000 AS ts FROM trades
-     WHERE symbol = $1 AND status = 'closed' AND realized_r < 0 AND closed_at IS NOT NULL
-     ORDER BY closed_at DESC LIMIT 1`,
-    [symbol]
-  );
-  const slTs = slR.rows[0]?.ts ? parseFloat(slR.rows[0].ts) : null;
+  const slTs = await tradeRepo.lastSlCloseTs(symbol);
   if (slTs !== null && slTs >= slCutoff) {
     const minsSince = Math.floor((now.getTime() - slTs) / 60_000);
     return `SL cooldown: ${minsSince}min since SL, need ${RISK.cooldownAfterSlHours * 60}min`;
   }
 
-  // Check 2: post-any-close cooldown (short, default 4h) — for TP1/TP2/manual closes
   const anyCutoff = now.getTime() - RISK.cooldownAfterAnyCloseHours * 3_600_000;
-  const r = await query<{ ts: string }>(
-    `SELECT EXTRACT(EPOCH FROM closed_at) * 1000 AS ts FROM trades
-     WHERE symbol = $1 AND status = 'closed' AND closed_at IS NOT NULL
-     ORDER BY closed_at DESC LIMIT 1`,
-    [symbol]
-  );
-  const lastTs = r.rows[0]?.ts ? parseFloat(r.rows[0].ts) : null;
+  const lastTs = await tradeRepo.lastCloseTs(symbol);
   if (lastTs === null || lastTs < anyCutoff) return null;
   const minsSince = Math.floor((now.getTime() - lastTs) / 60_000);
   const minsRemaining = Math.max(0, RISK.cooldownAfterAnyCloseHours * 60 - minsSince);
@@ -130,33 +119,19 @@ async function lastSlCooldown(now: Date, symbol: string): Promise<string | null>
 }
 
 async function countSlToday(now: Date, symbol: string): Promise<number> {
-  // Count UNIQUE logical SL events per pair, not per-account-row. One signal placed
-  // on N accounts creates N closed-rows when SL hits, all with near-identical opened_at
-  // (Promise.all broadcast → ms-level skew). We dedupe by side + opened_at rounded to
-  // the second so a multi-account broadcast counts as 1 event toward the daily SL cap.
   const sessionStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const r = await query<{ c: string }>(
-    `SELECT COUNT(DISTINCT (side, date_trunc('second', opened_at)))::text AS c
-     FROM trades
-     WHERE symbol = $1 AND status = 'closed'
-       AND closed_at IS NOT NULL AND EXTRACT(EPOCH FROM closed_at) * 1000 >= $2
-       AND realized_r < 0`,
-    [symbol, sessionStart]
-  );
-  return parseInt(r.rows[0]?.c ?? '0', 10);
+  return tradeRepo.countSlInSession(symbol, sessionStart);
 }
 
 async function fetchOpenPositions(): Promise<Array<{ symbol: string; riskedUsd: number }>> {
-  const r = await query<{ symbol: string; entry_price: string; sl: string; qty: string }>(
-    `SELECT symbol, entry_price::text, sl::text, qty::text FROM trades
-     WHERE status = 'open'`
-  );
-  return r.rows.map((row) => {
-    const ep = parseFloat(row.entry_price ?? '0');
-    const sl = parseFloat(row.sl ?? '0');
-    const qty = parseFloat(row.qty ?? '0');
-    const risked = Math.abs(ep - sl) * qty;
-    return { symbol: row.symbol, riskedUsd: risked };
+  const trades = await tradeRepo.openTrades();
+  return trades.map((t) => {
+    const ep = t.entry_price ?? 0;
+    const sl = t.sl ?? 0;
+    // Use initial_qty for risk math — t.qty is remaining qty after TP1 partials and
+    // would understate risk for trades that have already half-realized.
+    const risked = Math.abs(ep - sl) * t.initial_qty;
+    return { symbol: t.symbol, riskedUsd: risked };
   });
 }
 
@@ -179,14 +154,7 @@ export async function getRiskState(now: Date = new Date()): Promise<RiskState> {
   const totalHeatPct = equity > 0 ? (totalRisked / equity) * 100 : 0;
 
   const pairBlocked: Record<string, string> = {};
-  const universe = [
-    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
-    'BNBUSDT', 'LTCUSDT', 'ATOMUSDT',
-    'TONUSDT', 'DOGEUSDT',
-    'APTUSDT', 'ARBUSDT',
-    'TAOUSDT', 'INJUSDT',
-  ];
-  for (const symbol of universe) {
+  for (const symbol of tier1Pairs()) {
     const slCount = await countSlToday(now, symbol);
     if (slCount >= RISK.maxSlPerPairPerDay) {
       pairBlocked[symbol] = `${slCount} SL today (cap ${RISK.maxSlPerPairPerDay})`;

@@ -12,6 +12,7 @@ import { lsTopPositionFade, fundingFade, fundingTaConfluence } from '../../strat
 import { ClosedTrade, Strategy } from '../types';
 import { close as closePg } from '../../core/db';
 import { log } from '../../core/logger';
+import { BACKTEST_COMMON } from '../defaults';
 
 interface PairCfg { pair: string; strategy: Strategy; }
 
@@ -26,10 +27,9 @@ const TIER1: PairCfg[] = [
 ];
 
 const COMMON = {
-  startEquity: 200_000,
-  takerFeeRate: 0.00055,
-  makerFeeRate: 0.0002,
-  slippagePct: 0.05,
+  ...BACKTEST_COMMON,
+  startEquity: 200_000,           // portfolio-specific override (Tier-1 live equity, not default 50k)
+  slippagePct: 0.05,              // CG-fade uses limit entries → smaller slip than default
   riskPctBase: 0.5,
   leverage: 10,
   decisionTf: '240m' as const,

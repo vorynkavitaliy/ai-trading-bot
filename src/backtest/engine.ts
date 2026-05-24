@@ -27,21 +27,10 @@ interface DataBundle {
   fundingByTs: Map<number, number>;
 }
 
+import { loadBars as loadBarsCanonical } from '../data/candles';
+
 async function loadBars(symbol: string, tf: string, fromTs: number, toTs: number): Promise<Bar[]> {
-  const r = await query<any>(
-    `SELECT ts::text, open, high, low, close, volume
-     FROM candles WHERE symbol = $1 AND tf = $2 AND ts >= $3 AND ts <= $4
-     ORDER BY ts ASC`,
-    [symbol, tf, fromTs, toTs]
-  );
-  return r.rows.map((row: any): Bar => ({
-    ts: parseInt(row.ts, 10),
-    open: parseFloat(row.open),
-    high: parseFloat(row.high),
-    low: parseFloat(row.low),
-    close: parseFloat(row.close),
-    volume: parseFloat(row.volume),
-  }));
+  return loadBarsCanonical(symbol, tf, { fromTs, toTs });
 }
 
 async function loadData(symbol: string, startTs: number, endTs: number, decisionTf: string, needsBtcContext = false): Promise<DataBundle> {

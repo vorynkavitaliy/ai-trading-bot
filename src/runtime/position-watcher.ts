@@ -14,6 +14,7 @@ import { query } from '../core/db';
 import { computeFeatures, CandleRow } from '../data/features';
 import { notifyAlert, notifyClose } from '../core/tg-templates';
 import { log } from '../core/logger';
+import { tradeRepo, OpenTrade } from '../data/trade-repo';
 
 const TIME_STOP_HOURS = 24;
 const REGIME_ADX_FLIP_THRESHOLD = 18;     // ADX dropping below this = trend losing strength
@@ -40,8 +41,29 @@ interface BybitPos {
   tp1AlreadyFilled: boolean;  // tp1_filled_at not null → don't re-fire notification
 }
 
+function matchDbTrade(
+  trades: OpenTrade[],
+  bucket: string,
+  keyName: string,
+  symbol: string,
+  side: string,
+): OpenTrade | null {
+  // Most-recent-opened match for (account_bucket, account_key, symbol, side).
+  let best: OpenTrade | null = null;
+  for (const t of trades) {
+    if (t.account_bucket !== bucket) continue;
+    if (t.account_key !== keyName) continue;
+    if (t.symbol !== symbol) continue;
+    if (t.side !== side) continue;
+    if (best === null || t.opened_at > best.opened_at) best = t;
+  }
+  return best;
+}
+
 async function fetchOpenPositionsWithDb(): Promise<BybitPos[]> {
   const accounts = loadAccounts();
+  // Single DB call up-front instead of N (was: one per matched Bybit position).
+  const dbTrades = await tradeRepo.openTrades();
   const results: BybitPos[] = [];
 
   for (const acc of accounts) {
@@ -59,41 +81,29 @@ async function fetchOpenPositionsWithDb(): Promise<BybitPos[]> {
       // Match against DB row to recover original SL/TP1/TP2/initialQty + REAL opened_at.
       // Bybit's createdTime on a position object reflects first-ever open on that symbol,
       // not the current position cycle — using DB opened_at instead.
-      const dbR = await query<any>(
-        `SELECT id, sl::text, tp1::text, tp2::text, qty::text,
-                COALESCE(initial_qty, qty)::text AS initial_qty,
-                tp1_filled_at IS NOT NULL AS tp1_filled,
-                EXTRACT(EPOCH FROM opened_at) * 1000 AS opened_ms
-         FROM trades
-         WHERE status = 'open' AND account_bucket = $1 AND account_key = $2
-           AND symbol = $3 AND side = $4
-         ORDER BY opened_at DESC
-         LIMIT 1`,
-        [acc.bucket, acc.keyName, p.symbol, p.side]
-      );
-      if (dbR.rows.length === 0) continue;
-      const db = dbR.rows[0];
-      const openedMs = parseFloat(db.opened_ms ?? '0');
+      const db = matchDbTrade(dbTrades, acc.bucket, acc.keyName, p.symbol, p.side);
+      if (!db) continue;
+      const openedMs = Date.parse(db.opened_at);
 
       results.push({
         symbol: p.symbol,
         side: (p.side === 'Buy' || p.side === 'Sell') ? p.side : 'Buy',
         size: parseFloat(p.size),
-        initialSize: parseFloat(db.initial_qty),
+        initialSize: db.initial_qty,
         entryPrice: parseFloat(p.avgPrice ?? '0'),
         curSL: parseFloat(p.stopLoss ?? '0'),
         curTP: p.takeProfit ? parseFloat(p.takeProfit) : null,
         unrealisedPnl: parseFloat(p.unrealisedPnl ?? '0'),
         positionValue: parseFloat(p.positionValue ?? '0'),
-        createdTime: openedMs > 0 ? openedMs : parseInt(p.createdTime ?? '0', 10),
+        createdTime: Number.isFinite(openedMs) && openedMs > 0 ? openedMs : parseInt(p.createdTime ?? '0', 10),
         account: acc,
         dbTradeId: db.id,
-        dbInitialSL: parseFloat(db.sl),
-        dbTP1: db.tp1 ? parseFloat(db.tp1) : null,
-        dbTP2: db.tp2 ? parseFloat(db.tp2) : null,
-        dbInitialQty: parseFloat(db.initial_qty),
-        dbCurrentQty: parseFloat(db.qty),
-        tp1AlreadyFilled: db.tp1_filled === true,
+        dbInitialSL: db.sl ?? 0,
+        dbTP1: db.tp1,
+        dbTP2: db.tp2,
+        dbInitialQty: db.initial_qty,
+        dbCurrentQty: db.qty,
+        tp1AlreadyFilled: db.tp1_filled,
       });
     }
   }
