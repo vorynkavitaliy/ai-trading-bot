@@ -15,6 +15,7 @@ import { computeFeatures, CandleRow } from '../data/features';
 import { notifyAlert, notifyClose } from '../core/tg-templates';
 import { log } from '../core/logger';
 import { tradeRepo, OpenTrade } from '../data/trade-repo';
+import { Position } from '../core/position';
 
 const TIME_STOP_HOURS = 24;
 const REGIME_ADX_FLIP_THRESHOLD = 18;     // ADX dropping below this = trend losing strength
@@ -169,13 +170,33 @@ async function closePosition(pos: BybitPos, reason: string): Promise<void> {
 // -------- Rules --------
 
 function detectTp1Filled(pos: BybitPos): boolean {
-  // Detect TP1 partial fill: position size dropped to ~50% of original AND we have
-  // not yet recorded tp1_filled_at in DB. The 0.6 threshold gives tolerance for
-  // slight Bybit qty rounding (we split-round in execute.ts).
-  if (pos.tp1AlreadyFilled) return false;        // already handled — don't re-fire
+  // Detection now lives inside Position.attachBybitSize() — the state machine
+  // owns the "did TP1 partial fire" check. Watcher just queries the result.
+  // Threshold (initial × 0.6) and floor (size > 0) are encapsulated there.
+  if (pos.tp1AlreadyFilled) return false;
   if (pos.dbInitialQty <= 0) return false;
-  const currentRatio = pos.size / pos.dbInitialQty;
-  return currentRatio < 0.6 && currentRatio > 0.05;
+  if (pos.size <= pos.dbInitialQty * 0.05) return false;  // floor: full close, not TP1
+  const p = positionFromBybit(pos);
+  p.attachBybitSize(pos.size);
+  return p.isTp1Filled();
+}
+
+function positionFromBybit(pos: BybitPos): Position {
+  return Position.fromOpenTrade({
+    id: pos.dbTradeId,
+    account_bucket: pos.account.bucket,
+    account_key: pos.account.keyName,
+    symbol: pos.symbol,
+    side: pos.side,
+    qty: pos.dbCurrentQty,
+    initial_qty: pos.dbInitialQty,
+    entry_price: pos.entryPrice,
+    sl: pos.dbInitialSL,
+    tp1: pos.dbTP1,
+    tp2: pos.dbTP2,
+    opened_at: new Date(pos.createdTime).toISOString(),
+    tp1_filled: pos.tp1AlreadyFilled,
+  });
 }
 
 function detectRegimeFlip(pos: BybitPos, f1h: any): { flipped: boolean; reason: string } {

@@ -6,6 +6,7 @@ import { notifyClose } from '../core/tg-templates';
 import { log } from '../core/logger';
 import { findStaleOrphans, StalePending } from '../core/pending-orders';
 import { tradeRepo, OpenTrade } from '../data/trade-repo';
+import { Position } from '../core/position';
 
 type Divergence =
   | { type: 'bybit_without_db'; account: string; symbol: string; size: number }
@@ -149,11 +150,10 @@ async function autoCloseTrade(t: DbOpenTrade, fills: ClosedFill[]): Promise<Clos
   const lastTs = matched[matched.length - 1].closedTime;
 
   const exitReason = inferExitReason(t, wAvgExit);
-  const stopDist = t.sl != null && t.entry_price != null ? Math.abs(t.entry_price - t.sl) : 0;
-  // 2026-05-23 fix: was `stopDist * t.qty` which inflated realized_r ~2× on
-  // TP1-partial trades (t.qty is remaining qty after TP1 close). Use initial_qty
-  // (DB column added migration 005; older rows COALESCE to qty in fetch).
-  const riskedUsd = stopDist * t.initial_qty;
+  // Position.riskedUsd() always uses initial_qty (encapsulated invariant).
+  // Eliminates the t.qty vs initial_qty bug class entirely — callers can no
+  // longer access qty for risk math.
+  const riskedUsd = Position.fromOpenTrade(t).riskedUsd();
   const pnlR = riskedUsd > 0 ? totalPnl / riskedUsd : 0;
 
   await query(

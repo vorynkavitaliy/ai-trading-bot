@@ -4,6 +4,7 @@ import { getRest, ping } from '../core/bybit';
 import { getDayPnl } from '../core/pnl';
 import { log } from '../core/logger';
 import { tradeRepo } from '../data/trade-repo';
+import { Position } from '../core/position';
 import { tier1Pairs } from './pair-strategies';
 
 // Risk constants — must match CLAUDE.md § Risk budget v3
@@ -126,12 +127,8 @@ async function countSlToday(now: Date, symbol: string): Promise<number> {
 async function fetchOpenPositions(): Promise<Array<{ symbol: string; riskedUsd: number }>> {
   const trades = await tradeRepo.openTrades();
   return trades.map((t) => {
-    const ep = t.entry_price ?? 0;
-    const sl = t.sl ?? 0;
-    // Use initial_qty for risk math — t.qty is remaining qty after TP1 partials and
-    // would understate risk for trades that have already half-realized.
-    const risked = Math.abs(ep - sl) * t.initial_qty;
-    return { symbol: t.symbol, riskedUsd: risked };
+    const p = Position.fromOpenTrade(t);
+    return { symbol: p.symbol, riskedUsd: p.riskedUsd() };
   });
 }
 
