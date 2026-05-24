@@ -17,7 +17,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { withRetry, getInstrumentInfo, roundPriceToTick, roundQtyToStep } from '../core/bybit';
+import { withRetry, getInstrumentInfo, roundPriceToTick } from '../core/bybit';
+import { splitQtyHalves } from '../core/qty-normalizer';
 import { notifyAlert } from '../core/tg-templates';
 import { log } from '../core/logger';
 import type { AccountKey } from '../core/accounts';
@@ -72,15 +73,12 @@ export class NakedTpRecovery {
     });
 
     const info = await getInstrumentInfo(pos.account, pos.symbol);
-    const halfRaw = pos.size / 2;
-    const halfStr = roundQtyToStep(halfRaw, info);
-    const halfNum = parseFloat(halfStr);
-    const remNum = pos.size - halfNum;
-    const remStr = roundQtyToStep(remNum, info);
+    const split = splitQtyHalves(pos.size, info);
 
-    if (halfNum < info.minOrderQty || parseFloat(remStr) < info.minOrderQty) {
+    if (!split.valid) {
       log.warn('naked-TP re-place skipped: qty too small to split', {
-        symbol: pos.symbol, size: pos.size, half: halfNum, rem: remNum,
+        symbol: pos.symbol, size: pos.size,
+        half: split.first.qtyNum, rem: split.rest.qtyNum,
       });
       return null;
     }
@@ -91,14 +89,14 @@ export class NakedTpRecovery {
     try {
       await withRetry(() => client.submitOrder({
         category: 'linear', symbol: pos.symbol,
-        side: closingSide, orderType: 'Limit', qty: halfStr,
+        side: closingSide, orderType: 'Limit', qty: split.first.qtyStr,
         price: roundPriceToTick(pos.dbTP1!, info),
         timeInForce: 'GTC', reduceOnly: true,
         orderLinkId: `rtp1-${recBase}`,
       }), { label: `naked-tp1-${pos.symbol}-${pos.account.keyName}`, tries: 2 });
       await withRetry(() => client.submitOrder({
         category: 'linear', symbol: pos.symbol,
-        side: closingSide, orderType: 'Limit', qty: remStr,
+        side: closingSide, orderType: 'Limit', qty: split.rest.qtyStr,
         price: roundPriceToTick(pos.dbTP2!, info),
         timeInForce: 'GTC', reduceOnly: true,
         orderLinkId: `rtp2-${recBase}`,

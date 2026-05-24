@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { loadAccounts, AccountKey } from '../core/accounts';
-import { getRest, withRetry, getInstrumentInfo, roundQtyToStep, roundPriceToTick } from '../core/bybit';
+import { getRest, withRetry, getInstrumentInfo, roundPriceToTick } from '../core/bybit';
+import { normalizeQty } from '../core/qty-normalizer';
 import { query } from '../core/db';
 import { notifyOpen } from '../core/tg-templates';
 import { precheckEntry, RISK } from './risk-guard';
@@ -147,11 +148,9 @@ async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<Accou
       });
       clampedQty = orderMax;
     }
-    const qtyStr = roundQtyToStep(clampedQty, info);
-    const qtyNum = parseFloat(qtyStr);
-    if (qtyNum <= 0) throw new Error(`computed qty rounds to 0 (raw=${rawQty}, step=${info.qtyStep})`);
-    if (qtyNum < info.minOrderQty) {
-      throw new Error(`qty ${qtyNum} below minOrderQty ${info.minOrderQty} for ${args.symbol} — risk too small or stop too wide`);
+    const { qtyStr, qtyNum, valid } = normalizeQty(clampedQty, info);
+    if (!valid) {
+      throw new Error(`qty ${qtyNum} invalid for ${args.symbol} (step ${info.qtyStep}, min ${info.minOrderQty}, raw ${rawQty})`);
     }
 
     // Step 1: open position with SL only. takeProfit on Bybit's order create

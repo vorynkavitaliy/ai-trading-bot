@@ -18,7 +18,8 @@
  * the choice explicit and the recovery path single.
  */
 
-import { withRetry, roundPriceToTick, roundQtyToStep, InstrumentInfo } from '../core/bybit';
+import { withRetry, roundPriceToTick, InstrumentInfo } from '../core/bybit';
+import { splitQtyHalves } from '../core/qty-normalizer';
 import { log } from '../core/logger';
 import type { RestClientV5 } from 'bybit-api';
 
@@ -55,16 +56,11 @@ export class TpPlanner {
     const tpEqual = tp2 != null && Math.abs(tp1 - tp2) < (args.instrumentInfo.tickSize || 0.0001);
 
     if (tp2 != null && !tpEqual) {
-      // Dual-TP split. Try 50/50.
-      const halfRaw = args.qtyNum / 2;
-      const halfStr = roundQtyToStep(halfRaw, args.instrumentInfo);
-      const halfNum = parseFloat(halfStr);
-      const remNum = args.qtyNum - halfNum;
-      const remStr = roundQtyToStep(remNum, args.instrumentInfo);
+      const split = splitQtyHalves(args.qtyNum, args.instrumentInfo);
 
-      if (halfNum >= args.instrumentInfo.minOrderQty && parseFloat(remStr) >= args.instrumentInfo.minOrderQty) {
-        const tp1Ok = await this.placeLimitLeg(args, halfStr, tp1, args.tp1LinkId, 'tp1');
-        const tp2Ok = await this.placeLimitLeg(args, remStr, tp2, args.tp2LinkId, 'tp2');
+      if (split.valid) {
+        const tp1Ok = await this.placeLimitLeg(args, split.first.qtyStr, tp1, args.tp1LinkId, 'tp1');
+        const tp2Ok = await this.placeLimitLeg(args, split.rest.qtyStr, tp2, args.tp2LinkId, 'tp2');
         if (!tp1Ok || !tp2Ok) {
           log.error('NAKED TP — execute.ts placed entry but TP leg(s) missing; watcher will recover', {
             symbol: args.symbol, account: args.account,
@@ -73,7 +69,6 @@ export class TpPlanner {
         }
         return { mode: 'DualLimit', ok: tp1Ok || tp2Ok, legs: { tp1Ok, tp2Ok } };
       }
-      // Too small to split — fall through to SingleLimit on tp1.
     }
 
     // Single full-size limit at tp1 (covers tpEqual case AND tp2-missing case).
