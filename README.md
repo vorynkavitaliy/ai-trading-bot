@@ -9,7 +9,6 @@ npm run db:migrate # накатить все миграции
 2. Данные (если БД пустая)
 
 npm run data:backfill # OHLCV за 365д для 13 пар (~10-15 мин)
-npm run data:dw # 1D/1W за 730 дней
 npm run cg:backfill # Coinglass для 13 пар (~3-5 мин)
 
 3. Cron (фоновый цикл)

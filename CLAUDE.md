@@ -144,9 +144,12 @@ When any fires: send Telegram alert, trigger `/pause` (writes `vault/Watchlist/P
 ## What changed 2026-05-23 (v4 migration)
 
 **Discovery:** 7 days of honest debugging revealed VP-SMC's claimed +120%/year was a data-bug artifact:
-- `backfill.ts` uses `ON CONFLICT DO NOTHING` → weekly/daily bars frozen at first insert (~30s after open)
+- `backfill.ts` previously used `ON CONFLICT DO NOTHING` → weekly/daily bars frozen at first insert (~30s after open)
 - Backtest engine `b.ts < cutoff` filter included those frozen bars → strategy used **future full-week H/L** in historical periods (look-ahead bias)
 - Without look-ahead, VP-SMC on honest data: −10.74%/year (Fix D')
+- Two-layer fix (2026-05-23 commit cd2fce3 + TASK-003 2026-05-24):
+  - `engine.ts aggregateHourlyTo` reconstructs the current D/W bar from 1h on the fly — backtest is authoritative
+  - `backfill.ts insertCandles` now uses `ON CONFLICT DO UPDATE WHERE ts + tf_duration > now` — DB row for the open period is refreshed every cycle, closed bars are immutable (belt-and-suspenders)
 - Investigation: see backtest engine fixes A, B, C, D, D' (intra-bar resolution, TP slip semantics, limit entry, D/W bar reconstruction from hourly)
 
 **Replacement:** CG-fade portfolio. Backtest validated:
@@ -161,4 +164,3 @@ When any fires: send Telegram alert, trigger `/pause` (writes `vault/Watchlist/P
 
 **Known outstanding issues (to fix):**
 - `cg-fade.ts` returns `tp1 = tp2` (single target) but `execute.ts` places 2 separate limit orders. Need true partial split (TP1 = 1× ATR partial, TP2 = 2.5× ATR runner) + re-backtest.
-- `src/runtime/reconcile.ts:188` uses `t.qty` (remaining qty after TP1 partial) for `riskedUsd` calc → inflates live `realized_r` by ~2× on TP1-partial trades. Fix: use `initial_qty` field. (Independent fix.)

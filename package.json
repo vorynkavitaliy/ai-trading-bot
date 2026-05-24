@@ -22,7 +22,6 @@
     "data:backfill": "tsx src/data/cli/backfill-run.ts",
     "data:incremental": "tsx src/data/cli/incremental-run.ts",
     "data:features": "tsx src/data/cli/features-run.ts",
-    "data:dw": "tsx src/data/cli/backfill-daily-weekly.ts 730",
     "cg:backfill": "tsx src/data/cli/cg-backfill.ts",
     "cg:incremental": "tsx src/data/cli/cg-incremental.ts",
 

@@ -61,7 +61,23 @@ async function insertCandles(
     });
     const sql = `INSERT INTO candles (symbol, tf, ts, open, high, low, close, volume, turnover)
                  VALUES ${values.join(', ')}
-                 ON CONFLICT (symbol, tf, ts) DO NOTHING`;
+                 ON CONFLICT (symbol, tf, ts) DO UPDATE SET
+                   open     = EXCLUDED.open,
+                   high     = EXCLUDED.high,
+                   low      = EXCLUDED.low,
+                   close    = EXCLUDED.close,
+                   volume   = EXCLUDED.volume,
+                   turnover = EXCLUDED.turnover
+                 WHERE candles.ts + (CASE candles.tf
+                                       WHEN '1m'   THEN 60000
+                                       WHEN '5m'   THEN 300000
+                                       WHEN '15m'  THEN 900000
+                                       WHEN '60m'  THEN 3600000
+                                       WHEN '240m' THEN 14400000
+                                       WHEN '1D'   THEN 86400000
+                                       WHEN '1W'   THEN 604800000
+                                       ELSE 0
+                                     END) > EXTRACT(EPOCH FROM NOW()) * 1000`;
     const r = await query(sql, params);
     total += r.rowCount;
   }
