@@ -48,7 +48,24 @@ export interface ClosedTrade {
   closed_at: string | null;
 }
 
-export class TradeRepo {
+/**
+ * Repository contract — every caller depends on this interface, not on the
+ * concrete TradeRepo. Tests pass an InMemoryTradeRepo (not shipped) that
+ * satisfies the same interface. Dependency inversion: high-level code
+ * (risk-guard, reconcile, position-watcher) doesn't know about Postgres.
+ */
+export interface ITradeRepository {
+  openTrades(): Promise<OpenTrade[]>;
+  openTradesForAccount(accountKey: string): Promise<OpenTrade[]>;
+  openTradesForPair(symbol: string): Promise<OpenTrade[]>;
+  recentClosed(days: number): Promise<ClosedTrade[]>;
+  tradeById(id: number): Promise<ClosedTrade | null>;
+  lastSlCloseTs(symbol: string): Promise<number | null>;
+  lastCloseTs(symbol: string): Promise<number | null>;
+  countSlInSession(symbol: string, sessionStartMs: number): Promise<number>;
+}
+
+export class TradeRepo implements ITradeRepository {
   /** All open trades across every account. */
   async openTrades(): Promise<OpenTrade[]> {
     const r = await query<any>(
@@ -166,8 +183,10 @@ export class TradeRepo {
   }
 }
 
-/** Module-default instance — most callers want this. Tests may construct their own. */
-export const tradeRepo = new TradeRepo();
+/** Module-default instance, exposed as ITradeRepository so callers cannot
+ * accidentally reach concrete Postgres internals. Tests build their own
+ * implementations and pass them where needed. */
+export const tradeRepo: ITradeRepository = new TradeRepo();
 
 function toOpenTrade(row: any): OpenTrade {
   return {

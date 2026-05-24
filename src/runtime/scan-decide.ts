@@ -23,7 +23,7 @@ import { loadCoinglassAt, CoinglassFeatures } from '../data/coinglass-features';
 import { buildVolumeProfile } from '../strategies/volume-profile';
 import { getStrategyForPair, tier1Pairs } from './pair-strategies';
 import { Action, Bar, StrategyContext } from '../backtest/types';
-import { getRiskState, precheckEntry, RISK, RiskState } from './risk-guard';
+import { RiskManager, RISK, RiskState } from './risk-guard';
 import { getLiveTickers } from '../core/bybit';
 import { loadAccounts } from '../core/accounts';
 import { refreshForScan } from '../data/backfill';
@@ -449,7 +449,10 @@ export async function scanDecide(): Promise<ScanDecideResult> {
 
   const now = new Date();
   const nowTs = now.getTime();
-  const risk = await getRiskState(now);
+  // Snapshot the risk state ONCE per cycle. precheck calls on every actionable
+  // signal use the same snapshot in memory instead of re-querying DB+Bybit.
+  const riskManager = await RiskManager.createForTick(now);
+  const risk = riskManager.state();
 
   // STEP 2: single batch call for live ticker prices. If this fails, ALL pairs
   // hold (no fallback to stale closed-bar prices — that was the original bug).
@@ -497,7 +500,7 @@ export async function scanDecide(): Promise<ScanDecideResult> {
       continue;
     }
 
-    const riskCheck = await precheckEntry(symbol, action.sizePct, now);
+    const riskCheck = await riskManager.precheck(symbol, action.sizePct);
     const enrichment = buildEnrichment(
       r.ctx, r.features5m, r.features15m, r.features4h,
       action.side, action.entryPrice, action.sl, action.tp1, action.tp2,

@@ -7,43 +7,34 @@ import { tradeRepo } from '../data/trade-repo';
 import { Position } from '../core/position';
 import { tier1Pairs } from './pair-strategies';
 
-// Risk constants — must match CLAUDE.md § Risk budget v3
-export const RISK = {
+/**
+ * Risk constants — must match CLAUDE.md § Risk budget v4.
+ *
+ * Object.freeze prevents accidental mutation. Was a plain `const RISK = {...}`
+ * whose fields were technically writable; anything in the process could have
+ * silently changed `RISK.minRrTp2`. Freezing locks the contract.
+ */
+export const RISK = Object.freeze({
   riskPctBase: 0.375,                       // 3.75% heat cap / 10 parallel = 0.375%
   riskPctCap: 0.6,                          // hard cap if scaled up by vol multiplier
-  maxParallelPositions: 10,                 // 13-pair universe, cap-10 (raised 2026-05-17 second step from cap-8; bt cap-10 @ slip 0.25%: +107.53% / MaxDD 2.79%; cap rarely binding — only 6/682 signals blocked)
-  totalHeatCapPct: 3.75,                    // 10×0.375 = 3.75 (worst-case bt MaxDD 3.96% @ slip 0.40% leaves ~1pp buffer to HyroTrader 5% kill — tighter than cap-8's 1.15pp)
+  maxParallelPositions: 10,                 // bt cap-10 @ slip 0.25%: +107.53% / MaxDD 2.79%
+  totalHeatCapPct: 3.75,                    // worst-case bt MaxDD 3.96% @ slip 0.40%
   dailyDrawdownSoftKillPct: -2.5,
   dailyDrawdownHardKillPct: -4.0,
   totalKillPct: -8.0,
   maxSlPerPairPerDay: 2,
-  // Cooldown after a SL hit on a pair: block re-entry on that pair for N hours.
-  // Motivated by 2026-05-15→16 live cluster where DOGE LONG SL'd at 13:45 UTC then
-  // auto-execute re-entered LONG at 23:00 UTC same day (within UTC-day SL cap),
-  // also SL'd. The UTC-day SL cap (2) is too coarse for fast back-to-back losses
-  // when intraday regime continuation is active. 12h is a middle ground:
-  //   - long enough to let a directional move complete or reverse cleanly
-  //   - short enough that genuine VAL/VAH re-touch setups next session aren't lost
-  cooldownAfterSlHours: 12,
-  // Cooldown after ANY close (TP1/TP2/manual) — prevents immediate re-entry on
-  // pair where setup just played out. 2026-05-20: LTC TP1'd at 13:03, strategy
-  // saw new VAH touch and re-entered at 14:00 (57min). Same pair right after
-  // close → likely exhausted setup, wait for genuine fresh structure.
-  cooldownAfterAnyCloseHours: 4,
-  // Minimum risk-reward to TP2: skip setups where (entry→TP2)/(entry→SL) < this.
-  // Motivated by 2026-05-17 lost-signals analysis (8 signals dropped by path bug;
-  // 5/8 had rrTp2 < 0.5, all losing or breakeven). Backtest cap-10 + cooldown +
-  // slip 0.25%, MIN_RR_TP2=0.3: +108.06%/13mo (vs baseline +107.55%), PF 4.45
-  // (vs 4.04), MaxDD 2.52% (vs 2.79%) — Pareto improvement: same return, lower
-  // DD, higher PF, just by filtering rrTp2 < 0.3 setups (~15% of signals).
-  minRrTp2: 0.3,
-  fundingWindows: [0, 8, 16] as const,    // UTC hours
+  cooldownAfterSlHours: 12,                 // post-SL cooldown survives UTC-day boundary
+  cooldownAfterAnyCloseHours: 4,            // post-any-close cooldown (TP/manual)
+  minRrTp2: 0.3,                            // skip setups with rrTp2 < this (bt-validated)
+  fundingWindows: [0, 8, 16] as const,
   fundingWindowMinutes: 10,
   hyrotraderDailyDdPct: -5.0,
   hyrotraderTotalDdPct: -10.0,
   minLeverage: 10,
-  slMaxAgeMs: 5 * 60_000,                 // 5 min
-};
+  slMaxAgeMs: 5 * 60_000,                   // 5 min
+});
+
+export type RiskConfig = typeof RISK;
 
 export interface RiskCheckResult {
   allowed: boolean;
@@ -181,13 +172,37 @@ export async function getRiskState(now: Date = new Date()): Promise<RiskState> {
   };
 }
 
-export async function precheckEntry(
-  symbol: string,
-  riskPct: number,
-  now: Date = new Date()
-): Promise<RiskCheckResult> {
-  const state = await getRiskState(now);
+/**
+ * RiskManager — caches a single RiskState snapshot per "scan tick" so
+ * precheckEntry() doesn't re-query the DB 13× per cycle (once per candidate
+ * pair). Each scan-decide cycle creates a fresh manager via createForTick().
+ *
+ * The legacy free `precheckEntry(symbol, risk, now)` still works (back-compat);
+ * internally it constructs a one-shot RiskManager.
+ */
+export class RiskManager {
+  private snapshot: RiskState | null = null;
 
+  constructor(private readonly now: Date) {}
+
+  static async createForTick(now: Date = new Date()): Promise<RiskManager> {
+    const m = new RiskManager(now);
+    m.snapshot = await getRiskState(now);
+    return m;
+  }
+
+  state(): RiskState {
+    if (!this.snapshot) throw new Error('RiskManager: state() before createForTick()');
+    return this.snapshot;
+  }
+
+  async precheck(symbol: string, riskPct: number): Promise<RiskCheckResult> {
+    if (!this.snapshot) this.snapshot = await getRiskState(this.now);
+    return runPrecheck(symbol, riskPct, this.snapshot);
+  }
+}
+
+async function runPrecheck(symbol: string, riskPct: number, state: RiskState): Promise<RiskCheckResult> {
   if (state.inFundingWindow) {
     return { allowed: false, reason: `funding window (UTC ${state.iso})` };
   }
@@ -225,6 +240,16 @@ export async function precheckEntry(
   }
 
   return { allowed: true, sizeMultiplier: 1.0 };
+}
+
+/** Back-compat wrapper — constructs a one-shot RiskManager per call. */
+export async function precheckEntry(
+  symbol: string,
+  riskPct: number,
+  now: Date = new Date()
+): Promise<RiskCheckResult> {
+  const m = await RiskManager.createForTick(now);
+  return m.precheck(symbol, riskPct);
 }
 
 export function formatRiskState(s: RiskState): string {
