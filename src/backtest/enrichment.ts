@@ -3,7 +3,7 @@
 // Used by both live `scan-decide.ts` and historical `walk-7d.ts`.
 
 import { Bar, StrategyContext } from './types';
-import { buildVolumeProfile } from '../strategies/btc-vp-smc';
+import { buildVolumeProfile } from '../strategies/volume-profile';
 import { CoinglassFeatures } from '../data/coinglass-features';
 
 export interface MtfFeatureSummary {

@@ -41,9 +41,13 @@ const COMMON = {
 };
 
 async function main() {
-  const days = parseInt(process.argv[2] ?? '365', 10);
+  // Args: `<days>` (e.g. 365, 30) OR fractional like 0.4 for ~10h.
+  // Or use env BT_HOURS to specify hours directly (overrides argv).
+  const hoursOverride = process.env.BT_HOURS ? parseFloat(process.env.BT_HOURS) : null;
+  const days = parseFloat(process.argv[2] ?? '365');
   const now = Date.now();
-  const startTs = now - days * 24 * 60 * 60_000;
+  const lookbackMs = hoursOverride != null ? hoursOverride * 3600_000 : days * 24 * 3600_000;
+  const startTs = now - lookbackMs;
   const endTs = now;
 
   console.log(`=== Tier-1 portfolio via engine.ts — fresh run ${new Date().toISOString()} ===`);

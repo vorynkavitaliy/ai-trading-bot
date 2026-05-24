@@ -20,8 +20,7 @@ import fs from 'node:fs';
 import { query, close as closePg } from '../core/db';
 import { computeFeatures, CandleRow } from '../data/features';
 import { loadCoinglassAt, CoinglassFeatures } from '../data/coinglass-features';
-// buildVolumeProfile still used below for structural enrichment (independent of strategy).
-import { buildVolumeProfile } from '../strategies/btc-vp-smc';
+import { buildVolumeProfile } from '../strategies/volume-profile';
 import { getStrategyForPair, tier1Pairs } from './pair-strategies';
 import { Action, Bar, StrategyContext } from '../backtest/types';
 import { getRiskState, precheckEntry, RISK, RiskState } from './risk-guard';

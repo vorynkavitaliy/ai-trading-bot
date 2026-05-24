@@ -1,21 +1,9 @@
 import { query } from '../core/db';
 import { log } from '../core/logger';
 import { fetchKlines, fetchFunding, TF_MS, delay, BybitKline } from './bybit-public';
+import { tier1Pairs } from '../runtime/pair-strategies';
 
-// v3 universe: 13 pairs (VP-SMC strategy, cap-6 parallel).
-// 2026-05-12-am: removed NEARUSDT, OPUSDT, AVAXUSDT (week-1 short bleeding in bull
-//                trend, −$3.7k combined). Also removed ZEC (1 live trade −$1.4k).
-// 2026-05-12-pm: added APTUSDT (bt 365d: WR 92.7%, totalR 29.78R, PF 12.09) and
-//                ARBUSDT (WR 92.9%, totalR 21.34R, PF 14.07). Both top of candidate
-//                pool (5 tested: INJ/WLD/ARB/DOT/APT). Cap raised to 6 same day
-//                (11-pair × cap-6 bt: +115% / MaxDD 4.17%).
-export const SYMBOLS = [
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
-  'BNBUSDT', 'LTCUSDT', 'ATOMUSDT',
-  'TONUSDT', 'DOGEUSDT',
-  'APTUSDT', 'ARBUSDT',
-  'TAOUSDT', 'INJUSDT',
-];
+export const SYMBOLS = tier1Pairs();
 const TFS = ['1m', '5m', '15m', '60m', '240m'];
 
 // TFs needed for live cycles AND backtest replay:
