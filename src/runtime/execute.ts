@@ -9,6 +9,7 @@ import { precheckEntry, RISK } from './risk-guard';
 import { config } from '../core/config';
 import { log } from '../core/logger';
 import { insertPending, markPlaced, markFailed, linkTradeId } from '../core/pending-orders';
+import { tpPlanner } from './tp-planner';
 
 interface CliArgs {
   symbol: string;
@@ -218,116 +219,23 @@ async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<Accou
       log.warn('position not credited after 5s — TP submit may fail', { symbol: args.symbol, account: account.keyName });
     }
 
-    // Step 2: place TP1 + TP2 reduce-only limit orders (50% / 50% split).
-    // For market orders: position is open instantly (IOC), so we can place them now.
-    // For limit orders: they may not fill immediately, but reduce-only limits can
-    // sit on the book — if the open never fills, the limits are harmless.
-    const closeSide = args.side === 'buy' ? 'Sell' : 'Buy';
-    const tp1 = args.tp1!;
-    const tp2 = args.tp2!;
-    // Single-target case (tp1 == tp2): some strategies (e.g. cg-fade) emit one
-    // TP level. Two reduce-only limits at the same price create the redundancy
-    // we observed live 2026-05-23 — one fills, the other becomes a naked-TP-ish
-    // residual. Treat as single full-position TP via setTradingStop, identical
-    // to "only tp1" path below.
-    const tpEqual = args.tp1 != null && args.tp2 != null
-      && Math.abs(args.tp1 - args.tp2) < (info.tickSize || 0.0001);
-    if (args.tp1 != null && args.tp2 != null && !tpEqual) {
-      // Split half/half. Round halfQty DOWN to step; remainder gets the slack.
-      const halfRaw = qtyNum / 2;
-      const halfStr = roundQtyToStep(halfRaw, info);
-      const halfNum = parseFloat(halfStr);
-      const remNum = qtyNum - halfNum;
-      const remStr = roundQtyToStep(remNum, info);
-
-      if (halfNum >= info.minOrderQty && parseFloat(remStr) >= info.minOrderQty) {
-        // Two partial reduce-only limits. CRITICAL: any failure here = naked position
-        // without TP — operator must know IMMEDIATELY. We surface failures as warnings
-        // with clear identifying info so position-watcher / reconcile can detect.
-        let tp1Ok = false, tp2Ok = false;
-        try {
-          const r1 = await withRetry(() => c.submitOrder({
-            category: 'linear', symbol: args.symbol,
-            side: closeSide, orderType: 'Limit', qty: halfStr,
-            price: roundPriceToTick(tp1, info),
-            timeInForce: 'GTC', reduceOnly: true,
-            orderLinkId: tp1LinkId,
-          }), { label: `tp1-${args.symbol}-${account.keyName}`, tries: 3 });
-          if (r1.retCode === 0) { tp1Ok = true; }
-          else { log.error('TP1 SUBMIT REJECTED', { symbol: args.symbol, account: account.keyName, retCode: r1.retCode, retMsg: r1.retMsg, qty: halfStr, price: tp1 }); }
-        } catch (e: any) {
-          log.error('TP1 SUBMIT THREW', { symbol: args.symbol, account: account.keyName, err: e?.message ?? String(e), qty: halfStr, price: tp1 });
-        }
-        try {
-          const r2 = await withRetry(() => c.submitOrder({
-            category: 'linear', symbol: args.symbol,
-            side: closeSide, orderType: 'Limit', qty: remStr,
-            price: roundPriceToTick(tp2, info),
-            timeInForce: 'GTC', reduceOnly: true,
-            orderLinkId: tp2LinkId,
-          }), { label: `tp2-${args.symbol}-${account.keyName}`, tries: 3 });
-          if (r2.retCode === 0) { tp2Ok = true; }
-          else { log.error('TP2 SUBMIT REJECTED', { symbol: args.symbol, account: account.keyName, retCode: r2.retCode, retMsg: r2.retMsg, qty: remStr, price: tp2 }); }
-        } catch (e: any) {
-          log.error('TP2 SUBMIT THREW', { symbol: args.symbol, account: account.keyName, err: e?.message ?? String(e), qty: remStr, price: tp2 });
-        }
-        if (!tp1Ok || !tp2Ok) {
-          // Naked position — open with server-side SL but at least one TP missing.
-          // The pino log.error lines above already capture (symbol, account, retCode,
-          // retMsg, qty, price) per leg; position-watcher.ts does the actual recovery
-          // by checking Bybit /open-orders for missing reduce-only Limits and
-          // re-placing from DB (see position-watcher.ts §0.5 NAKED-TP DETECTION).
-          // We log one consolidated error so it's grep-able as a single event.
-          log.error('NAKED TP — execute.ts placed entry but TP leg(s) missing; watcher will recover', {
-            symbol: args.symbol, account: account.keyName, side: args.side,
-            qty: qtyNum, tp1Failed: !tp1Ok, tp2Failed: !tp2Ok,
-          });
-        }
-      } else {
-        // Position too small to split (e.g. 1 contract). Set single full-size TP1.
-        await withRetry(() => c.setTradingStop({
-          category: 'linear', symbol: args.symbol,
-          takeProfit: roundPriceToTick(tp1, info),
-          tpTriggerBy: 'LastPrice', positionIdx: 0,
-        }), { label: `setTp-${args.symbol}-${account.keyName}`, tries: 2 }).catch((e) => {
-          log.warn('single-TP setTradingStop failed', { err: e?.message });
-        });
-      }
-    } else if (args.tp1 != null) {
-      // Single TP target. Place a FULL-position reduce-only LIMIT order at the TP
-      // price — matches backtest assumption (maker fee, no slip). The previous
-      // setTradingStop path used Bybit native TP which triggers a market exit
-      // (taker fee + slip), worse than the modeled fill.
-      try {
-        const r1 = await withRetry(() => c.submitOrder({
-          category: 'linear', symbol: args.symbol,
-          side: closeSide, orderType: 'Limit', qty: qtyStr,
-          price: roundPriceToTick(args.tp1!, info),
-          timeInForce: 'GTC', reduceOnly: true,
-          orderLinkId: tp1LinkId,
-        }), { label: `single-tp-${args.symbol}-${account.keyName}`, tries: 3 });
-        if (r1.retCode !== 0) {
-          log.error('SINGLE-TP SUBMIT REJECTED — falling back to setTradingStop', {
-            symbol: args.symbol, account: account.keyName,
-            retCode: r1.retCode, retMsg: r1.retMsg, qty: qtyStr, price: args.tp1,
-          });
-          await c.setTradingStop({
-            category: 'linear', symbol: args.symbol,
-            takeProfit: roundPriceToTick(args.tp1!, info),
-            tpTriggerBy: 'LastPrice', positionIdx: 0,
-          }).catch((e) => log.warn('setTradingStop fallback failed', { err: e?.message }));
-        }
-      } catch (e: any) {
-        log.error('SINGLE-TP SUBMIT THREW — falling back to setTradingStop', {
-          symbol: args.symbol, account: account.keyName, err: e?.message ?? String(e),
-        });
-        await c.setTradingStop({
-          category: 'linear', symbol: args.symbol,
-          takeProfit: roundPriceToTick(args.tp1!, info),
-          tpTriggerBy: 'LastPrice', positionIdx: 0,
-        }).catch((ee) => log.warn('setTradingStop fallback failed', { err: ee?.message }));
-      }
-    }
+    // Step 2: TP placement delegated to TpPlanner. It picks between DualLimit
+    // (tp1!=tp2 + splittable), SingleLimit (tp1==tp2 or tiny position), and
+    // NativeTpFallback (when the SingleLimit submit is rejected). All naked-TP
+    // logging happens inside the planner so this site stays small.
+    await tpPlanner.place({
+      client: c,
+      symbol: args.symbol,
+      account: account.keyName,
+      closeSide: args.side === 'buy' ? 'Sell' : 'Buy',
+      qtyStr,
+      qtyNum,
+      tp1: args.tp1 ?? null,
+      tp2: args.tp2 ?? null,
+      tp1LinkId,
+      tp2LinkId,
+      instrumentInfo: info,
+    });
 
     result.ok = true;
     result.bybitOrderId = r.result?.orderId;

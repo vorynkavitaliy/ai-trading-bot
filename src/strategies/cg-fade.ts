@@ -1,7 +1,7 @@
 /**
  * Coinglass-based fade strategies — validated on 365d backtest via walk-forward (2026-05-23).
  *
- * 4 strategy factories that share the same setup mechanic:
+ * Common setup mechanic:
  *   - Detect extreme percentile of some CG signal (last 180 4H bars = 30 days).
  *   - Fade the crowd: extreme high → SHORT, extreme low → LONG.
  *   - Filter by pair's own 4H EMA20/50 trend and/or BTC 4H trend.
@@ -9,43 +9,47 @@
  *   - Max hold N × 4H bars; time-stop at market.
  *
  * Used in live (Tier-1 portfolio):
- *   S1 (lsTopPositionFade + pair trend) — BTCUSDT
- *   S2 (lsTopPositionFade + BTC trend)  — INJUSDT
- *   S3 (fundingFade + both trends)       — TAO, ATOM, LTC, ARB (and ETH/DOGE/SOL/APT 3/4-q tier)
- *   S4 (fundingTaConfluence)             — XRP, SOL
+ *   S1 (LsTopPositionFade + pair trend)  — BTCUSDT
+ *   S2 (LsTopPositionFade + BTC trend)   — INJUSDT, LTCUSDT
+ *   S3 (FundingFade + both trends)        — TAO, ATOM, ARB (and ETH/DOGE/SOL/APT 3/4-q tier)
+ *   S4 (FundingTaConfluence)              — XRP
  *
- * Realistic cost assumptions (no live overrides needed):
- *   - Limit entries (orderType: 'limit') → maker fee, no slip.
+ * Realistic cost assumptions:
+ *   - Limit entries → maker fee, no slip.
  *   - TP1/TP2 limits → maker fee, no slip.
  *   - SL market trigger → taker fee + slip applied by engine.
  *
  * Decision cadence: 4H (240m). All strategies need decisionTf: '240m' on the engine.
+ *
+ * OOP shape (2026-05-24):
+ *   Abstract base class `CgFadeStrategy` owns the common flow (hold-on-position,
+ *   CG presence, cooldown, trend filters, ATR-based SL/TP). Subclasses only
+ *   implement `extractSide(cg, p)` — they map CG history → percentile → side +
+ *   rationale. Adding a new CG-fade variant means writing one class, not
+ *   copy-pasting the skeleton (OCP).
  */
 import { Action, Strategy, StrategyContext, Bar } from '../backtest/types';
 import { CoinglassFeatures } from '../data/coinglass-features';
 import { atr, percentile, trendUp } from '../core/indicators';
 
 export interface CgFadeParams {
-  pctHi: number;          // 0.85 / 0.75 / 0.70 — percentile threshold for "extreme high"
-  pctLo: number;          // mirror
+  pctHi: number;
+  pctLo: number;
   windowBars: number;     // 180 = 30d × 6 (4H bars)
-  atrPeriod: number;      // 14
-  slAtrMult: number;      // 1.5
+  atrPeriod: number;
+  slAtrMult: number;
   // Single TP target at tpAtrMult × ATR. Strategy returns tp1=tp2; execute.ts
-  // detects this and places ONE reduce-only limit (full qty), avoiding the
-  // two-orders-same-price issue we saw on 2026-05-23 live BTC short.
-  // Backtest (TP1=TP2 single target): WR 54.8%, PF 1.53, +88.88%/yr — winner
-  // vs true partial split (worse on every variant tested).
-  tpAtrMult: number;      // 2.0 — R/R 1.33
-  maxHoldBars: number;    // 12 (= 48h)
-  riskPct: number;        // 0.25–0.5 (config-time)
-  // Trend filters
+  // detects this and places ONE reduce-only limit (full qty).
+  // Backtest (single target): WR 54.8%, PF 1.53, +88.88%/yr — winner vs true
+  // partial split (worse on every variant tested).
+  tpAtrMult: number;
+  maxHoldBars: number;
+  riskPct: number;
   usePairTrend: boolean;
   useBtcTrend: boolean;
-  emaFast: number;        // 20
-  emaSlow: number;        // 50
-  // Cooldown to prevent immediate re-entry on same direction.
-  cooldownHours: number;  // 6 (matches existing risk-guard global cooldown semantics)
+  emaFast: number;
+  emaSlow: number;
+  cooldownHours: number;
 }
 
 const DEFAULTS: CgFadeParams = {
@@ -58,14 +62,154 @@ const DEFAULTS: CgFadeParams = {
   cooldownHours: 6,
 };
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
-// Indicators (atr/ema/percentile/trendUp) moved to src/core/indicators.ts.
-
-// In-process cooldown state.
-// Resets on process restart, which is fine — live restart is rare and small misses are OK.
+// In-process cooldown state, shared across strategies (key = symbol).
+// Resets on process restart, which is fine — live restart is rare.
 const lastEntryByPair: Map<string, { side: 'long' | 'short'; ts: number }> = new Map();
 export function resetCgFadeCooldownState() { lastEntryByPair.clear(); }
 
+export interface SideDecision {
+  side: 'long' | 'short';
+  rationale: string;
+}
+
+/**
+ * Base class for any "fade some Coinglass signal" strategy.
+ *
+ * Owns the common pipeline: hold-on-existing-position → CG availability →
+ * extract side (subclass) → cooldown → trend filter → buildEnter.
+ *
+ * Subclasses implement `extractSide(cg, p)` — return null to hold, or a
+ * SideDecision to enter. The rationale is included in the eventual Action.
+ */
+export abstract class CgFadeStrategy implements Strategy {
+  readonly p: CgFadeParams;
+  abstract readonly name: string;
+  readonly needsCoinglass = true;
+
+  constructor(params: Partial<CgFadeParams> = {}, defaultOverrides: Partial<CgFadeParams> = {}) {
+    this.p = { ...DEFAULTS, ...defaultOverrides, ...params };
+  }
+
+  get needsBtcContext(): boolean {
+    return this.p.useBtcTrend;
+  }
+
+  /** Subclass picks side from CG signal(s). Return null to hold. */
+  protected abstract extractSide(cg: CoinglassFeatures, p: CgFadeParams): SideDecision | null;
+
+  /** Helper: classify a single percentile into a side or null. */
+  protected sideFromPercentile(pct: number, p: CgFadeParams): 'long' | 'short' | null {
+    if (pct >= p.pctHi) return 'short';
+    if (pct <= p.pctLo) return 'long';
+    return null;
+  }
+
+  decide(ctx: StrategyContext): Action {
+    if (ctx.position) return { kind: 'hold' };
+
+    const cg = ctx.coinglass as CoinglassFeatures | undefined;
+    if (!cg) return { kind: 'hold' };
+
+    const sig = this.extractSide(cg, this.p);
+    if (!sig) return { kind: 'hold' };
+
+    if (inCooldown(ctx.symbol, sig.side, ctx.ts, this.p.cooldownHours)) return { kind: 'hold' };
+    if (!trendFiltersAllow(sig.side, ctx, this.p)) return { kind: 'hold' };
+
+    return buildEnter(ctx, sig.side, ctx.recentBars ?? [], this.p, sig.rationale);
+  }
+}
+
+// ─── S1/S2: L/S Top Position fade ─────────────────────────────────────────────
+export class LsTopPositionFade extends CgFadeStrategy {
+  readonly name: string;
+
+  constructor(params: Partial<CgFadeParams> = {}) {
+    super(params);
+    const p = this.p;
+    this.name = `ls-top-position-fade(${p.pctHi}/${p.pctLo}, sl${p.slAtrMult}atr/tp${p.tpAtrMult}atr, hold${p.maxHoldBars}, pair=${p.usePairTrend}, btc=${p.useBtcTrend})`;
+  }
+
+  protected extractSide(cg: CoinglassFeatures, p: CgFadeParams): SideDecision | null {
+    const hist = cg.ls_top_position_history;
+    const cur = cg.ls_top_position;
+    if (!hist || hist.length < p.windowBars || cur == null) return null;
+    const pct = percentile(hist.slice(-p.windowBars), cur);
+    const side = this.sideFromPercentile(pct, p);
+    if (!side) return null;
+    return {
+      side,
+      rationale: `L/S Top Position pct ${(pct * 100).toFixed(1)}% — fade extreme ${side === 'short' ? 'long' : 'short'} bias`,
+    };
+  }
+}
+
+// ─── S3: Funding rate fade ────────────────────────────────────────────────────
+export class FundingFade extends CgFadeStrategy {
+  readonly name: string;
+
+  constructor(params: Partial<CgFadeParams> = {}) {
+    super(params, { pctHi: 0.75, pctLo: 0.25, usePairTrend: true, useBtcTrend: true });
+    const p = this.p;
+    this.name = `funding-fade(${p.pctHi}/${p.pctLo}, sl${p.slAtrMult}atr/tp${p.tpAtrMult}atr, hold${p.maxHoldBars}, pair=${p.usePairTrend}, btc=${p.useBtcTrend})`;
+  }
+
+  protected extractSide(cg: CoinglassFeatures, p: CgFadeParams): SideDecision | null {
+    const hist = cg.funding_oi_weighted_history;
+    const cur = cg.funding_oi_weighted;
+    if (!hist || hist.length < p.windowBars || cur == null) return null;
+    const pct = percentile(hist.slice(-p.windowBars), cur);
+    const side = this.sideFromPercentile(pct, p);
+    if (!side) return null;
+    return {
+      side,
+      rationale: `Funding pct ${(pct * 100).toFixed(1)}% (${cur > 0 ? '+' : ''}${(cur * 100).toFixed(3)}%) — fade ${side === 'short' ? 'long' : 'short'} crowd`,
+    };
+  }
+}
+
+// ─── S4: Funding + L/S Top Account confluence ─────────────────────────────────
+// Both signals must be extreme in the same direction. Highest-conviction variant.
+export class FundingTaConfluence extends CgFadeStrategy {
+  readonly name: string;
+
+  constructor(params: Partial<CgFadeParams> = {}) {
+    super(params, { pctHi: 0.70, pctLo: 0.30, usePairTrend: true, useBtcTrend: true });
+    const p = this.p;
+    this.name = `funding-ta-confluence(${p.pctHi}/${p.pctLo}, sl${p.slAtrMult}atr/tp${p.tpAtrMult}atr, hold${p.maxHoldBars})`;
+  }
+
+  protected extractSide(cg: CoinglassFeatures, p: CgFadeParams): SideDecision | null {
+    const frHist = cg.funding_oi_weighted_history;
+    const taHist = cg.ls_top_account_history;
+    const fCur = cg.funding_oi_weighted;
+    const tCur = cg.ls_top_account;
+    if (!frHist || !taHist || frHist.length < p.windowBars || taHist.length < p.windowBars || fCur == null || tCur == null) return null;
+    const fPct = percentile(frHist.slice(-p.windowBars), fCur);
+    const tPct = percentile(taHist.slice(-p.windowBars), tCur);
+    let side: 'long' | 'short' | null = null;
+    if (fPct >= p.pctHi && tPct >= p.pctHi) side = 'short';
+    else if (fPct <= p.pctLo && tPct <= p.pctLo) side = 'long';
+    if (!side) return null;
+    return {
+      side,
+      rationale: `F+TA confluence (F:${(fPct * 100).toFixed(0)}% TA:${(tPct * 100).toFixed(0)}%) — fade ${side === 'short' ? 'long' : 'short'} consensus`,
+    };
+  }
+}
+
+// ─── Factory exports (back-compat with pair-strategies.ts) ─────────────────────
+export function lsTopPositionFade(params: Partial<CgFadeParams> = {}): Strategy {
+  return new LsTopPositionFade(params);
+}
+export function fundingFade(params: Partial<CgFadeParams> = {}): Strategy {
+  return new FundingFade(params);
+}
+export function fundingTaConfluence(params: Partial<CgFadeParams> = {}): Strategy {
+  return new FundingTaConfluence(params);
+}
+
+// ─── Shared helpers ────────────────────────────────────────────────────────────
 function inCooldown(symbol: string, side: 'long' | 'short', ts: number, hours: number): boolean {
   const last = lastEntryByPair.get(symbol);
   if (!last) return false;
@@ -76,11 +220,9 @@ function markEntry(symbol: string, side: 'long' | 'short', ts: number) {
   lastEntryByPair.set(symbol, { side, ts });
 }
 
-// Apply pair-and-BTC trend filters. Returns true if the trade is allowed.
 function trendFiltersAllow(side: 'long' | 'short', ctx: StrategyContext, p: CgFadeParams): boolean {
-  const pairBars = ctx.recentBars ?? [];
   if (p.usePairTrend) {
-    const closes = pairBars.map(b => b.close);
+    const closes = (ctx.recentBars ?? []).map(b => b.close);
     const up = trendUp(closes, p.emaFast, p.emaSlow);
     if (up == null) return false;
     if (side === 'short' && up) return false;
@@ -113,113 +255,11 @@ function buildEnter(
   return {
     kind: 'enter',
     side,
-    orderType: 'limit',        // matches live auto-execute.ts:117 hardcode
+    orderType: 'limit',
     entryPrice: ctx.price,
     sl,
-    tp1: tp, tp2: tp,           // single target — execute.ts places ONE limit when tp1==tp2
+    tp1: tp, tp2: tp,
     sizePct: p.riskPct,
     rationale,
-  };
-}
-
-// ─── S1/S2: L/S Top Position fade ──────────────────────────────────────────────
-// S1: usePairTrend=true, useBtcTrend=false  (BTCUSDT champion)
-// S2: usePairTrend=false, useBtcTrend=true  (INJUSDT — alt follows BTC macro)
-export function lsTopPositionFade(params: Partial<CgFadeParams> = {}): Strategy {
-  const p = { ...DEFAULTS, ...params };
-  return {
-    name: `ls-top-position-fade(${p.pctHi}/${p.pctLo}, sl${p.slAtrMult}atr/tp${p.tpAtrMult}atr, hold${p.maxHoldBars}, pair=${p.usePairTrend}, btc=${p.useBtcTrend})`,
-    needsCoinglass: true,
-    needsBtcContext: p.useBtcTrend,
-    decide(ctx: StrategyContext): Action {
-      if (ctx.position) return { kind: 'hold' };
-      const cg = ctx.coinglass as CoinglassFeatures | undefined;
-      if (!cg) return { kind: 'hold' };
-      const hist = cg.ls_top_position_history;
-      const cur = cg.ls_top_position;
-      if (!hist || hist.length < p.windowBars || cur == null) return { kind: 'hold' };
-
-      const window = hist.slice(-p.windowBars);
-      const pct = percentile(window, cur);
-      let side: 'long' | 'short' | null = null;
-      if (pct >= p.pctHi) side = 'short';
-      else if (pct <= p.pctLo) side = 'long';
-      if (!side) return { kind: 'hold' };
-
-      if (inCooldown(ctx.symbol, side, ctx.ts, p.cooldownHours)) return { kind: 'hold' };
-      if (!trendFiltersAllow(side, ctx, p)) return { kind: 'hold' };
-
-      return buildEnter(ctx, side, ctx.recentBars ?? [], p,
-        `L/S Top Position pct ${(pct * 100).toFixed(1)}% — fade extreme ${side === 'short' ? 'long' : 'short'} bias`,
-      );
-    },
-  };
-}
-
-// ─── S3: Funding rate fade ─────────────────────────────────────────────────────
-// Used for: TAO, ATOM, LTC, ARB, ETH, DOGE, SOL, APT, BNB (default params with both trends).
-export function fundingFade(params: Partial<CgFadeParams> = {}): Strategy {
-  const p = { ...DEFAULTS, pctHi: 0.75, pctLo: 0.25, usePairTrend: true, useBtcTrend: true, ...params };
-  return {
-    name: `funding-fade(${p.pctHi}/${p.pctLo}, sl${p.slAtrMult}atr/tp${p.tpAtrMult}atr, hold${p.maxHoldBars}, pair=${p.usePairTrend}, btc=${p.useBtcTrend})`,
-    needsCoinglass: true,
-    needsBtcContext: p.useBtcTrend,
-    decide(ctx: StrategyContext): Action {
-      if (ctx.position) return { kind: 'hold' };
-      const cg = ctx.coinglass as CoinglassFeatures | undefined;
-      if (!cg) return { kind: 'hold' };
-      const hist = cg.funding_oi_weighted_history;
-      const cur = cg.funding_oi_weighted;
-      if (!hist || hist.length < p.windowBars || cur == null) return { kind: 'hold' };
-
-      const window = hist.slice(-p.windowBars);
-      const pct = percentile(window, cur);
-      let side: 'long' | 'short' | null = null;
-      if (pct >= p.pctHi) side = 'short';
-      else if (pct <= p.pctLo) side = 'long';
-      if (!side) return { kind: 'hold' };
-
-      if (inCooldown(ctx.symbol, side, ctx.ts, p.cooldownHours)) return { kind: 'hold' };
-      if (!trendFiltersAllow(side, ctx, p)) return { kind: 'hold' };
-
-      return buildEnter(ctx, side, ctx.recentBars ?? [], p,
-        `Funding pct ${(pct * 100).toFixed(1)}% (${cur > 0 ? '+' : ''}${(cur * 100).toFixed(3)}%) — fade ${side === 'short' ? 'long' : 'short'} crowd`,
-      );
-    },
-  };
-}
-
-// ─── S4: Funding + L/S Top Account confluence ──────────────────────────────────
-// Both signals must be extreme in the same direction. Used for XRP, SOL.
-export function fundingTaConfluence(params: Partial<CgFadeParams> = {}): Strategy {
-  const p = { ...DEFAULTS, pctHi: 0.70, pctLo: 0.30, usePairTrend: true, useBtcTrend: true, ...params };
-  return {
-    name: `funding-ta-confluence(${p.pctHi}/${p.pctLo}, sl${p.slAtrMult}atr/tp${p.tpAtrMult}atr, hold${p.maxHoldBars})`,
-    needsCoinglass: true,
-    needsBtcContext: p.useBtcTrend,
-    decide(ctx: StrategyContext): Action {
-      if (ctx.position) return { kind: 'hold' };
-      const cg = ctx.coinglass as CoinglassFeatures | undefined;
-      if (!cg) return { kind: 'hold' };
-      const frHist = cg.funding_oi_weighted_history;
-      const taHist = cg.ls_top_account_history;
-      const fCur = cg.funding_oi_weighted;
-      const tCur = cg.ls_top_account;
-      if (!frHist || !taHist || frHist.length < p.windowBars || taHist.length < p.windowBars || fCur == null || tCur == null) return { kind: 'hold' };
-
-      const fPct = percentile(frHist.slice(-p.windowBars), fCur);
-      const tPct = percentile(taHist.slice(-p.windowBars), tCur);
-      let side: 'long' | 'short' | null = null;
-      if (fPct >= p.pctHi && tPct >= p.pctHi) side = 'short';
-      else if (fPct <= p.pctLo && tPct <= p.pctLo) side = 'long';
-      if (!side) return { kind: 'hold' };
-
-      if (inCooldown(ctx.symbol, side, ctx.ts, p.cooldownHours)) return { kind: 'hold' };
-      if (!trendFiltersAllow(side, ctx, p)) return { kind: 'hold' };
-
-      return buildEnter(ctx, side, ctx.recentBars ?? [], p,
-        `F+TA confluence (F:${(fPct * 100).toFixed(0)}% TA:${(tPct * 100).toFixed(0)}%) — fade ${side === 'short' ? 'long' : 'short'} consensus`,
-      );
-    },
   };
 }
