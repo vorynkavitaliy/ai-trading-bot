@@ -1,4 +1,4 @@
-import { log } from './logger';
+import { withRetry as withRetryGeneric, CoinglassRetryPolicy } from './retry-policy';
 
 const BASE = 'https://open-api-v4.coinglass.com/api';
 
@@ -43,20 +43,11 @@ export async function cgGet<T = any>(path: string, params: Record<string, string
   return parsed as CgResponse<T>;
 }
 
+const cgPolicy = new CoinglassRetryPolicy();
+
 export async function withCgRetry<T>(fn: () => Promise<T>, label: string, tries = 3, delayMs = 1500): Promise<T> {
-  let lastErr: unknown;
-  for (let i = 0; i < tries; i++) {
-    try {
-      return await fn();
-    } catch (e: any) {
-      lastErr = e;
-      const msg = e?.message ?? String(e);
-      // Rate limit hint from Coinglass
-      const isRate = /rate|limit|429|busy/i.test(msg);
-      if (!isRate || i === tries - 1) break;
-      log.warn('coinglass retry', { label, attempt: i + 1, msg });
-      await new Promise(r => setTimeout(r, delayMs * (i + 1)));
-    }
-  }
-  throw lastErr;
+  const policy = (tries !== 3 || delayMs !== 1500)
+    ? new CoinglassRetryPolicy({ maxAttempts: tries, baseDelayMs: delayMs })
+    : cgPolicy;
+  return withRetryGeneric(fn, policy, { callLabel: label });
 }

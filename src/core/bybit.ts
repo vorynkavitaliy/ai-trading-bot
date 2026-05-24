@@ -1,6 +1,6 @@
 import { RestClientV5 } from 'bybit-api';
 import { AccountKey } from './accounts';
-import { log } from './logger';
+import { withRetry as withRetryGeneric, BybitRetryPolicy } from './retry-policy';
 
 const clientCache = new Map<string, RestClientV5>();
 
@@ -20,34 +20,16 @@ export function getRest(account: AccountKey): RestClientV5 {
   return c;
 }
 
+const bybitPolicy = new BybitRetryPolicy();
+
 export async function withRetry<T>(
   fn: () => Promise<T>,
   opts: { tries?: number; delayMs?: number; label?: string } = {}
 ): Promise<T> {
-  const tries = opts.tries ?? 3;
-  const delayMs = opts.delayMs ?? 500;
-  let lastErr: unknown;
-  for (let i = 0; i < tries; i++) {
-    try {
-      return await fn();
-    } catch (e: any) {
-      lastErr = e;
-      const retCode = e?.retCode ?? e?.code;
-      // 10006 = rate limit, 10016 = system busy — retry
-      // Other retCodes (e.g. 10001 invalid params) are not retryable
-      const retryable =
-        retCode === 10006 || retCode === 10016 || e?.code === 'ECONNRESET' || e?.code === 'ETIMEDOUT';
-      if (!retryable || i === tries - 1) break;
-      log.warn('bybit call retry', {
-        label: opts.label ?? 'unknown',
-        attempt: i + 1,
-        retCode,
-        delayMs,
-      });
-      await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
-    }
-  }
-  throw lastErr;
+  const policy = (opts.tries !== undefined || opts.delayMs !== undefined)
+    ? new BybitRetryPolicy({ maxAttempts: opts.tries, baseDelayMs: opts.delayMs })
+    : bybitPolicy;
+  return withRetryGeneric(fn, policy, { callLabel: opts.label });
 }
 
 // Per-symbol instrument metadata (qty step, tick size, min qty) — fetched once per symbol per process.
