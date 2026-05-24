@@ -160,6 +160,23 @@ export class Position {
     return Math.abs(this.entryPrice - this.sl) * this.initialQty;
   }
 
+  riskUnits(pnlUsd: number): number {
+    const risked = this.riskedUsd();
+    return risked > 0 ? pnlUsd / risked : 0;
+  }
+
+  static riskUnitsFromRaw(args: {
+    entryPrice: number | null;
+    sl: number | null;
+    initialQty: number;
+    pnlUsd: number;
+  }): number {
+    const { entryPrice, sl, initialQty, pnlUsd } = args;
+    if (entryPrice === null || sl === null) return 0;
+    const risked = Math.abs(entryPrice - sl) * initialQty;
+    return risked > 0 ? pnlUsd / risked : 0;
+  }
+
   /** True if the strategy used a single-target TP plan (tp1 == tp2). */
   isSingleTpPlan(): boolean {
     if (this.tp1 === null || this.tp2 === null) return true;

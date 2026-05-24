@@ -5,6 +5,7 @@
  *   npx tsx src/tools/diagnostics/trade-detail.ts BNBUSDT 2026-05-19T01:00
  */
 import { query, close as closePg } from '../../core/db';
+import { Position } from '../../core/position';
 
 async function main() {
   const symbol = process.argv[2];
@@ -48,19 +49,22 @@ async function main() {
     console.log(`  fees_usd:      ${t.fees_usd}`);
     console.log(`  funding_usd:   ${t.funding_usd}`);
     console.log();
-    // Compute expected R from data
     const entry = parseFloat(t.entry_price);
     const sl = parseFloat(t.sl);
-    const exit = parseFloat(t.exit_price);
     const qty0 = parseFloat(t.initial_qty ?? t.qty);
     const stopDist = Math.abs(entry - sl);
     const riskUsd = stopDist * qty0;
+    const fullPnl = parseFloat(t.pnl_usd);
+    const fullR = Position.riskUnitsFromRaw({ entryPrice: entry, sl, initialQty: qty0, pnlUsd: fullPnl });
     console.log(`  >> derived stopDist=${stopDist.toFixed(4)}  risked_usd=${riskUsd.toFixed(2)}`);
-    console.log(`  >> recorded pnl_usd / risked_usd = ${(parseFloat(t.pnl_usd) / riskUsd).toFixed(3)}R`);
+    console.log(`  >> recorded pnl_usd / risked_usd = ${fullR.toFixed(3)}R`);
     if (t.tp1_realized_pnl_usd != null) {
-      const tailPnl = parseFloat(t.pnl_usd) - parseFloat(t.tp1_realized_pnl_usd);
-      console.log(`  >> tp1_partial pnl   = ${parseFloat(t.tp1_realized_pnl_usd).toFixed(2)}  → ${(parseFloat(t.tp1_realized_pnl_usd)/riskUsd).toFixed(3)}R`);
-      console.log(`  >> tail (after TP1)  = ${tailPnl.toFixed(2)}  → ${(tailPnl/riskUsd).toFixed(3)}R`);
+      const tp1Pnl = parseFloat(t.tp1_realized_pnl_usd);
+      const tailPnl = fullPnl - tp1Pnl;
+      const tp1R = Position.riskUnitsFromRaw({ entryPrice: entry, sl, initialQty: qty0, pnlUsd: tp1Pnl });
+      const tailR = Position.riskUnitsFromRaw({ entryPrice: entry, sl, initialQty: qty0, pnlUsd: tailPnl });
+      console.log(`  >> tp1_partial pnl   = ${tp1Pnl.toFixed(2)}  → ${tp1R.toFixed(3)}R`);
+      console.log(`  >> tail (after TP1)  = ${tailPnl.toFixed(2)}  → ${tailR.toFixed(3)}R`);
     }
     console.log(`  rationale: ${t.rationale}`);
   }

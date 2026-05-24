@@ -367,7 +367,12 @@ export async function runPositionWatcher(): Promise<{
           label: accountLabel,
           qty: filledQty,
           pnlUsd: realizedPnl,
-          pnlR: realizedPnl / Math.max(Math.abs(pos.entryPrice - pos.dbInitialSL) * pos.dbInitialQty, 1),
+          pnlR: Position.riskUnitsFromRaw({
+            entryPrice: pos.entryPrice,
+            sl: pos.dbInitialSL,
+            initialQty: pos.dbInitialQty,
+            pnlUsd: realizedPnl,
+          }),
         });
         tp1Groups.set(key, grp);
 

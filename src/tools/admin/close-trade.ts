@@ -14,6 +14,7 @@
  * caller (the trader) updates it via the Edit tool to keep one source of truth.
  */
 import { query, close } from '../../core/db';
+import { Position } from '../../core/position';
 
 async function main() {
   const tradeIdStr = process.argv[2];
@@ -56,8 +57,12 @@ async function main() {
   const isLong = row.side === 'Buy';
 
   const pnl = isLong ? qty * (exitPrice - entry) : qty * (entry - exitPrice);
-  const stopDist = isLong ? entry - slV : slV - entry;
-  const realizedR = stopDist === 0 ? 0 : (isLong ? exitPrice - entry : entry - exitPrice) / stopDist;
+  const realizedR = Position.riskUnitsFromRaw({
+    entryPrice: entry,
+    sl: slV,
+    initialQty: qty,
+    pnlUsd: pnl,
+  });
 
   await query(
     `UPDATE trades

@@ -16,6 +16,7 @@
  *      (use --dry-run to preview without modifying)
  */
 import { query, close as closePg } from '../../core/db';
+import { Position } from '../../core/position';
 
 async function main() {
   const dryRun = process.argv.includes('--dry-run');
@@ -43,12 +44,9 @@ async function main() {
   for (const r of rows) {
     const entry = parseFloat(r.entry_price);
     const sl = parseFloat(r.sl);
-    const stopDist = Math.abs(entry - sl);
     const initialQty = parseFloat(r.initial_qty);
-    if (stopDist <= 0 || initialQty <= 0) { unchanged++; continue; }
-    const riskedUsd = stopDist * initialQty;
     const pnlUsd = parseFloat(r.pnl_usd);
-    const newR = pnlUsd / riskedUsd;
+    const newR = Position.riskUnitsFromRaw({ entryPrice: entry, sl, initialQty, pnlUsd });
     const oldR = parseFloat(r.old_r ?? '0');
     if (Math.abs(newR - oldR) < 0.0005) { unchanged++; continue; }
 

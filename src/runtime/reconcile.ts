@@ -151,11 +151,7 @@ async function autoCloseTrade(t: DbOpenTrade, fills: ClosedFill[]): Promise<Clos
   const lastTs = matched[matched.length - 1].closedTime;
 
   const exitReason = inferExitReason(t, wAvgExit);
-  // Position.riskedUsd() always uses initial_qty (encapsulated invariant).
-  // Eliminates the t.qty vs initial_qty bug class entirely — callers can no
-  // longer access qty for risk math.
-  const riskedUsd = Position.fromOpenTrade(t).riskedUsd();
-  const pnlR = riskedUsd > 0 ? totalPnl / riskedUsd : 0;
+  const pnlR = Position.fromOpenTrade(t).riskUnits(totalPnl);
 
   await query(
     `UPDATE trades SET status = 'closed',
