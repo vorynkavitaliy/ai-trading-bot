@@ -16,6 +16,7 @@ import { notifyAlert, notifyClose } from '../core/tg-templates';
 import { log } from '../core/logger';
 import { tradeRepo, OpenTrade } from '../data/trade-repo';
 import { Position } from '../core/position';
+import { nakedTpRecovery } from './naked-tp-recovery';
 
 const TIME_STOP_HOURS = 24;
 const REGIME_ADX_FLIP_THRESHOLD = 18;     // ADX dropping below this = trend losing strength
@@ -305,69 +306,9 @@ export async function runPositionWatcher(): Promise<{
       continue;
     }
 
-    // 0.5) NAKED-TP DETECTION: position has SL but missing TP1/TP2 reduce-only limits
-    // (execute.ts may have failed to place them — silent .catch in old code OR Bybit reject).
-    // Re-place from DB. Only check if TP1 not yet filled (otherwise only TP2 should remain).
-    if (!pos.tp1AlreadyFilled && pos.dbTP1 != null && pos.dbTP2 != null) {
-      try {
-        const c = getRest(pos.account);
-        const ordersR = await withRetry(
-          () => c.getActiveOrders({ category: 'linear', symbol: pos.symbol }),
-          { label: `orders-${pos.symbol}-${pos.account.keyName}` }
-        );
-        const closingSide = pos.side === 'Sell' ? 'Buy' : 'Sell';
-        const tpLimitOrders = (ordersR.result?.list ?? []).filter((o: any) =>
-          o.reduceOnly === true && o.side === closingSide && o.orderType === 'Limit'
-        );
-        if (tpLimitOrders.length === 0) {
-          log.error('NAKED TP DETECTED — re-placing from DB', {
-            symbol: pos.symbol, account: pos.account.keyName,
-            dbTP1: pos.dbTP1, dbTP2: pos.dbTP2, qty: pos.size,
-          });
-          const info = await getInstrumentInfo(pos.account, pos.symbol);
-          const halfRaw = pos.size / 2;
-          const halfStr = roundQtyToStep(halfRaw, info);
-          const halfNum = parseFloat(halfStr);
-          const remNum = pos.size - halfNum;
-          const remStr = roundQtyToStep(remNum, info);
-          if (halfNum >= info.minOrderQty && parseFloat(remStr) >= info.minOrderQty) {
-            // Shared base linkId so the recovered TP1/TP2 group together in logs/reconcile.
-            // Same idempotency story as execute.ts: ECONNRESET on retry can't duplicate.
-            const recBase = randomUUID().replace(/-/g, '').slice(0, 16);
-            try {
-              await withRetry(() => c.submitOrder({
-                category: 'linear', symbol: pos.symbol,
-                side: closingSide, orderType: 'Limit', qty: halfStr,
-                price: roundPriceToTick(pos.dbTP1!, info),
-                timeInForce: 'GTC', reduceOnly: true,
-                orderLinkId: `rtp1-${recBase}`,
-              }), { label: `naked-tp1-${pos.symbol}-${pos.account.keyName}`, tries: 2 });
-              await withRetry(() => c.submitOrder({
-                category: 'linear', symbol: pos.symbol,
-                side: closingSide, orderType: 'Limit', qty: remStr,
-                price: roundPriceToTick(pos.dbTP2!, info),
-                timeInForce: 'GTC', reduceOnly: true,
-                orderLinkId: `rtp2-${recBase}`,
-              }), { label: `naked-tp2-${pos.symbol}-${pos.account.keyName}`, tries: 2 });
-              actions.push({
-                symbol: pos.symbol, account: `${pos.account.bucket}/${pos.account.keyName}`,
-                action: 'NAKED-TP-RECOVERED', reason: `re-placed TP1=${pos.dbTP1} TP2=${pos.dbTP2}`,
-              });
-              await notifyAlert({
-                kind: 'reconcile_divergence',
-                symbol: pos.symbol,
-                detail: `${pos.symbol} ${pos.side} был БЕЗ TP1/TP2! Watcher восстановил из DB: TP1=${pos.dbTP1!.toFixed(4)}, TP2=${pos.dbTP2!.toFixed(4)}`,
-                action: 'Проверь execute.ts — почему TP не выставились при open',
-              });
-            } catch (e: any) {
-              log.error('naked-TP re-place failed', { symbol: pos.symbol, err: e?.message });
-            }
-          }
-        }
-      } catch (e: any) {
-        log.warn('naked-TP check failed', { symbol: pos.symbol, err: e?.message });
-      }
-    }
+    // 0.5) NAKED-TP DETECTION delegated to NakedTpRecovery (src/runtime/naked-tp-recovery.ts).
+    const recovered = await nakedTpRecovery.check(pos, getRest(pos.account));
+    if (recovered) actions.push(recovered);
 
     // 1) TP1 partial-fill detection → DO NOT MOVE SL (no_move strategy, validated 365d).
     // Backtest cap-6 @ slip 0.20%: BE/BE+ both gave +47% annual / 68% WR.

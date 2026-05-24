@@ -7,6 +7,7 @@ import { log } from '../core/logger';
 import { findStaleOrphans, StalePending } from '../core/pending-orders';
 import { tradeRepo, OpenTrade } from '../data/trade-repo';
 import { Position } from '../core/position';
+import { divergenceDetector } from './divergence-detector';
 
 type Divergence =
   | { type: 'bybit_without_db'; account: string; symbol: string; size: number }
@@ -241,60 +242,52 @@ export async function runReconcile(): Promise<ReconcileResult> {
     );
     if (!match) {
       divergences.push({ type: 'bybit_without_db', account: pos.account, symbol: pos.symbol, size: pos.size });
-    } else {
-      const diff = Math.abs(match.qty - pos.size);
-      const tolerance = match.qty * 0.01;
-      if (diff > tolerance) {
-        const ratioVsInitial = pos.size / Math.max(match.initial_qty, 1);
-
-        // 1. TP1 partial fill: ~50% remaining — watcher will sync. Not divergence.
-        const isTp1PartialFill =
-          !match.tp1_filled &&
-          ratioVsInitial > 0.40 && ratioVsInitial < 0.60;
-
-        // 2. DUST: <1% of initial qty — TP1+TP2 limit fills left rounding residue.
-        // Position is de-facto closed; close it on Bybit + DB via auto-close path below.
-        // We trigger auto-close by REMOVING this pos from allBybit so dbOpen loop
-        // treats trade as "db_without_bybit" and pulls closedPnL.
-        const isDust = ratioVsInitial < 0.01 && match.tp1_filled === true;
-
-        if (isTp1PartialFill) {
-          log.info('reconcile: expected partial-fill (TP1) — watcher will sync', {
-            symbol: pos.symbol, account: pos.account,
-            initial_qty: match.initial_qty, db_qty: match.qty, bybit_size: pos.size,
-          });
-        } else if (isDust) {
-          log.info('reconcile: dust detected — closing on Bybit + auto-close DB', {
-            symbol: pos.symbol, account: pos.account,
-            initial_qty: match.initial_qty, bybit_size: pos.size,
-            ratio: ratioVsInitial.toFixed(4),
-          });
-          // Close the dust on Bybit so position becomes truly 0
-          try {
-            const accForDust = accounts.find((a) => `${a.bucket}/${a.keyName}` === pos.account);
-            if (accForDust) {
-              const c = getRest(accForDust);
-              const closingSide = pos.side === 'Buy' ? 'Sell' : 'Buy';
-              await withRetry(() => c.submitOrder({
-                category: 'linear', symbol: pos.symbol,
-                side: closingSide, orderType: 'Market', qty: String(pos.size),
-                timeInForce: 'IOC', reduceOnly: true,
-                orderLinkId: `dust-${randomUUID().replace(/-/g, '').slice(0, 16)}`,
-              }), { label: `dust-close-${pos.symbol}-${pos.account}`, tries: 2 });
-              // Mark pos as zero — db_without_bybit loop will then auto-close trade
-              pos.size = 0;
-            }
-          } catch (e: any) {
-            log.warn('dust close failed', { symbol: pos.symbol, err: e?.message });
-          }
-        } else {
-          divergences.push({
-            type: 'size_mismatch', account: pos.account, symbol: pos.symbol,
-            trade_id: match.id, db_qty: match.qty, bybit_size: pos.size,
-          });
-        }
-      }
+      continue;
     }
+
+    const verdict = divergenceDetector.classify(pos, match);
+    if (verdict === 'aligned') continue;
+
+    if (verdict === 'tp1_partial') {
+      log.info('reconcile: expected partial-fill (TP1) — watcher will sync', {
+        symbol: pos.symbol, account: pos.account,
+        initial_qty: match.initial_qty, db_qty: match.qty, bybit_size: pos.size,
+      });
+      continue;
+    }
+
+    if (verdict === 'dust') {
+      const ratioVsInitial = pos.size / Math.max(match.initial_qty, 1);
+      log.info('reconcile: dust detected — closing on Bybit + auto-close DB', {
+        symbol: pos.symbol, account: pos.account,
+        initial_qty: match.initial_qty, bybit_size: pos.size,
+        ratio: ratioVsInitial.toFixed(4),
+      });
+      try {
+        const accForDust = accounts.find((a) => `${a.bucket}/${a.keyName}` === pos.account);
+        if (accForDust) {
+          const c = getRest(accForDust);
+          const closingSide = pos.side === 'Buy' ? 'Sell' : 'Buy';
+          await withRetry(() => c.submitOrder({
+            category: 'linear', symbol: pos.symbol,
+            side: closingSide, orderType: 'Market', qty: String(pos.size),
+            timeInForce: 'IOC', reduceOnly: true,
+            orderLinkId: `dust-${randomUUID().replace(/-/g, '').slice(0, 16)}`,
+          }), { label: `dust-close-${pos.symbol}-${pos.account}`, tries: 2 });
+          // Mark pos as zero — db_without_bybit loop will then auto-close trade.
+          pos.size = 0;
+        }
+      } catch (e: any) {
+        log.warn('dust close failed', { symbol: pos.symbol, err: e?.message });
+      }
+      continue;
+    }
+
+    // verdict === 'mismatch'
+    divergences.push({
+      type: 'size_mismatch', account: pos.account, symbol: pos.symbol,
+      trade_id: match.id, db_qty: match.qty, bybit_size: pos.size,
+    });
   }
   // ─── Phase B: gap-fill closures that happened while the bot was offline ─────────
   // For every DB trade still marked 'open' but with no matching Bybit position:
