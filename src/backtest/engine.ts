@@ -15,6 +15,128 @@ import { computeMetrics } from './metrics';
 import { log } from '../core/logger';
 
 const FUNDING_INTERVAL_MS = 8 * 60 * 60_000;
+// Funding window mirrors runtime/risk-guard.ts: ±10 min around 00/08/16 UTC.
+const FUNDING_WINDOW_MIN = 10;
+function isInFundingWindow(ts: number): boolean {
+  const remainder = ts % FUNDING_INTERVAL_MS;
+  const distToPrev = remainder;
+  const distToNext = FUNDING_INTERVAL_MS - remainder;
+  return Math.min(distToPrev, distToNext) <= FUNDING_WINDOW_MIN * 60_000;
+}
+
+// Live risk-guard constants — mirrored here so backtest doesn't over-trade vs prod.
+// Sources of truth: src/runtime/risk-guard.ts RISK object.
+const COOLDOWN_AFTER_SL_MS = 12 * 3600_000;
+const COOLDOWN_AFTER_ANY_CLOSE_MS = 4 * 3600_000;
+const MAX_SL_PER_PAIR_PER_DAY = 2;
+const MIN_RR_TP2 = 0.3;
+const DAILY_SOFT_KILL_PCT = -2.5;
+const DAILY_HARD_KILL_PCT = -4.0;
+const TOTAL_KILL_PCT = -8.0;
+const TOTAL_HEAT_CAP_PCT = 3.75;
+// 6 = operator cap (2026-05-25). Less than risk-guard.ts default 10 — more conservative.
+const MAX_PARALLEL_POSITIONS = 6;
+
+/**
+ * Risk state shared across runBacktest calls for portfolio-aware backtests.
+ * When provided, the engine mirrors live risk-guard checks (cooldowns, kill
+ * switches, heat cap, daily SL cap). When omitted, a fresh per-symbol state
+ * is created and only per-symbol filters apply (the cross-symbol kills + heat
+ * cap stay inactive but per-symbol cooldowns still work).
+ */
+export interface BacktestRiskState {
+  lastSlTs: Map<string, number>;         // pair → ts of last SL close
+  lastCloseTs: Map<string, number>;      // pair → ts of last close (any reason)
+  slCountByDay: Map<string, number>;     // "YYYY-MM-DD:PAIR" → count
+  startEquity: number;                   // baseline for total kill
+  dailyOpenEquity: { day: string; equity: number };  // resets at UTC midnight
+  realizedPnlUsd: number;                // cumulative across all pairs (for total kill)
+  openPositions: Map<string, { riskedUsd: number; pair: string }>;  // pair → live risk
+}
+
+export function makeBacktestRiskState(startEquity: number, startTs: number): BacktestRiskState {
+  return {
+    lastSlTs: new Map(),
+    lastCloseTs: new Map(),
+    slCountByDay: new Map(),
+    startEquity,
+    dailyOpenEquity: { day: new Date(startTs).toISOString().slice(0, 10), equity: startEquity },
+    realizedPnlUsd: 0,
+    openPositions: new Map(),
+  };
+}
+
+function dayUtcKey(ts: number): string { return new Date(ts).toISOString().slice(0, 10); }
+
+function checkBacktestRisk(
+  state: BacktestRiskState,
+  symbol: string,
+  ts: number,
+  equity: number,
+  projectedRiskUsd: number,
+): { allowed: boolean; reason?: string } {
+  // 0) Roll daily open equity at UTC midnight
+  const today = dayUtcKey(ts);
+  if (state.dailyOpenEquity.day !== today) {
+    state.dailyOpenEquity = { day: today, equity };
+  }
+  // 1) Total kill — terminal portfolio loss
+  const totalPnlPct = (equity - state.startEquity) / state.startEquity * 100;
+  if (totalPnlPct <= TOTAL_KILL_PCT) {
+    return { allowed: false, reason: `total kill: ${totalPnlPct.toFixed(2)}% ≤ ${TOTAL_KILL_PCT}%` };
+  }
+  // 2) Daily soft/hard kill
+  const dailyPnlPct = (equity - state.dailyOpenEquity.equity) / state.dailyOpenEquity.equity * 100;
+  if (dailyPnlPct <= DAILY_HARD_KILL_PCT) {
+    return { allowed: false, reason: `hard kill: ${dailyPnlPct.toFixed(2)}% ≤ ${DAILY_HARD_KILL_PCT}%` };
+  }
+  if (dailyPnlPct <= DAILY_SOFT_KILL_PCT) {
+    return { allowed: false, reason: `soft kill: ${dailyPnlPct.toFixed(2)}% ≤ ${DAILY_SOFT_KILL_PCT}%` };
+  }
+  // 3) Per-pair SL cooldown 12h
+  const lastSl = state.lastSlTs.get(symbol);
+  if (lastSl != null && ts - lastSl < COOLDOWN_AFTER_SL_MS) {
+    const minsLeft = Math.round((COOLDOWN_AFTER_SL_MS - (ts - lastSl)) / 60000);
+    return { allowed: false, reason: `SL cooldown ${minsLeft}min remaining` };
+  }
+  // 4) Per-pair any-close cooldown 4h
+  const lastClose = state.lastCloseTs.get(symbol);
+  if (lastClose != null && ts - lastClose < COOLDOWN_AFTER_ANY_CLOSE_MS) {
+    const minsLeft = Math.round((COOLDOWN_AFTER_ANY_CLOSE_MS - (ts - lastClose)) / 60000);
+    return { allowed: false, reason: `any-close cooldown ${minsLeft}min remaining` };
+  }
+  // 5) Per-pair daily SL cap (2/day)
+  const slCount = state.slCountByDay.get(`${today}:${symbol}`) ?? 0;
+  if (slCount >= MAX_SL_PER_PAIR_PER_DAY) {
+    return { allowed: false, reason: `${slCount} SL today (cap ${MAX_SL_PER_PAIR_PER_DAY})` };
+  }
+  // 6) Heat budget cap (sum of risk-at-SL across open positions ≤ 3.75% equity)
+  const currentHeat = Array.from(state.openPositions.values()).reduce((s, p) => s + p.riskedUsd, 0);
+  const projectedHeatPct = (currentHeat + projectedRiskUsd) / equity * 100;
+  if (projectedHeatPct > TOTAL_HEAT_CAP_PCT) {
+    return { allowed: false, reason: `heat ${projectedHeatPct.toFixed(2)}% > cap ${TOTAL_HEAT_CAP_PCT}%` };
+  }
+  // 7) Max parallel positions
+  if (state.openPositions.size >= MAX_PARALLEL_POSITIONS) {
+    return { allowed: false, reason: `max parallel positions ${MAX_PARALLEL_POSITIONS}` };
+  }
+  return { allowed: true };
+}
+
+function updateBacktestRiskOnClose(state: BacktestRiskState, trade: ClosedTrade): void {
+  state.lastCloseTs.set(trade.symbol, trade.exitTs);
+  // Live trade-repo defines SL as realized_r < 0 (any losing close), regardless
+  // of exit_reason. A time_stop with pnl<0, a strategy_exit with pnl<0, even a
+  // tp1_then_sl_be — all count as SL for cooldown purposes. Match that.
+  if (trade.pnlR < 0) {
+    state.lastSlTs.set(trade.symbol, trade.exitTs);
+    const day = dayUtcKey(trade.exitTs);
+    const key = `${day}:${trade.symbol}`;
+    state.slCountByDay.set(key, (state.slCountByDay.get(key) ?? 0) + 1);
+  }
+  state.realizedPnlUsd += trade.pnlUsd - trade.feesUsd - trade.fundingUsd;
+  state.openPositions.delete(trade.symbol);
+}
 
 interface DataBundle {
   barsDecision: Bar[];                // bars at decisionTf — main iteration
@@ -275,6 +397,45 @@ function resolvePosition(
       return false;
     };
 
+    // Scaled-in: before SL/TP, check if any pending DCA limit fills inside this bar.
+    // Fill ALL pending levels touched (price could gap deep). Update avg + recompute TP.
+    if (pos.scaledIn && pos.scaledIn.pendingEntries.length > 0) {
+      const sin = pos.scaledIn;
+      const stillPending: typeof sin.pendingEntries = [];
+      for (const e of sin.pendingEntries) {
+        const touched = pos.side === 'long' ? b.low <= e.price : b.high >= e.price;
+        if (!touched) { stillPending.push(e); continue; }
+        // Qty for this slot: per-slot risk % stored on the pending entry (captured
+        // at signal time; supports both equal_r and dca_boost sizing modes).
+        const slotEquity = equityRef.value;
+        const slotRiskUsd = slotEquity * (e.riskPct / 100);
+        const slotDist = Math.abs(e.price - pos.initialSl);
+        if (slotDist <= 0) continue;
+        const slotQty = slotRiskUsd / slotDist;
+        // Maker fee on limit fill
+        const slotFee = slotQty * e.price * fees.maker;
+        // Update running totals: new avg = (oldNotional + slotNotional) / (oldQty + slotQty)
+        const newNotional = pos.entry * pos.qty + e.price * slotQty;
+        const newQty = pos.qty + slotQty;
+        pos.entry = newNotional / newQty;
+        pos.qty = newQty;
+        pos.initialQty = newQty;            // for SL/TP qty refs downstream
+        pos.openFeesUsd += slotFee;
+        pos.riskedUsd += slotQty * slotDist;  // cumulative R at SL
+        sin.filledLevels.push(e.level);
+        // Recompute TP only if cfg says so (default true). When false, TP stays
+        // locked at initial signal price ± tpAtrMult·ATR — DCA fills boost qty
+        // but don't pull the target closer.
+        if (sin.cfg.tpRecomputeOnFill !== false) {
+          const tpDist = sin.cfg.tpAtrMult * sin.cfg.atr;
+          const newTp = pos.side === 'long' ? pos.entry + tpDist : pos.entry - tpDist;
+          pos.tp1 = newTp;
+          pos.tp2 = newTp;
+        }
+      }
+      sin.pendingEntries = stillPending;
+    }
+
     // Touch detection (raw)
     const slTouched = pos.side === 'long' ? b.low <= pos.sl : b.high >= pos.sl;
     const tp1Touchable = !pos.tp1Hit
@@ -316,7 +477,8 @@ function resolvePosition(
 
 export async function runBacktest(
   strategy: Strategy,
-  settings: BacktestSettings
+  settings: BacktestSettings,
+  externalRiskState?: BacktestRiskState,
 ): Promise<BacktestResult> {
   log.info('backtest start', {
     strategy: strategy.name,
@@ -334,6 +496,9 @@ export async function runBacktest(
 
   const fees = { taker: settings.takerFeeRate, maker: settings.makerFeeRate };
   let position: OpenPosition | null = null;
+  let lastClosedTrade: StrategyContext['lastClosedTrade'] = undefined;
+  // Risk state — shared with caller (for portfolio backtests) or fresh per-symbol.
+  const riskState: BacktestRiskState = externalRiskState ?? makeBacktestRiskState(settings.startEquity, settings.startTs);
 
   // Index 1m bars by ts for fast lookup of position resolution start
   const tsTo1mIdx = new Map<number, number>();
@@ -385,6 +550,8 @@ export async function runBacktest(
           trades.push(closed);
           equityRef.value += closed.pnlUsd - closed.feesUsd - closed.fundingUsd;
           equityCurve.push({ ts: closed.exitTs, equity: equityRef.value });
+          lastClosedTrade = { exitTs: closed.exitTs, exitReason: closed.exitReason, side: closed.side };
+          updateBacktestRiskOnClose(riskState, closed);
           position = null;
         } else {
           pos.lastScanned1mIdx = endIdx;
@@ -499,6 +666,7 @@ export async function runBacktest(
       bars1dRecent,
       bars1wRecent,
       btcBars4hRecent,
+      lastClosedTrade,
     };
     const action = strategy.decide(ctx);
 
@@ -526,6 +694,9 @@ export async function runBacktest(
         });
         equityRef.value += netPnl;
         equityCurve.push({ ts: exitBar.ts, equity: equityRef.value });
+        lastClosedTrade = { exitTs: exitBar.ts, exitReason: 'strategy_exit', side: position.side };
+        // Build a synthetic ClosedTrade for risk state update (strategy_exit path)
+        updateBacktestRiskOnClose(riskState, trades[trades.length - 1]);
         position = null;
       }
       continue;
@@ -539,31 +710,126 @@ export async function runBacktest(
     if (next1mIdx < 0) continue;
     const next1m = data.bars1m[next1mIdx];
 
-    const fillPrice = action.orderType === 'market'
-      ? applySlippage(next1m.open, action.side, 'entry', settings.slippagePct)
-      : action.entryPrice;
+    // Live risk-guard blocks entries inside the funding window (±10 min around
+    // 00/08/16 UTC). Mirror that filter here so backtest doesn't over-count
+    // trades that would never execute in production.
+    if (isInFundingWindow(next1m.ts)) continue;
 
-    const qty = calcQty(equityRef.value, action.sizePct, fillPrice, action.sl, settings.leverage, settings.maxNotionalPctOfEquity);
-    if (qty <= 0) continue;
-    const entryFee = qty * fillPrice * (action.orderType === 'market' ? fees.taker : fees.maker);
+    // Quality gate: skip low rrTp2 setups (mirrors scan-decide minRrTp2 filter).
+    const rrTp2Dist = action.tp2 != null ? Math.abs(action.tp2 - action.entryPrice) : Math.abs(action.tp1 - action.entryPrice);
+    const stopDist = Math.abs(action.entryPrice - action.sl);
+    if (stopDist > 0 && rrTp2Dist / stopDist < MIN_RR_TP2) continue;
 
-    position = {
-      side: action.side,
-      qty,
-      initialQty: qty,
-      entry: fillPrice,
-      entryTs: next1m.ts,
-      sl: action.sl,
-      initialSl: action.sl,
-      tp1: action.tp1,
-      tp2: action.tp2,
-      tp1Hit: false,
-      rationale: action.rationale,
-      openFeesUsd: entryFee,
-      fundingPaidUsd: 0,
-      riskedUsd: Math.abs(fillPrice - action.sl) * qty,
-      lastScanned1mIdx: next1mIdx,
-    };
+    // Mirror live risk-guard: cooldowns + daily SL cap + kill switches + heat cap.
+    // projectedRiskUsd uses ENTRY price + sizePct + slDist for sizing — approximates
+    // what calcQty will produce below.
+    const projectedRiskUsd = equityRef.value * (action.sizePct / 100);
+    const riskCheck = checkBacktestRisk(riskState, settings.symbol, next1m.ts, equityRef.value, projectedRiskUsd);
+    if (!riskCheck.allowed) continue;
+
+    if (action.scaledIn) {
+      // ─── Scaled-in entry: place 1st entry (market or limit), queue remaining N-1 limits ───
+      const cfg = action.scaledIn;
+      const dir = action.side === 'long' ? -1 : +1;     // limits below for long, above for short
+      const firstFillPrice = action.orderType === 'market'
+        ? applySlippage(next1m.open, action.side, 'entry', settings.slippagePct)
+        : action.entryPrice;
+      // Per-slot risk allocation (in %). Three modes:
+      //   equal_r: each slot risks sizePct/N
+      //   dca_boost: slot[i] = sizePct × decay^i (slot 0 is baseline-sized)
+      //   custom_weights: explicit array (caller passes weights; slot[i] = sizePct × weight[i])
+      const sizingMode = cfg.sizingMode ?? 'equal_r';
+      const decay = cfg.dcaBoostDecay ?? 0.5;
+      const slotRiskPcts: number[] = [];
+      if (sizingMode === 'custom_weights') {
+        const weights = cfg.customWeights ?? [];
+        for (let i = 0; i < cfg.nEntries; i++) {
+          const w = weights[i] ?? 0;
+          slotRiskPcts.push(action.sizePct * w);
+        }
+      } else if (sizingMode === 'equal_r') {
+        for (let i = 0; i < cfg.nEntries; i++) slotRiskPcts.push(action.sizePct / cfg.nEntries);
+      } else {
+        for (let i = 0; i < cfg.nEntries; i++) slotRiskPcts.push(action.sizePct * Math.pow(decay, i));
+      }
+      const riskPerSlotPct = slotRiskPcts[0];     // for slot #0 below; pendingEntries store per-level percent
+      const slotRiskUsd = equityRef.value * (riskPerSlotPct / 100);
+      const slotDist = Math.abs(firstFillPrice - action.sl);
+      if (slotDist <= 0) continue;
+      const firstQty = slotRiskUsd / slotDist;
+      const firstFee = firstQty * firstFillPrice * (action.orderType === 'market' ? fees.taker : fees.maker);
+
+      // Build pending entries for levels 2..N. Each carries its own risk-pct
+      // so engine can size correctly when DCA fills (sizing mode is captured
+      // here at signal time so a later strategy change doesn't affect open trades).
+      const pendingEntries: { price: number; level: number; riskPct: number }[] = [];
+      for (let lvl = 1; lvl < cfg.nEntries; lvl++) {
+        const ep = firstFillPrice + dir * lvl * cfg.spacingAtr * cfg.atr;
+        // Skip levels that would be beyond SL (can never fill before SL triggers)
+        const onCorrectSide = action.side === 'long' ? ep > action.sl : ep < action.sl;
+        if (!onCorrectSide) continue;
+        pendingEntries.push({ price: ep, level: lvl + 1, riskPct: slotRiskPcts[lvl] });
+      }
+
+      // TP starts at first entry + tpAtrMult·ATR (will be recomputed on each subsequent fill)
+      const tpInit = action.side === 'long'
+        ? firstFillPrice + cfg.tpAtrMult * cfg.atr
+        : firstFillPrice - cfg.tpAtrMult * cfg.atr;
+
+      position = {
+        side: action.side,
+        qty: firstQty,
+        initialQty: firstQty,
+        entry: firstFillPrice,
+        entryTs: next1m.ts,
+        sl: action.sl,
+        initialSl: action.sl,
+        tp1: tpInit,
+        tp2: tpInit,
+        tp1Hit: false,
+        rationale: action.rationale,
+        openFeesUsd: firstFee,
+        fundingPaidUsd: 0,
+        riskedUsd: firstQty * slotDist,
+        lastScanned1mIdx: next1mIdx,
+        scaledIn: {
+          pendingEntries,
+          cfg,
+          riskPerSlotPct,
+          filledLevels: [1],
+        },
+      };
+      riskState.openPositions.set(settings.symbol, { riskedUsd: position.riskedUsd, pair: settings.symbol });
+    } else {
+      // ─── Legacy single-entry path ───
+      const fillPrice = action.orderType === 'market'
+        ? applySlippage(next1m.open, action.side, 'entry', settings.slippagePct)
+        : action.entryPrice;
+
+      const qty = calcQty(equityRef.value, action.sizePct, fillPrice, action.sl, settings.leverage, settings.maxNotionalPctOfEquity);
+      if (qty <= 0) continue;
+      const entryFee = qty * fillPrice * (action.orderType === 'market' ? fees.taker : fees.maker);
+
+      position = {
+        side: action.side,
+        qty,
+        initialQty: qty,
+        entry: fillPrice,
+        entryTs: next1m.ts,
+        sl: action.sl,
+        initialSl: action.sl,
+        tp1: action.tp1,
+        tp2: action.tp2,
+        tp1Hit: false,
+        rationale: action.rationale,
+        openFeesUsd: entryFee,
+        fundingPaidUsd: 0,
+        riskedUsd: Math.abs(fillPrice - action.sl) * qty,
+        lastScanned1mIdx: next1mIdx,
+      };
+      // Register with risk state for cross-pair heat tracking + parallel cap
+      riskState.openPositions.set(settings.symbol, { riskedUsd: position.riskedUsd, pair: settings.symbol });
+    }
   }
 
   // Close any leftover position at last bar (true time stop — end of test window)
@@ -588,6 +854,7 @@ export async function runBacktest(
     });
     equityRef.value += grossPnl - totalFees - position.fundingPaidUsd;
     equityCurve.push({ ts: last1m.ts, equity: equityRef.value });
+    updateBacktestRiskOnClose(riskState, trades[trades.length - 1]);
   }
 
   const metrics = computeMetrics(trades, settings.startEquity, equityCurve);

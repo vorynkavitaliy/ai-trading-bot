@@ -31,6 +31,48 @@ interface BybitPos {
   entry: number;
 }
 
+// Cancel pending non-reduce-only limit orders on (symbol, account). Called after
+// auto-closing a trade so unfilled scaled-in DCA slots don't trigger a reverse
+// position when price revisits their levels. Reduce-only orders self-cancel
+// on Bybit when position size hits 0 — we only touch entry-side orphans.
+async function cancelScaledInOrphans(a: AccountKey, symbol: string): Promise<number> {
+  const c = getRest(a);
+  try {
+    const ao: any = await withRetry(() => c.getActiveOrders({ category: 'linear', symbol }),
+      { label: `getActiveOrders-orphan-${a.keyName}` });
+    if (ao.retCode !== 0) {
+      log.warn('orphan sweep getActiveOrders failed', { symbol, account: a.keyName, msg: ao.retMsg });
+      return 0;
+    }
+    const orders = ao.result?.list ?? [];
+    const orphans = orders.filter((o: any) =>
+      o.orderType === 'Limit' && o.reduceOnly === false && o.orderStatus === 'New'
+    );
+    if (orphans.length === 0) return 0;
+    let cancelled = 0;
+    for (const o of orphans) {
+      try {
+        const r: any = await withRetry(() => c.cancelOrder({
+          category: 'linear', symbol, orderId: o.orderId,
+        }), { label: `cancelOrphan-${a.keyName}-${o.orderLinkId}` });
+        if (r.retCode === 0) cancelled++;
+        else log.warn('orphan cancel failed', { symbol, linkId: o.orderLinkId, msg: r.retMsg });
+      } catch (e: any) {
+        log.warn('orphan cancel threw', { symbol, linkId: o.orderLinkId, err: e?.message });
+      }
+    }
+    if (cancelled > 0) {
+      log.info('cancelled scaled-in orphans after close', {
+        symbol, account: `${a.bucket}/${a.keyName}`, count: cancelled,
+      });
+    }
+    return cancelled;
+  } catch (e: any) {
+    log.warn('orphan sweep failed', { symbol, account: a.keyName, err: e?.message });
+    return 0;
+  }
+}
+
 async function fetchAccountPositions(a: AccountKey): Promise<BybitPos[]> {
   const c = getRest(a);
   const r = await withRetry(() => c.getPositionInfo({ category: 'linear', settleCoin: 'USDT' }), {
@@ -329,6 +371,12 @@ export async function runReconcile(): Promise<ReconcileResult> {
       const evt = await autoCloseTrade(t, fills);
       if (evt) {
         closeEvents.push(evt);
+        // Cancel any orphan scaled-in entry limits (slots 1/2 that never filled).
+        // Position is closed → these would otherwise open a reverse position if
+        // price revisits their levels. Reduce-only orders self-cancel; entries don't.
+        await cancelScaledInOrphans(acc, t.symbol).catch((e) => {
+          log.warn('orphan sweep error (non-fatal)', { symbol: t.symbol, err: e?.message });
+        });
         continue;
       }
     }

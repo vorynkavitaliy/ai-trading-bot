@@ -12,7 +12,7 @@ import { loadAccounts, AccountKey } from '../core/accounts';
 import { getRest, getInstrumentInfo, roundPriceToTick, roundQtyToStep, withRetry } from '../core/bybit';
 import { query } from '../core/db';
 import { computeFeatures, CandleRow } from '../data/features';
-import { notifyAlert, notifyClose } from '../core/tg-templates';
+import { notifyAlert, notifyClose, notifyDcaFill } from '../core/tg-templates';
 import { log } from '../core/logger';
 import { tradeRepo, OpenTrade } from '../data/trade-repo';
 import { Position } from '../core/position';
@@ -309,6 +309,80 @@ export async function runPositionWatcher(): Promise<{
     // 0.5) NAKED-TP DETECTION delegated to NakedTpRecovery (src/runtime/naked-tp-recovery.ts).
     const recovered = await nakedTpRecovery.check(pos, getRest(pos.account));
     if (recovered) actions.push(recovered);
+
+    // 0.7) DCA-FILL DETECTION (S5 scaled-in): if Bybit position grew vs DB,
+    // a deeper DCA limit slot filled retroactively. Update DB qty + replace TP + notify.
+    // Skip if TP1 already partially closed (different code path handles that).
+    if (!pos.tp1AlreadyFilled && pos.size > pos.dbInitialQty * 1.01) {
+      const accLabel = `${pos.account.bucket}/${pos.account.keyName}`;
+      const delta = pos.size - pos.dbInitialQty;
+      log.info('DCA fill detected', {
+        symbol: pos.symbol, account: accLabel,
+        prevSize: pos.dbInitialQty, newSize: pos.size, delta,
+      });
+      // 1) Update DB qty + initial_qty so reconcile aligns + R calc correct
+      try {
+        await query(
+          `UPDATE trades SET qty = $1, initial_qty = $1 WHERE id = $2`,
+          [pos.size, pos.dbTradeId]
+        );
+      } catch (e: any) {
+        log.warn('DCA fill — DB update failed', { err: e?.message });
+      }
+      // 2) Re-place TP for FULL position qty (existing TP only covers slot 1 size,
+      //    leaving 70%+ uncovered after full DCA deploy)
+      try {
+        const cli = getRest(pos.account);
+        const closingSide = pos.side === 'Sell' ? 'Buy' : 'Sell';
+        const ordersR: any = await withRetry(() => cli.getActiveOrders({ category: 'linear', symbol: pos.symbol }),
+          { label: `reTP-getOrders-${accLabel}` });
+        const oldTps = (ordersR.result?.list ?? []).filter((o: any) =>
+          o.reduceOnly === true && o.side === closingSide && o.orderType === 'Limit'
+        );
+        for (const tp of oldTps) {
+          await withRetry(() => cli.cancelOrder({ category: 'linear', symbol: pos.symbol, orderId: tp.orderId }),
+            { label: `reTP-cancel-${tp.orderLinkId}` });
+        }
+        // Place new single TP covering full filled position (tp1 == tp2 in S5 scaled-in)
+        const tpPrice = pos.dbTP1;
+        if (tpPrice != null) {
+          const info = await getInstrumentInfo(pos.account, pos.symbol);
+          const qtyStr = roundQtyToStep(pos.size, info);
+          const newLink = `rtp-dca-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+          await withRetry(() => cli.submitOrder({
+            category: 'linear', symbol: pos.symbol,
+            side: closingSide, orderType: 'Limit', qty: qtyStr,
+            price: roundPriceToTick(tpPrice, info),
+            timeInForce: 'GTC', reduceOnly: true,
+            orderLinkId: newLink,
+          }), { label: `reTP-place-${accLabel}` });
+          log.info('TP re-placed for full DCA-deployed position', {
+            symbol: pos.symbol, account: accLabel, newQty: pos.size, tpPrice,
+          });
+        }
+      } catch (e: any) {
+        log.warn('DCA fill — TP re-place failed', { err: e?.message });
+      }
+      // 3) Telegram notification
+      try {
+        await notifyDcaFill({
+          symbol: pos.symbol,
+          side: pos.side.toLowerCase() === 'buy' ? 'buy' : 'sell',
+          prevSize: pos.dbInitialQty,
+          newSize: pos.size,
+          newAvgPrice: pos.entryPrice,
+          sl: pos.curSL,
+          tp: pos.curTP,
+          accountSummaries: [`${accLabel} — ${pos.dbInitialQty.toFixed(2)} → ${pos.size.toFixed(2)} ${pos.symbol.replace(/USDT$/,'')}  (+${delta.toFixed(2)})`],
+        });
+      } catch (e: any) {
+        log.warn('DCA fill — telegram failed', { err: e?.message });
+      }
+      actions.push({
+        symbol: pos.symbol, account: accLabel,
+        action: 'DCA-FILL-DETECTED', reason: `size grew ${pos.dbInitialQty}→${pos.size}; TP re-placed`,
+      });
+    }
 
     // 1) TP1 partial-fill detection → DO NOT MOVE SL (no_move strategy, validated 365d).
     // Backtest cap-6 @ slip 0.20%: BE/BE+ both gave +47% annual / 68% WR.

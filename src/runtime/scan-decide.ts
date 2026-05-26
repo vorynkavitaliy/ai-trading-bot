@@ -260,6 +260,18 @@ interface PairDecision {
   riskCheck?: { allowed: boolean; reason?: string };
   reason?: string;
   enrichment?: DecisionEnrichment;
+  // S5 scaled-in: when set, execute.ts places 3 ATR-spaced limit orders with
+  // dca_boost or custom-weight qty allocation. See pair-strategies.ts.
+  scaledIn?: {
+    nEntries: number;
+    spacingAtr: number;
+    atr: number;
+    tpAtrMult: number;
+    sizingMode?: 'equal_r' | 'dca_boost' | 'custom_weights';
+    dcaBoostDecay?: number;
+    customWeights?: number[];
+    tpRecomputeOnFill?: boolean;
+  };
 }
 
 export interface ScanDecideResult {
@@ -531,6 +543,7 @@ export async function scanDecide(): Promise<ScanDecideResult> {
       rationale: action.rationale,
       riskCheck: finalRiskCheck,
       enrichment,
+      scaledIn: action.scaledIn,
     });
   }
 

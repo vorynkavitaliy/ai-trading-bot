@@ -49,7 +49,19 @@ export interface CgFadeParams {
   useBtcTrend: boolean;
   emaFast: number;
   emaSlow: number;
-  cooldownHours: number;
+  cooldownHours: number;        // same-direction cooldown after ENTRY (was: only mechanic)
+  cooldownAfterTpHours?: number; // optional: prevent re-entry within X hours after a TP close
+  // Scaled-in entry: when set, split the single limit entry into N orders
+  // spaced by spacingAtr·ATR.
+  scaledIn?: {
+    nEntries: number;
+    spacingAtr: number;
+    tpAtrMult: number;
+    sizingMode?: 'equal_r' | 'dca_boost' | 'custom_weights';
+    dcaBoostDecay?: number;
+    customWeights?: number[];      // used when sizingMode='custom_weights'
+    tpRecomputeOnFill?: boolean;   // false = TP locked at signal price + tpAtrMult·ATR
+  };
 }
 
 const DEFAULTS: CgFadeParams = {
@@ -114,6 +126,13 @@ export abstract class CgFadeStrategy implements Strategy {
     if (!sig) return { kind: 'hold' };
 
     if (inCooldown(ctx.symbol, sig.side, ctx.ts, this.p.cooldownHours)) return { kind: 'hold' };
+    // Cooldown after TP: prevent re-entry to a freshly-closed-with-profit cycle.
+    // Stops the "extra trades" pattern that broke equal-R scaled-in on BTC.
+    if (this.p.cooldownAfterTpHours && this.p.cooldownAfterTpHours > 0 && ctx.lastClosedTrade) {
+      const lct = ctx.lastClosedTrade;
+      const isTp = lct.exitReason === 'tp1' || lct.exitReason === 'tp2' || lct.exitReason === 'tp1_then_sl_be';
+      if (isTp && (ctx.ts - lct.exitTs) < this.p.cooldownAfterTpHours * 3_600_000) return { kind: 'hold' };
+    }
     if (!trendFiltersAllow(sig.side, ctx, this.p)) return { kind: 'hold' };
 
     return buildEnter(ctx, sig.side, ctx.recentBars ?? [], this.p, sig.rationale);
@@ -198,6 +217,39 @@ export class FundingTaConfluence extends CgFadeStrategy {
   }
 }
 
+// ─── S5: Funding + L/S Top Position confluence ────────────────────────────────
+// Higher-conviction variant of S1 (LsTopPositionFade): requires BOTH funding AND
+// L/S Top Position to be extreme in the same direction. Built for BTC (research
+// 2026-05-24): on BTC the L/S Top Position signal is sharper than L/S Top Account
+// (used by S4), so S4-style confluence with TopPosition is the natural fit.
+export class LsTopPositionFundingConfluence extends CgFadeStrategy {
+  readonly name: string;
+
+  constructor(params: Partial<CgFadeParams> = {}) {
+    super(params, { pctHi: 0.80, pctLo: 0.20, usePairTrend: true, useBtcTrend: false });
+    const p = this.p;
+    this.name = `ls-top-pos-funding-confluence(${p.pctHi}/${p.pctLo}, sl${p.slAtrMult}atr/tp${p.tpAtrMult}atr, hold${p.maxHoldBars}, pair=${p.usePairTrend}, btc=${p.useBtcTrend})`;
+  }
+
+  protected extractSide(cg: CoinglassFeatures, p: CgFadeParams): SideDecision | null {
+    const frHist = cg.funding_oi_weighted_history;
+    const tpHist = cg.ls_top_position_history;
+    const fCur = cg.funding_oi_weighted;
+    const tCur = cg.ls_top_position;
+    if (!frHist || !tpHist || frHist.length < p.windowBars || tpHist.length < p.windowBars || fCur == null || tCur == null) return null;
+    const fPct = percentile(frHist.slice(-p.windowBars), fCur);
+    const tPct = percentile(tpHist.slice(-p.windowBars), tCur);
+    let side: 'long' | 'short' | null = null;
+    if (fPct >= p.pctHi && tPct >= p.pctHi) side = 'short';
+    else if (fPct <= p.pctLo && tPct <= p.pctLo) side = 'long';
+    if (!side) return null;
+    return {
+      side,
+      rationale: `F+TP confluence (F:${(fPct * 100).toFixed(0)}% TP:${(tPct * 100).toFixed(0)}%) — fade ${side === 'short' ? 'long' : 'short'} consensus`,
+    };
+  }
+}
+
 // ─── Factory exports (back-compat with pair-strategies.ts) ─────────────────────
 export function lsTopPositionFade(params: Partial<CgFadeParams> = {}): Strategy {
   return new LsTopPositionFade(params);
@@ -207,6 +259,9 @@ export function fundingFade(params: Partial<CgFadeParams> = {}): Strategy {
 }
 export function fundingTaConfluence(params: Partial<CgFadeParams> = {}): Strategy {
   return new FundingTaConfluence(params);
+}
+export function lsTopPositionFundingConfluence(params: Partial<CgFadeParams> = {}): Strategy {
+  return new LsTopPositionFundingConfluence(params);
 }
 
 // ─── Shared helpers ────────────────────────────────────────────────────────────
@@ -250,16 +305,35 @@ function buildEnter(
   const a = atr(bars, p.atrPeriod);
   if (a == null || a <= 0) return { kind: 'hold' };
   const sl = side === 'long' ? ctx.price - p.slAtrMult * a : ctx.price + p.slAtrMult * a;
-  const tp = side === 'long' ? ctx.price + p.tpAtrMult * a : ctx.price - p.tpAtrMult * a;
+  // When scaledIn is set, TP is recomputed by engine from running avg using
+  // scaledIn.tpAtrMult. Initial tp1/tp2 set to first-entry-based target (engine
+  // will overwrite on each fill).
+  const effectiveTpMult = p.scaledIn?.tpAtrMult ?? p.tpAtrMult;
+  const tp = side === 'long' ? ctx.price + effectiveTpMult * a : ctx.price - effectiveTpMult * a;
   markEntry(ctx.symbol, side, ctx.ts);
   return {
     kind: 'enter',
     side,
-    orderType: 'limit',
+    // S5 scaled-in: slot 0 = MARKET (guarantees immediate fill so TP/SL can be
+    // placed without waiting for limit to fill). Single-entry trades keep limit
+    // semantics. The small taker fee on slot 0 is the cost of TP-placement
+    // certainty (otherwise limit may not fill, TP submit rejects, watcher
+    // recovers 5 min later — see ETH+XRP incidents 2026-05-25).
+    orderType: p.scaledIn ? 'market' : 'limit',
     entryPrice: ctx.price,
     sl,
     tp1: tp, tp2: tp,
     sizePct: p.riskPct,
     rationale,
+    scaledIn: p.scaledIn ? {
+      nEntries: p.scaledIn.nEntries,
+      spacingAtr: p.scaledIn.spacingAtr,
+      atr: a,
+      tpAtrMult: p.scaledIn.tpAtrMult,
+      sizingMode: p.scaledIn.sizingMode,
+      dcaBoostDecay: p.scaledIn.dcaBoostDecay,
+      customWeights: p.scaledIn.customWeights,
+      tpRecomputeOnFill: p.scaledIn.tpRecomputeOnFill,
+    } : undefined,
   };
 }

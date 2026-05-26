@@ -9,6 +9,37 @@ export interface Bar {
   volume: number;
 }
 
+// Optional scaled-in entry config — when present, engine treats the trade as
+// N limit orders spaced by k·ATR. TP is recomputed from running avg entry on
+// each fill.
+//
+// sizingMode controls how per-slot qty is computed:
+//   - 'equal_r' (legacy): each slot risks sizePct/N R. Single-fill → under-sized
+//     by factor N (1/3 baseline R for n=3). Failed BTC backtest 2026-05-24.
+//   - 'dca_boost' (recommended): slot #0 risks full sizePct R (baseline-equivalent).
+//     Each subsequent slot adds dcaBoostDecay × previous slot risk. Single-fill =
+//     baseline trade. Full deploy = (1 + decay + decay² + …) R total risk. With
+//     decay=0.5 and N=3, full deploy = 1.75 R worst-case (0.875% deposit at
+//     sizePct=0.5 — under HyroTrader daily DD limit).
+export interface ScaledInConfig {
+  nEntries: number;        // # of limit orders incl. first (typically 3)
+  spacingAtr: number;      // each next entry at first ± k·ATR
+  atr: number;             // ATR(14) at signal time — used for spacing + TP
+  tpAtrMult: number;       // TP price = avgEntry ± tpAtrMult·ATR (recomputed each fill)
+  sizingMode?: 'equal_r' | 'dca_boost' | 'custom_weights';   // default 'equal_r' for back-compat
+  dcaBoostDecay?: number;  // used when sizingMode='dca_boost' (default 0.5)
+  // Used when sizingMode='custom_weights' — explicit risk fraction per slot.
+  // Each entry: fraction of sizePct used for that slot. Sum can be ≷ 1.
+  // Example: [0.17, 0.17, 0.34] means slot0 risks 0.17·sizePct, etc; total 0.68·sizePct.
+  customWeights?: number[];
+  // If true (default), TP price recomputes to (running_avg ± tpAtrMult·ATR) on
+  // each DCA fill — moves TP closer when avg drops. If false, TP locks at the
+  // initial signal price ± tpAtrMult·ATR and never moves; DCA fills then deliver
+  // larger qty at the same exit price → bigger R per win (but price must travel
+  // further to reach TP from a deeper fill).
+  tpRecomputeOnFill?: boolean;
+}
+
 // Action returned by a strategy on each decision tick (1H close).
 export type Action =
   | {
@@ -21,6 +52,7 @@ export type Action =
       tp2?: number;
       sizePct: number;          // 0.6 means 0.6% risk
       rationale: string;
+      scaledIn?: ScaledInConfig;  // optional: convert to multi-entry trade
     }
   | { kind: 'exit'; reason: string }
   | { kind: 'hold' };
@@ -29,7 +61,7 @@ export interface OpenPosition {
   side: Side;
   qty: number;                // current qty (decremented after TP1 partial)
   initialQty: number;         // qty at entry
-  entry: number;
+  entry: number;              // avg entry price (mutates as DCA orders fill)
   entryTs: number;
   sl: number;                 // current SL (mutates to breakeven after TP1)
   initialSl: number;          // SL at entry — used for riskedUsd calc
@@ -39,8 +71,15 @@ export interface OpenPosition {
   rationale: string;
   openFeesUsd: number;
   fundingPaidUsd: number;
-  riskedUsd: number;          // |entry - initialSl| × initialQty
+  riskedUsd: number;          // |entry - initialSl| × initialQty (running max as DCA orders fill)
   lastScanned1mIdx?: number;  // last 1m bar index already scanned for SL/TP/funding (advances each cycle to prevent funding double-count)
+  // Scaled-in state (multi-entry trade). Undefined for legacy single-entry trades.
+  scaledIn?: {
+    pendingEntries: { price: number; level: number; riskPct: number }[];  // remaining unfilled limits (each with its own risk %)
+    cfg: ScaledInConfig;
+    riskPerSlotPct: number;  // legacy: kept for back-compat; per-slot %s now in pendingEntries[].riskPct
+    filledLevels: number[];   // levels of filled entries (incl. #1)
+  };
 }
 
 export interface ClosedTrade {
@@ -137,6 +176,10 @@ export interface StrategyContext {
   // BTC 4H bars for cross-pair macro filters (CG fade strategies use this on altcoins).
   // Always loaded for non-BTC symbols when strategy.needsBtcContext = true.
   btcBars4hRecent?: Bar[];
+  // Last closed trade on THIS symbol (any reason: tp/sl/strategy_exit). Set by
+  // engine after each close. Strategies use this to implement cooldown-after-TP
+  // (prevent re-entry into a freshly-resolved cycle).
+  lastClosedTrade?: { exitTs: number; exitReason: ClosedTrade['exitReason']; side: Side };
 }
 
 export interface Strategy {

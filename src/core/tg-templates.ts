@@ -66,6 +66,9 @@ export interface OpenTradeArgs {
   rationale: string;
   failedAccounts?: Array<{ label: string; error: string }>;
   cycle?: string;
+  // S5 scaled-in: per-slot grid info for display ("DCA grid"). When set the
+  // open message shows entry as slot 1 + pending limit DCA slots 2..N.
+  gridSlots?: Array<{ level: number; price: number; qtyTotal: number; filled: boolean }>;
 }
 
 export async function notifyOpen(a: OpenTradeArgs): Promise<void> {
@@ -94,8 +97,22 @@ export async function notifyOpen(a: OpenTradeArgs): Promise<void> {
     if (a.tp1) lines.push(`🎯 Тейк-1:     $${fmtNum(a.tp1)}  (${fmtPctSigned(tp1Pct)})  — 50% объёма, reduce-only лимит`);
     if (a.tp2) lines.push(`🎯 Тейк-2:     $${fmtNum(a.tp2)}  (${fmtPctSigned(tp2Pct)})  — 50% объёма, reduce-only лимит`);
   }
+  // S5 scaled-in: show grid limit ladder if present
+  if (a.gridSlots && a.gridSlots.length > 1) {
+    lines.push(``);
+    lines.push(`<b>🔀 Грид сетка (${a.gridSlots.length} лимиток):</b>`);
+    for (const s of a.gridSlots) {
+      const pct = ep > 0 ? pctFromPrices(ep, s.price, isLong) : 0;
+      const status = s.filled ? '✅ filled' : '⏳ pending';
+      lines.push(`   Slot ${s.level}: $${fmtNum(s.price)} (${fmtPctSigned(pct)})  ${fmtNum(s.qtyTotal, 2)} ${tag}  ${status}`);
+    }
+  }
   lines.push(``);
-  lines.push(`💼 <b>Размер:</b> ${fmtNum(a.qtyTotal, 2)} ${tag}`);
+  lines.push(`💼 <b>Размер (slot 1):</b> ${fmtNum(a.qtyTotal, 2)} ${tag}`);
+  if (a.gridSlots && a.gridSlots.length > 1) {
+    const totalIfFull = a.gridSlots.reduce((s, x) => s + x.qtyTotal, 0);
+    lines.push(`   <i>Если все ${a.gridSlots.length} slots filled: ${fmtNum(totalIfFull, 2)} ${tag}</i>`);
+  }
   if (a.riskPct) lines.push(`⚖ <b>Риск:</b> ${a.riskPct}% от equity`);
   lines.push(``);
   lines.push(`<b>Аккаунты:</b> ${a.accountSummaries.length} ✅`);
@@ -113,6 +130,48 @@ export async function notifyOpen(a: OpenTradeArgs): Promise<void> {
   lines.push(SEP);
   lines.push(`<i>CG-fade v4 • ${escapeHtml(a.cycle ?? '')} • ${nowUtcShort()}</i>`);
 
+  await send(lines.join('\n'), { raw: true });
+}
+
+// -----------------------------------------------------------
+// DCA FILL (scaled-in slot 2/3 filled retroactively)
+// -----------------------------------------------------------
+export interface DcaFillArgs {
+  symbol: string;
+  side: 'buy' | 'sell';
+  prevSize: number;       // size in DB before fill
+  newSize: number;        // size on Bybit now
+  newAvgPrice: number;    // updated avg entry from Bybit
+  sl: number;             // current SL
+  tp: number | null;      // current TP (single — scaled-in uses one)
+  accountSummaries: string[];  // ["200000/Vitalii — old:26 → new:46 ETH (+20)", ...]
+}
+
+export async function notifyDcaFill(a: DcaFillArgs): Promise<void> {
+  const dir = dirLabel(a.side);
+  const tag = pairTag(a.symbol);
+  const delta = a.newSize - a.prevSize;
+  const isLong = a.side === 'buy';
+  const slPct = pctFromPrices(a.newAvgPrice, a.sl, isLong);
+  const tpPct = a.tp ? pctFromPrices(a.newAvgPrice, a.tp, isLong) : 0;
+
+  const lines: string[] = [
+    `🔀 <b>DCA FILL • ${a.symbol}</b>  ${dir}`,
+    SEP,
+    ``,
+    `Грид-лимитка сработала!`,
+    ``,
+    `💼 Position grew: ${fmtNum(a.prevSize, 2)} → <b>${fmtNum(a.newSize, 2)}</b> ${tag}  (+${fmtNum(delta, 2)})`,
+    `📍 New avg entry: <b>$${fmtNum(a.newAvgPrice)}</b>`,
+    `🛡 Stop:           $${fmtNum(a.sl)}  (${fmtPctSigned(slPct)} от новой avg)`,
+  ];
+  if (a.tp) lines.push(`🎯 Take:           $${fmtNum(a.tp)}  (${fmtPctSigned(tpPct)} от новой avg)`);
+  lines.push(``);
+  lines.push(`<b>Аккаунты:</b>`);
+  for (const s of a.accountSummaries) lines.push(`   • ${escapeHtml(s)}`);
+  lines.push(``);
+  lines.push(SEP);
+  lines.push(`<i>${nowUtcShort()}</i>`);
   await send(lines.join('\n'), { raw: true });
 }
 

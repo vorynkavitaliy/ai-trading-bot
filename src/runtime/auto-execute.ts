@@ -122,6 +122,8 @@ async function main() {
     ];
     if (d.tp1 != null) args.push('--tp1', String(d.tp1));
     if (d.tp2 != null) args.push('--tp2', String(d.tp2));
+    // S5 scaled-in: serialize config as JSON arg so execute.ts can place 3 limit orders.
+    if (d.scaledIn) args.push('--scaled-in', JSON.stringify(d.scaledIn));
 
     log.info('auto-execute: TAKE → spawning execute.ts', { symbol: d.symbol, side: d.side, sizePct: d.sizePct, rrTp2 });
 

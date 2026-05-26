@@ -17,7 +17,7 @@ import { tier1Pairs } from './pair-strategies';
 export const RISK = Object.freeze({
   riskPctBase: 0.375,                       // 3.75% heat cap / 10 parallel = 0.375%
   riskPctCap: 0.6,                          // hard cap if scaled up by vol multiplier
-  maxParallelPositions: 10,                 // bt cap-10 @ slip 0.25%: +107.53% / MaxDD 2.79%
+  maxParallelPositions: 6,                  // bt 2026-05-25: cap-6 = optimum (+66.96% / MaxDD 4.51% vs cap-7+ unlimited +64.69%). Operator-set.
   totalHeatCapPct: 3.75,                    // worst-case bt MaxDD 3.96% @ slip 0.40%
   dailyDrawdownSoftKillPct: -2.5,
   dailyDrawdownHardKillPct: -4.0,

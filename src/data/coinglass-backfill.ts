@@ -19,7 +19,7 @@ const REF_EXCHANGE = 'Binance';
 
 // v3 universe (post 2026-05-18, Standard plan): 14 pairs incl. HYPE.
 // Standard plan removes the 10-symbol cap of Hobbyist — full universe now covered.
-const SYMBOLS_COIN = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'LTC', 'ATOM', 'DOGE', 'TON', 'APT', 'ARB', 'INJ', 'TAO', 'HYPE'];
+const SYMBOLS_COIN = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'LTC', 'ATOM', 'DOGE', 'TON', 'APT', 'ARB', 'INJ', 'TAO', 'HYPE', 'ZEC'];
 const PAIRS = [
   { symbol: 'BTC',  pair: 'BTCUSDT'  },
   { symbol: 'ETH',  pair: 'ETHUSDT'  },
@@ -35,6 +35,7 @@ const PAIRS = [
   { symbol: 'INJ',  pair: 'INJUSDT'  },
   { symbol: 'TAO',  pair: 'TAOUSDT'  },
   { symbol: 'HYPE', pair: 'HYPEUSDT' },
+  { symbol: 'ZEC',  pair: 'ZECUSDT'  },
 ];
 
 function delay(ms: number) {
