@@ -48,10 +48,8 @@ export class DivergenceDetector {
       return 'tp1_partial';
     }
 
-    // Dust residue after a logged TP1 — TP1+TP2 limits left rounding residue.
-    if (match.tp1_filled && ratioVsInitial < DUST_FRAC) {
-      return 'dust';
-    }
+    const isAbsoluteDust = pos.size > 0 && pos.size < match.initial_qty * DUST_FRAC;
+    if (isAbsoluteDust) return 'dust';
 
     return 'mismatch';
   }
