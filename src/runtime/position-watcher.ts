@@ -5,7 +5,6 @@
 
 import { loadAccounts } from '../core/accounts';
 import { getRest, withRetry } from '../core/bybit';
-import { notifyAlert } from '../core/tg-templates';
 import { log } from '../core/logger';
 import { tradeRepo, OpenTrade } from '../data/trade-repo';
 import { nakedTpRecovery } from './naked-tp-recovery';
@@ -20,6 +19,7 @@ import {
   flushTp1Groups,
   handleNakedSl,
 } from './position-events';
+import { sendDrawdownAlerts } from './drawdown-alerts';
 
 function matchDbTrade(
   trades: OpenTrade[],
@@ -142,71 +142,6 @@ export async function runPositionWatcher(): Promise<{
   await sendDrawdownAlerts(positions);
 
   return { inspected: positions.length, actions };
-}
-
-const DRAWDOWN_ALERT_R_THRESHOLD = 0.7;
-const DRAWDOWN_ALERT_THROTTLE_MS = 4 * 3_600_000;
-const DRAWDOWN_STATE_PATH = '/tmp/drawdown-alerts.json';
-
-async function sendDrawdownAlerts(positions: BybitPos[]): Promise<void> {
-  type Group = {
-    symbol: string;
-    side: 'Buy' | 'Sell';
-    totalUpnl: number;
-    totalRisk: number;
-    entry: number;
-    mark: number;
-    sl: number;
-  };
-  const groups = new Map<string, Group>();
-  for (const pos of positions) {
-    if (pos.tp1AlreadyFilled) continue;
-    const key = `${pos.symbol}-${pos.side}`;
-    const stopDist = Math.abs(pos.entryPrice - pos.dbInitialSL);
-    const positionRisk = stopDist * pos.dbInitialQty;
-    const g = groups.get(key) ?? {
-      symbol: pos.symbol,
-      side: pos.side,
-      totalUpnl: 0,
-      totalRisk: 0,
-      entry: pos.entryPrice,
-      mark: pos.entryPrice + (pos.unrealisedPnl / Math.max(pos.size, 1)) * (pos.side === 'Sell' ? -1 : 1),
-      sl: pos.curSL,
-    };
-    g.totalUpnl += pos.unrealisedPnl;
-    g.totalRisk += positionRisk;
-    groups.set(key, g);
-  }
-
-  let state: Record<string, number> = {};
-  try {
-    state = JSON.parse(require('node:fs').readFileSync(DRAWDOWN_STATE_PATH, 'utf-8'));
-  } catch {}
-
-  for (const g of groups.values()) {
-    const upnlR = g.totalRisk > 0 ? g.totalUpnl / g.totalRisk : 0;
-    if (upnlR >= -DRAWDOWN_ALERT_R_THRESHOLD) continue;
-    const key = `${g.symbol}-${g.side}`;
-    const lastAlertTs = state[key] ?? 0;
-    if (Date.now() - lastAlertTs < DRAWDOWN_ALERT_THROTTLE_MS) continue;
-
-    try {
-      await notifyAlert({
-        kind: 'reconcile_divergence',
-        symbol: g.symbol,
-        detail: `${g.symbol} ${g.side === 'Sell' ? 'SHORT' : 'LONG'}: глубокий drawdown ${upnlR.toFixed(2)}R (uPnL ${g.totalUpnl >= 0 ? '+' : ''}$${g.totalUpnl.toFixed(0)}). Entry ${g.entry.toFixed(g.entry < 10 ? 4 : 2)}, mark ${g.mark.toFixed(g.entry < 10 ? 4 : 2)}, SL ${g.sl.toFixed(g.entry < 10 ? 4 : 2)}`,
-        action: `Решай: держим до SL/TP1, либо ручное закрытие. Бот авто-выход НЕ делает (вариант B).`,
-      });
-      state[key] = Date.now();
-      log.info('drawdown alert sent', { symbol: g.symbol, side: g.side, upnlR, upnl: g.totalUpnl });
-    } catch (e: any) {
-      log.error('drawdown alert send failed', { symbol: g.symbol, err: e?.message });
-    }
-  }
-
-  try {
-    require('node:fs').writeFileSync(DRAWDOWN_STATE_PATH, JSON.stringify(state));
-  } catch {}
 }
 
 async function main() {
