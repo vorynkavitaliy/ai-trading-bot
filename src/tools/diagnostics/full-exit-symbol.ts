@@ -1,8 +1,8 @@
 // Emergency full exit: cancel ALL orders on symbol + market-close any open position.
 // Use case: scaled-in trade with unfilled DCA slots — operator wants out cleanly.
 import { loadAccounts } from '../../core/accounts';
-import { getRest, withRetry, getInstrumentInfo } from '../../core/bybit';
-import { normalizeQty } from '../../core/qty-normalizer';
+import { getRest, withRetry } from '../../core/bybit';
+import { closeAcrossAccounts } from '../../core/close-verifier';
 import { close as closePg } from '../../core/db';
 
 async function main() {
@@ -48,21 +48,16 @@ async function main() {
       const closeSide = p.side === 'Buy' ? 'Sell' : 'Buy';
       console.log(`  position: ${p.side} size=${p.size} avg=${p.avgPrice} unrealized=${p.unrealisedPnl}`);
       console.log(`  → market ${closeSide} qty=${p.size} (reduce-only)`);
-      if (execute) {
-        const info = await getInstrumentInfo(a, symbol);
-        const { qtyStr, valid } = normalizeQty(parseFloat(p.size), info);
-        if (!valid) { console.log(`  ✗ qty ${p.size} not normalizable`); continue; }
-        const co: any = await withRetry(() => c.submitOrder({
-          category: 'linear',
-          symbol,
-          side: closeSide,
-          orderType: 'Market',
-          qty: qtyStr,
-          reduceOnly: true,
-          timeInForce: 'IOC',
-        }), { label: `closeMkt-${a.keyName}` });
-        if (co.retCode === 0) console.log(`  ✓ market close submitted orderId=${co.result?.orderId}`);
-        else console.log(`  ✗ retCode=${co.retCode} ${co.retMsg}`);
+    }
+    if (execute) {
+      const result = await closeAcrossAccounts([a], symbol, {
+        reason: 'full-exit-symbol',
+        cancelOrders: false,
+      });
+      for (const att of result.attempts) {
+        console.log(
+          `  → ${att.account}: status=${att.status} initial=${att.initialSize} final=${att.finalSize} attempts=${att.attempts}`,
+        );
       }
     }
   }
