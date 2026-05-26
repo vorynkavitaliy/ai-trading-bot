@@ -1,0 +1,26 @@
+[Unit]
+Description=AI Trading Bot Position Monitor (TASK-006)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/Projects/ai-trading-bot
+EnvironmentFile=/root/Projects/ai-trading-bot/.env
+Environment=NODE_ENV=production
+Environment=POSITION_MONITOR_POLL_SEC=30
+ExecStart=/usr/bin/env npx tsx src/runtime/position-monitor.ts
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+KillSignal=SIGTERM
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=position-monitor
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target
