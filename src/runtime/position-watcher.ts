@@ -1,48 +1,25 @@
-// Position watcher — runs every cycle alongside scan-decide/reconcile.
-// Manages open positions according to the rules backtest assumed:
-//   1. TP1 partial-fill detection → move SL to BE for remainder
-//   2. Regime-flip exit → close if 1H ADX collapses or EMA stack flips against direction
-//   3. Time stop → alert/close if position held > 24h without TP1
-//   4. Volatility spike → tighten SL if ATR1h > 2× of 24h-median
-//
-// Edit-never-cancel discipline (CLAUDE.md): use amend_order to move SL, never cancel+create.
+// Position watcher — cron entry kept as a thin shim during the TASK-006 overlap.
+// Pure detectors + side-effect handlers live in src/runtime/position-events.ts.
+// This file only wires them into the legacy 5-min cron path so behaviour is
+// unchanged during the 24-48h overlap migration to the WS daemon.
 
-import { randomUUID } from 'node:crypto';
-import { loadAccounts, AccountKey } from '../core/accounts';
-import { getRest, getInstrumentInfo, roundPriceToTick, roundQtyToStep, withRetry } from '../core/bybit';
-import { closeAndVerify } from '../core/close-verifier';
-import { query } from '../core/db';
-import { computeFeatures, CandleRow } from '../data/features';
-import { notifyAlert, notifyClose, notifyDcaFill } from '../core/tg-templates';
+import { loadAccounts } from '../core/accounts';
+import { getRest, withRetry } from '../core/bybit';
+import { notifyAlert } from '../core/tg-templates';
 import { log } from '../core/logger';
 import { tradeRepo, OpenTrade } from '../data/trade-repo';
-import { Position } from '../core/position';
 import { nakedTpRecovery } from './naked-tp-recovery';
-
-const TIME_STOP_HOURS = 24;
-const REGIME_ADX_FLIP_THRESHOLD = 18;     // ADX dropping below this = trend losing strength
-const VOL_SPIKE_MULT = 2.0;                // ATR1h > 2× 24h-median = volatility spike
-
-interface BybitPos {
-  symbol: string;
-  side: 'Buy' | 'Sell';
-  size: number;
-  initialSize: number;        // when first opened — from DB row
-  entryPrice: number;
-  curSL: number;
-  curTP: number | null;
-  unrealisedPnl: number;
-  positionValue: number;
-  createdTime: number;
-  account: AccountKey;
-  dbTradeId: number;
-  dbInitialSL: number;        // original SL from when we opened
-  dbTP1: number | null;
-  dbTP2: number | null;
-  dbInitialQty: number;       // original qty at open (initial_qty col, falls back to qty)
-  dbCurrentQty: number;       // current qty in DB (updates after TP1 fill)
-  tp1AlreadyFilled: boolean;  // tp1_filled_at not null → don't re-fire notification
-}
+import {
+  BybitPos,
+  RecoveryAction,
+  Tp1FillGroup,
+  isTp1PartialFromPosition,
+  inferTp1Fill,
+  handleTp1Fill,
+  handleDcaFill,
+  flushTp1Groups,
+  handleNakedSl,
+} from './position-events';
 
 function matchDbTrade(
   trades: OpenTrade[],
@@ -51,7 +28,6 @@ function matchDbTrade(
   symbol: string,
   side: string,
 ): OpenTrade | null {
-  // Most-recent-opened match for (account_bucket, account_key, symbol, side).
   let best: OpenTrade | null = null;
   for (const t of trades) {
     if (t.account_bucket !== bucket) continue;
@@ -65,7 +41,6 @@ function matchDbTrade(
 
 async function fetchOpenPositionsWithDb(): Promise<BybitPos[]> {
   const accounts = loadAccounts();
-  // Single DB call up-front instead of N (was: one per matched Bybit position).
   const dbTrades = await tradeRepo.openTrades();
   const results: BybitPos[] = [];
 
@@ -81,9 +56,6 @@ async function fetchOpenPositionsWithDb(): Promise<BybitPos[]> {
     const list = (r.result?.list ?? []).filter((p: any) => parseFloat(p.size) > 0);
 
     for (const p of list) {
-      // Match against DB row to recover original SL/TP1/TP2/initialQty + REAL opened_at.
-      // Bybit's createdTime on a position object reflects first-ever open on that symbol,
-      // not the current position cycle — using DB opened_at instead.
       const db = matchDbTrade(dbTrades, acc.bucket, acc.keyName, p.symbol, p.side);
       if (!db) continue;
       const openedMs = Date.parse(db.opened_at);
@@ -113,423 +85,60 @@ async function fetchOpenPositionsWithDb(): Promise<BybitPos[]> {
   return results;
 }
 
-async function loadFeatures1h(symbol: string): Promise<any | null> {
-  const r = await query<any>(
-    `SELECT ts::text, open, high, low, close, volume FROM candles
-     WHERE symbol = $1 AND tf = '60m' ORDER BY ts DESC LIMIT 200`,
-    [symbol]
-  );
-  if (r.rows.length < 100) return null;
-  const slice: CandleRow[] = r.rows.reverse().map((row: any) => ({
-    ts: parseInt(row.ts, 10),
-    open: parseFloat(row.open),
-    high: parseFloat(row.high),
-    low: parseFloat(row.low),
-    close: parseFloat(row.close),
-    volume: parseFloat(row.volume),
-  }));
-  return computeFeatures(symbol, '60m', slice);
-}
-
-async function moveStopLoss(pos: BybitPos, newSL: number, reason: string): Promise<void> {
-  const c = getRest(pos.account);
-  const info = await getInstrumentInfo(pos.account, pos.symbol);
-  const slStr = roundPriceToTick(newSL, info);
-  // Use setTradingStop (Bybit V5) — amend SL on existing position, never cancel.
-  const r = await withRetry(() => c.setTradingStop({
-    category: 'linear',
-    symbol: pos.symbol,
-    stopLoss: slStr,
-    slTriggerBy: 'LastPrice',
-    positionIdx: 0,
-  }), { label: `move-sl-${pos.symbol}-${pos.account.keyName}` });
-  if (r.retCode !== 0) throw new Error(`setTradingStop retCode=${r.retCode} ${r.retMsg}`);
-  log.info('SL moved', {
-    symbol: pos.symbol, account: pos.account.keyName,
-    from: pos.curSL, to: parseFloat(slStr), reason,
-  });
-}
-
-async function closePosition(pos: BybitPos, reason: string): Promise<void> {
-  const result = await closeAndVerify(pos.account, pos.symbol, { reason, cancelOrders: false });
-  if (result.status === 'stuck' || result.status === 'error') {
-    throw new Error(
-      `closePosition ${pos.symbol}: status=${result.status} finalSize=${result.finalSize} detail=${result.detail ?? ''}`,
-    );
-  }
-  log.warn('position closed by watcher', {
-    symbol: pos.symbol,
-    account: pos.account.keyName,
-    reason,
-    finalSize: result.finalSize,
-    status: result.status,
-    attempts: result.attempts,
-  });
-}
-
-// -------- Rules --------
-
-function detectTp1Filled(pos: BybitPos): boolean {
-  // Detection now lives inside Position.attachBybitSize() — the state machine
-  // owns the "did TP1 partial fire" check. Watcher just queries the result.
-  // Threshold (initial × 0.6) and floor (size > 0) are encapsulated there.
-  if (pos.tp1AlreadyFilled) return false;
-  if (pos.dbInitialQty <= 0) return false;
-  if (pos.size <= pos.dbInitialQty * 0.05) return false;  // floor: full close, not TP1
-  const p = positionFromBybit(pos);
-  p.attachBybitSize(pos.size);
-  return p.isTp1Filled();
-}
-
-function positionFromBybit(pos: BybitPos): Position {
-  return Position.fromOpenTrade({
-    id: pos.dbTradeId,
-    account_bucket: pos.account.bucket,
-    account_key: pos.account.keyName,
-    symbol: pos.symbol,
-    side: pos.side,
-    qty: pos.dbCurrentQty,
-    initial_qty: pos.dbInitialQty,
-    entry_price: pos.entryPrice,
-    sl: pos.dbInitialSL,
-    tp1: pos.dbTP1,
-    tp2: pos.dbTP2,
-    opened_at: new Date(pos.createdTime).toISOString(),
-    tp1_filled: pos.tp1AlreadyFilled,
-  });
-}
-
-function detectRegimeFlip(pos: BybitPos, f1h: any): { flipped: boolean; reason: string } {
-  if (!f1h || f1h.adx == null || f1h.ema_stack_aligned == null) return { flipped: false, reason: '' };
-  const isLong = pos.side === 'Buy';
-  // Long position + EMA stack flipped to bear, OR ADX dropped below threshold + price below EMA21
-  if (isLong && f1h.ema_stack_aligned === 'bear' && f1h.close < (f1h.ema21 ?? Infinity)) {
-    return { flipped: true, reason: `1H EMA stack flipped to BEAR, close ${f1h.close.toFixed(2)} < EMA21 ${f1h.ema21.toFixed(2)}` };
-  }
-  if (!isLong && f1h.ema_stack_aligned === 'bull' && f1h.close > (f1h.ema21 ?? 0)) {
-    return { flipped: true, reason: `1H EMA stack flipped to BULL, close ${f1h.close.toFixed(2)} > EMA21 ${f1h.ema21.toFixed(2)}` };
-  }
-  if (f1h.adx < REGIME_ADX_FLIP_THRESHOLD) {
-    return { flipped: true, reason: `1H ADX collapsed to ${f1h.adx.toFixed(1)} (< ${REGIME_ADX_FLIP_THRESHOLD})` };
-  }
-  return { flipped: false, reason: '' };
-}
-
-function detectTimeStop(pos: BybitPos, now: number): { stop: boolean; ageH: number } {
-  const ageH = (now - pos.createdTime) / 3_600_000;
-  // Time stop only fires if position has NOT hit TP1 yet (size still ~initial)
-  if (ageH > TIME_STOP_HOURS && pos.size / pos.dbInitialQty > 0.6) {
-    return { stop: true, ageH };
-  }
-  return { stop: false, ageH };
-}
-
-async function detectVolSpike(symbol: string, f1h: any): Promise<boolean> {
-  if (!f1h?.atr || !f1h?.atr_pct) return false;
-  // Get median atr_pct from last 24h (24 1H bars). If current > 2× median → spike.
-  const r = await query<any>(
-    `SELECT close, high, low FROM candles
-     WHERE symbol = $1 AND tf = '60m' ORDER BY ts DESC LIMIT 24`,
-    [symbol]
-  );
-  if (r.rows.length < 12) return false;
-  const trs = r.rows.map((row: any) => {
-    const h = parseFloat(row.high), l = parseFloat(row.low), c = parseFloat(row.close);
-    return ((h - l) / c) * 100;
-  });
-  trs.sort((a: number, b: number) => a - b);
-  const median = trs[Math.floor(trs.length / 2)];
-  return f1h.atr_pct > median * VOL_SPIKE_MULT;
-}
-
-// -------- Main loop --------
-
-interface Tp1FillAccountFill {
-  label: string;
-  qty: number;
-  pnlUsd: number;
-  pnlR: number;
-}
-
-interface Tp1FillGroup {
-  symbol: string;
-  side: 'Buy' | 'Sell';
-  entryPrice: number;
-  exitPrice: number;
-  fills: Tp1FillAccountFill[];
-}
-
 export async function runPositionWatcher(): Promise<{
   inspected: number;
   actions: Array<{ symbol: string; account: string; action: string; reason: string }>;
 }> {
   const positions = await fetchOpenPositionsWithDb();
-  const actions: Array<{ symbol: string; account: string; action: string; reason: string }> = [];
-  const now = Date.now();
-  const tp1Groups = new Map<string, Tp1FillGroup>();   // key = symbol+side, consolidates accounts
+  const actions: RecoveryAction[] = [];
+  const tp1Groups = new Map<string, Tp1FillGroup>();
 
   for (const pos of positions) {
-    const f1h = await loadFeatures1h(pos.symbol);
-
-    // 0) SAFETY-NET: every position MUST have a stopLoss attached on Bybit.
-    // If somehow it's missing (Bybit bug, partial submission failure, manual edit),
-    // we re-attach it FROM DB's original sl. This is critical for HyroTrader
-    // 5min-SL compliance and overall capital safety.
     if (!pos.curSL || pos.curSL === 0) {
-      log.error('NAKED POSITION DETECTED — emergency SL set', {
-        symbol: pos.symbol, account: pos.account.keyName,
-        size: pos.size, dbSL: pos.dbInitialSL,
-      });
-      try {
-        await moveStopLoss(pos, pos.dbInitialSL, 'EMERGENCY: position had no SL');
-        actions.push({
-          symbol: pos.symbol, account: `${pos.account.bucket}/${pos.account.keyName}`,
-          action: 'EMERGENCY-SL-SET', reason: 'naked position detected',
-        });
-        // Telegram alert — operator should know about this immediately.
-        await notifyAlert({
-          kind: 'reconcile_divergence',
-          symbol: pos.symbol,
-          detail: `${pos.symbol} ${pos.side} был БЕЗ стоп-лосса! Установлен SL=${pos.dbInitialSL.toFixed(4)} (из DB).`,
-          action: 'Проверь Bybit — почему SL не сохранился при open. Возможен баг в execute.ts',
-        });
-      } catch (slErr: any) {
-        log.error('EMERGENCY SL set FAILED — falling back to force close', { err: slErr?.message });
-        try {
-          const closeResult = await closeAndVerify(pos.account, pos.symbol, {
-            reason: 'naked-no-SL-fallback',
-            cancelOrders: false,
-          });
-          if (closeResult.status === 'ok') {
-            actions.push({
-              symbol: pos.symbol,
-              account: `${pos.account.bucket}/${pos.account.keyName}`,
-              action: 'EMERGENCY-CLOSE',
-              reason: 'naked + SL set rejected → force-closed',
-            });
-            await notifyAlert({
-              kind: 'reconcile_divergence',
-              symbol: pos.symbol,
-              detail: `${pos.symbol} ${pos.side} был БЕЗ SL и SL не удалось установить — экстренно закрыта по рынку. finalSize=${closeResult.finalSize}.`,
-              action: 'Проверь execute.ts и Bybit лог — почему SL не привязался при open.',
-            });
-          } else if (closeResult.status === 'dust_below_min') {
-            await notifyAlert({
-              kind: 'reconcile_divergence',
-              symbol: pos.symbol,
-              detail: `${pos.symbol} ${pos.side} БЕЗ SL, остаток < min notional (size=${closeResult.finalSize}). Bybit не принимает reduce-only Market. Риск < $5, мониторим.`,
-              action: 'Ручное закрытие через UI, либо подожди дрейф до SL/ликвидации.',
-            });
-          } else {
-            throw new Error(`closeAndVerify status=${closeResult.status} finalSize=${closeResult.finalSize}`);
-          }
-        } catch (closeErr: any) {
-          log.error('EMERGENCY close ALSO FAILED', { err: closeErr?.message });
-          await notifyAlert({
-            kind: 'reconcile_divergence',
-            symbol: pos.symbol,
-            detail: `🆘 КРИТИЧНО: ${pos.symbol} БЕЗ SL и не получилось ни установить SL, ни закрыть по рынку. Закрой вручную.`,
-            action: 'Закрой позицию через Bybit UI немедленно. SL fail: ' + (slErr?.message ?? '') + ' | Close fail: ' + (closeErr?.message ?? ''),
-          });
-        }
-      }
+      const nakedActions = await handleNakedSl(pos);
+      actions.push(...nakedActions);
       continue;
     }
 
-    // 0.5) NAKED-TP DETECTION delegated to NakedTpRecovery (src/runtime/naked-tp-recovery.ts).
     const recovered = await nakedTpRecovery.check(pos, getRest(pos.account));
     if (recovered) actions.push(recovered);
 
-    // 0.7) DCA-FILL DETECTION (S5 scaled-in): if Bybit position grew vs DB,
-    // a deeper DCA limit slot filled retroactively. Update DB qty + replace TP + notify.
-    // Skip if TP1 already partially closed (different code path handles that).
     if (!pos.tp1AlreadyFilled && pos.size > pos.dbInitialQty * 1.01) {
-      const accLabel = `${pos.account.bucket}/${pos.account.keyName}`;
-      const delta = pos.size - pos.dbInitialQty;
-      log.info('DCA fill detected', {
-        symbol: pos.symbol, account: accLabel,
-        prevSize: pos.dbInitialQty, newSize: pos.size, delta,
-      });
-      // 1) Update DB qty + initial_qty so reconcile aligns + R calc correct
-      try {
-        await query(
-          `UPDATE trades SET qty = $1, initial_qty = $1 WHERE id = $2`,
-          [pos.size, pos.dbTradeId]
-        );
-      } catch (e: any) {
-        log.warn('DCA fill — DB update failed', { err: e?.message });
-      }
-      // 2) Re-place TP for FULL position qty (existing TP only covers slot 1 size,
-      //    leaving 70%+ uncovered after full DCA deploy)
-      try {
-        const cli = getRest(pos.account);
-        const closingSide = pos.side === 'Sell' ? 'Buy' : 'Sell';
-        const ordersR: any = await withRetry(() => cli.getActiveOrders({ category: 'linear', symbol: pos.symbol }),
-          { label: `reTP-getOrders-${accLabel}` });
-        const oldTps = (ordersR.result?.list ?? []).filter((o: any) =>
-          o.reduceOnly === true && o.side === closingSide && o.orderType === 'Limit'
-        );
-        for (const tp of oldTps) {
-          await withRetry(() => cli.cancelOrder({ category: 'linear', symbol: pos.symbol, orderId: tp.orderId }),
-            { label: `reTP-cancel-${tp.orderLinkId}` });
-        }
-        // Place new single TP covering full filled position (tp1 == tp2 in S5 scaled-in)
-        const tpPrice = pos.dbTP1;
-        if (tpPrice != null) {
-          const info = await getInstrumentInfo(pos.account, pos.symbol);
-          const qtyStr = roundQtyToStep(pos.size, info);
-          const newLink = `rtp-dca-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-          await withRetry(() => cli.submitOrder({
-            category: 'linear', symbol: pos.symbol,
-            side: closingSide, orderType: 'Limit', qty: qtyStr,
-            price: roundPriceToTick(tpPrice, info),
-            timeInForce: 'GTC', reduceOnly: true,
-            orderLinkId: newLink,
-          }), { label: `reTP-place-${accLabel}` });
-          log.info('TP re-placed for full DCA-deployed position', {
-            symbol: pos.symbol, account: accLabel, newQty: pos.size, tpPrice,
-          });
-        }
-      } catch (e: any) {
-        log.warn('DCA fill — TP re-place failed', { err: e?.message });
-      }
-      // 3) Telegram notification
-      try {
-        await notifyDcaFill({
-          symbol: pos.symbol,
-          side: pos.side.toLowerCase() === 'buy' ? 'buy' : 'sell',
-          prevSize: pos.dbInitialQty,
-          newSize: pos.size,
-          newAvgPrice: pos.entryPrice,
-          sl: pos.curSL,
-          tp: pos.curTP,
-          accountSummaries: [`${accLabel} — ${pos.dbInitialQty.toFixed(2)} → ${pos.size.toFixed(2)} ${pos.symbol.replace(/USDT$/,'')}  (+${delta.toFixed(2)})`],
-        });
-      } catch (e: any) {
-        log.warn('DCA fill — telegram failed', { err: e?.message });
-      }
-      actions.push({
-        symbol: pos.symbol, account: accLabel,
-        action: 'DCA-FILL-DETECTED', reason: `size grew ${pos.dbInitialQty}→${pos.size}; TP re-placed`,
-      });
+      const dcaAction = await handleDcaFill(pos);
+      if (dcaAction) actions.push(dcaAction);
     }
 
-    // 1) TP1 partial-fill detection → DO NOT MOVE SL (no_move strategy, validated 365d).
-    // Backtest cap-6 @ slip 0.20%: BE/BE+ both gave +47% annual / 68% WR.
-    // No-move gave +66% annual / 82.6% WR / lower MaxDD (2.77% vs 3.45%).
-    // Reason: TP1 is close (~0.2% from entry); moving SL to BE often re-stops on
-    // normal retests before TP2 has a chance to fill. Keeping initial SL means
-    // the remaining 50% rides to TP2 or back to original risk — net positive on average.
-    if (detectTp1Filled(pos)) {
-      const accountLabel = `${pos.account.bucket}/${pos.account.keyName}`;
+    const tp1Triggered = isTp1PartialFromPosition(
+      pos.dbInitialQty,
+      pos.size,
+      pos.dbInitialQty,
+      pos.dbCurrentQty,
+      pos.tp1AlreadyFilled,
+    );
+    if (tp1Triggered) {
       try {
-
-        // b) compute filled qty + realized PnL from Bybit closedPnL records
-        //    (sum reduce-side fills since position opened that match this trade)
-        const c = getRest(pos.account);
-        const closedPnlR = await withRetry(
-          () => c.getClosedPnL({ category: 'linear', symbol: pos.symbol, limit: 50 }),
-          { label: `closed-pnl-tp1-${pos.symbol}-${pos.account.keyName}` }
+        const fill = await inferTp1Fill(
+          pos.account,
+          pos.symbol,
+          pos.dbInitialQty,
+          pos.size,
+          pos.dbTP1,
+          pos.entryPrice,
+          pos.side,
+          pos.createdTime,
         );
-        const closingSide = pos.side === 'Sell' ? 'Buy' : 'Sell';
-        const fills = (closedPnlR.result?.list ?? [])
-          .filter((x: any) => x.side === closingSide && parseInt(x.updatedTime, 10) >= pos.createdTime);
-        let filledQty = fills.reduce((s: number, f: any) => s + parseFloat(f.closedSize), 0);
-        let realizedPnl = fills.reduce((s: number, f: any) => s + parseFloat(f.closedPnl), 0);
-        let exitPrice = fills.length > 0 ? parseFloat(fills[0].avgExitPrice) : pos.dbTP1 ?? pos.entryPrice;
-
-        // FALLBACK: Bybit closedPnL has 30-90s delay AND can return empty for some accounts
-        // (observed: Ivan account empty list 5 min after fill while position size halved).
-        // If position halved but no PnL records yet, compute analytically from DB TP1 + filled qty.
-        if (filledQty === 0 || realizedPnl === 0) {
-          const inferredFillQty = pos.dbInitialQty - pos.size;   // how much was actually closed
-          if (inferredFillQty > 0 && pos.dbTP1 != null) {
-            filledQty = inferredFillQty;
-            const direction = pos.side === 'Sell' ? -1 : 1;     // long: tp1>entry → +; short: tp1<entry → -×-1=+
-            realizedPnl = (pos.dbTP1 - pos.entryPrice) * inferredFillQty * direction;
-            exitPrice = pos.dbTP1;
-            log.warn('TP1 fill: closedPnL empty, computed analytically', {
-              symbol: pos.symbol, account: pos.account.keyName,
-              inferredQty: filledQty, computedPnl: realizedPnl,
-            });
-          }
-        }
-
-        // c) UPDATE trades table: keep status='open' (TP2 still active), update qty + tp1 cols
-        await query(
-          `UPDATE trades SET qty = $1, tp1_filled_at = NOW(), tp1_filled_qty = $2, tp1_realized_pnl_usd = $3
-           WHERE id = $4`,
-          [pos.size, filledQty, realizedPnl, pos.dbTradeId]
-        );
-
-        // d) queue per-account fill into the consolidated group for ONE Telegram message
-        const key = `${pos.symbol}-${pos.side}`;
-        const grp = tp1Groups.get(key) ?? {
-          symbol: pos.symbol, side: pos.side, entryPrice: pos.entryPrice, exitPrice, fills: [],
-        };
-        grp.fills.push({
-          label: accountLabel,
-          qty: filledQty,
-          pnlUsd: realizedPnl,
-          pnlR: Position.riskUnitsFromRaw({
-            entryPrice: pos.entryPrice,
-            sl: pos.dbInitialSL,
-            initialQty: pos.dbInitialQty,
-            pnlUsd: realizedPnl,
-          }),
-        });
-        tp1Groups.set(key, grp);
-
-        actions.push({ symbol: pos.symbol, account: accountLabel,
-          action: 'TP1-FILL', reason: `qty=${filledQty.toFixed(4)} pnl=$${realizedPnl.toFixed(2)} → SL@BE` });
-        log.info('TP1 fill processed', { symbol: pos.symbol, account: pos.account.keyName,
-          filledQty, realizedPnl, remainingSize: pos.size });
+        const tp1Action = await handleTp1Fill(pos, fill, tp1Groups);
+        actions.push(tp1Action);
       } catch (e: any) {
-        log.warn('TP1 fill processing failed', { symbol: pos.symbol, account: pos.account.keyName, err: e.message });
+        log.warn('TP1 fill processing failed', {
+          symbol: pos.symbol, account: pos.account.keyName, err: e.message,
+        });
       }
       continue;
     }
-
-    // Regime-flip / time-stop / vol-spike close-rules INTENTIONALLY DISABLED.
-    // The 365-day backtest was validated WITHOUT these rules — the strategy expects
-    // positions to ride to either SL, TP1, TP2, or end-of-window time stop.
-    // Auto-closing on intermediate signals (1H regime flip, vol spike) actively HURT
-    // simulated returns by ~22% (proved on 30-day walk). Setups can take 1-3 days to
-    // resolve; transient 1H changes are noise to the structural setup.
-    //
-    // Watcher's ONLY active job: detect TP1 partial-fill and move SL → BE.
-    // Everything else is server-side: SL hits → Bybit closes; TP1 (currently full
-    // close, see TODO below) → Bybit closes.
-    //
-    // TODO: implement true partial close at TP1 + remainder TP at TP2 via two
-    // reduce-only orders set at entry time.
   }
 
-  // Send ONE consolidated Telegram message per (symbol+side) group with all account fills.
-  for (const grp of tp1Groups.values()) {
-    try {
-      const totalPnl = grp.fills.reduce((s, f) => s + f.pnlUsd, 0);
-      const totalR = grp.fills.reduce((s, f) => s + f.pnlR, 0) / Math.max(grp.fills.length, 1);
-      await notifyClose({
-        symbol: grp.symbol,
-        side: grp.side === 'Buy' ? 'buy' : 'sell',
-        exitReason: 'tp1',
-        entryPrice: grp.entryPrice,
-        exitPrice: grp.exitPrice,
-        pnlUsd: totalPnl,
-        pnlR: totalR,
-        accountFills: grp.fills,
-        comment: 'TP1 отработал. SL переведён в безубыток (BE). Остаток позиции 50% едет к TP2 без риска.',
-      });
-      log.info('TP1 fill TG sent', { symbol: grp.symbol, accounts: grp.fills.length, totalPnl });
-    } catch (e: any) {
-      log.error('TP1 fill TG send failed', { symbol: grp.symbol, err: e.message });
-    }
-  }
-
-  // Drawdown alerts (variant B): one alert per pair per 4h when unrealized loss > 0.7R.
-  // Bot does NOT auto-close — operator decides. Backtest validation showed auto-close
-  // at intermediate signals reduces PF by ~22%.
+  await flushTp1Groups(tp1Groups);
   await sendDrawdownAlerts(positions);
 
   return { inspected: positions.length, actions };
@@ -540,17 +149,28 @@ const DRAWDOWN_ALERT_THROTTLE_MS = 4 * 3_600_000;
 const DRAWDOWN_STATE_PATH = '/tmp/drawdown-alerts.json';
 
 async function sendDrawdownAlerts(positions: BybitPos[]): Promise<void> {
-  // Aggregate per pair (symbol+side) — one alert per pair, not per account
-  type Group = { symbol: string; side: 'Buy' | 'Sell'; totalUpnl: number; totalRisk: number; entry: number; mark: number; sl: number };
+  type Group = {
+    symbol: string;
+    side: 'Buy' | 'Sell';
+    totalUpnl: number;
+    totalRisk: number;
+    entry: number;
+    mark: number;
+    sl: number;
+  };
   const groups = new Map<string, Group>();
   for (const pos of positions) {
-    if (pos.tp1AlreadyFilled) continue;  // ride-free after TP1, no alert needed
+    if (pos.tp1AlreadyFilled) continue;
     const key = `${pos.symbol}-${pos.side}`;
     const stopDist = Math.abs(pos.entryPrice - pos.dbInitialSL);
     const positionRisk = stopDist * pos.dbInitialQty;
     const g = groups.get(key) ?? {
-      symbol: pos.symbol, side: pos.side, totalUpnl: 0, totalRisk: 0,
-      entry: pos.entryPrice, mark: pos.entryPrice + (pos.unrealisedPnl / Math.max(pos.size, 1)) * (pos.side === 'Sell' ? -1 : 1),
+      symbol: pos.symbol,
+      side: pos.side,
+      totalUpnl: 0,
+      totalRisk: 0,
+      entry: pos.entryPrice,
+      mark: pos.entryPrice + (pos.unrealisedPnl / Math.max(pos.size, 1)) * (pos.side === 'Sell' ? -1 : 1),
       sl: pos.curSL,
     };
     g.totalUpnl += pos.unrealisedPnl;
@@ -558,7 +178,6 @@ async function sendDrawdownAlerts(positions: BybitPos[]): Promise<void> {
     groups.set(key, g);
   }
 
-  // Read throttle state (last alert timestamp per pair)
   let state: Record<string, number> = {};
   try {
     state = JSON.parse(require('node:fs').readFileSync(DRAWDOWN_STATE_PATH, 'utf-8'));
@@ -566,10 +185,10 @@ async function sendDrawdownAlerts(positions: BybitPos[]): Promise<void> {
 
   for (const g of groups.values()) {
     const upnlR = g.totalRisk > 0 ? g.totalUpnl / g.totalRisk : 0;
-    if (upnlR >= -DRAWDOWN_ALERT_R_THRESHOLD) continue;   // not deep enough
+    if (upnlR >= -DRAWDOWN_ALERT_R_THRESHOLD) continue;
     const key = `${g.symbol}-${g.side}`;
     const lastAlertTs = state[key] ?? 0;
-    if (Date.now() - lastAlertTs < DRAWDOWN_ALERT_THROTTLE_MS) continue;   // throttled
+    if (Date.now() - lastAlertTs < DRAWDOWN_ALERT_THROTTLE_MS) continue;
 
     try {
       await notifyAlert({
