@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { loadAccounts, AccountKey } from '../core/accounts';
 import { getRest, getInstrumentInfo, roundPriceToTick, roundQtyToStep, withRetry } from '../core/bybit';
+import { closeAndVerify } from '../core/close-verifier';
 import { query } from '../core/db';
 import { computeFeatures, CandleRow } from '../data/features';
 import { notifyAlert, notifyClose, notifyDcaFill } from '../core/tg-templates';
@@ -150,21 +151,19 @@ async function moveStopLoss(pos: BybitPos, newSL: number, reason: string): Promi
 }
 
 async function closePosition(pos: BybitPos, reason: string): Promise<void> {
-  const c = getRest(pos.account);
-  const info = await getInstrumentInfo(pos.account, pos.symbol);
-  // Close via reduce-only market order opposite side
-  const r = await withRetry(() => c.submitOrder({
-    category: 'linear',
-    symbol: pos.symbol,
-    side: pos.side === 'Buy' ? 'Sell' : 'Buy',
-    orderType: 'Market',
-    qty: String(pos.size),
-    timeInForce: 'IOC',
-    reduceOnly: true,
-  }), { label: `close-${pos.symbol}-${pos.account.keyName}` });
-  if (r.retCode !== 0) throw new Error(`close retCode=${r.retCode} ${r.retMsg}`);
+  const result = await closeAndVerify(pos.account, pos.symbol, { reason, cancelOrders: false });
+  if (result.status === 'stuck' || result.status === 'error') {
+    throw new Error(
+      `closePosition ${pos.symbol}: status=${result.status} finalSize=${result.finalSize} detail=${result.detail ?? ''}`,
+    );
+  }
   log.warn('position closed by watcher', {
-    symbol: pos.symbol, account: pos.account.keyName, reason,
+    symbol: pos.symbol,
+    account: pos.account.keyName,
+    reason,
+    finalSize: result.finalSize,
+    status: result.status,
+    attempts: result.attempts,
   });
 }
 
@@ -294,14 +293,45 @@ export async function runPositionWatcher(): Promise<{
           detail: `${pos.symbol} ${pos.side} был БЕЗ стоп-лосса! Установлен SL=${pos.dbInitialSL.toFixed(4)} (из DB).`,
           action: 'Проверь Bybit — почему SL не сохранился при open. Возможен баг в execute.ts',
         });
-      } catch (e: any) {
-        log.error('EMERGENCY SL set FAILED — position is naked!', { err: e?.message });
-        await notifyAlert({
-          kind: 'reconcile_divergence',
-          symbol: pos.symbol,
-          detail: `🆘 КРИТИЧНО: ${pos.symbol} БЕЗ SL и не получилось установить аварийный. Закрой вручную.`,
-          action: 'Закрой позицию через Bybit немедленно',
-        });
+      } catch (slErr: any) {
+        log.error('EMERGENCY SL set FAILED — falling back to force close', { err: slErr?.message });
+        try {
+          const closeResult = await closeAndVerify(pos.account, pos.symbol, {
+            reason: 'naked-no-SL-fallback',
+            cancelOrders: false,
+          });
+          if (closeResult.status === 'ok') {
+            actions.push({
+              symbol: pos.symbol,
+              account: `${pos.account.bucket}/${pos.account.keyName}`,
+              action: 'EMERGENCY-CLOSE',
+              reason: 'naked + SL set rejected → force-closed',
+            });
+            await notifyAlert({
+              kind: 'reconcile_divergence',
+              symbol: pos.symbol,
+              detail: `${pos.symbol} ${pos.side} был БЕЗ SL и SL не удалось установить — экстренно закрыта по рынку. finalSize=${closeResult.finalSize}.`,
+              action: 'Проверь execute.ts и Bybit лог — почему SL не привязался при open.',
+            });
+          } else if (closeResult.status === 'dust_below_min') {
+            await notifyAlert({
+              kind: 'reconcile_divergence',
+              symbol: pos.symbol,
+              detail: `${pos.symbol} ${pos.side} БЕЗ SL, остаток < min notional (size=${closeResult.finalSize}). Bybit не принимает reduce-only Market. Риск < $5, мониторим.`,
+              action: 'Ручное закрытие через UI, либо подожди дрейф до SL/ликвидации.',
+            });
+          } else {
+            throw new Error(`closeAndVerify status=${closeResult.status} finalSize=${closeResult.finalSize}`);
+          }
+        } catch (closeErr: any) {
+          log.error('EMERGENCY close ALSO FAILED', { err: closeErr?.message });
+          await notifyAlert({
+            kind: 'reconcile_divergence',
+            symbol: pos.symbol,
+            detail: `🆘 КРИТИЧНО: ${pos.symbol} БЕЗ SL и не получилось ни установить SL, ни закрыть по рынку. Закрой вручную.`,
+            action: 'Закрой позицию через Bybit UI немедленно. SL fail: ' + (slErr?.message ?? '') + ' | Close fail: ' + (closeErr?.message ?? ''),
+          });
+        }
       }
       continue;
     }
