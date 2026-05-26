@@ -40,6 +40,7 @@ export interface InstrumentInfo {
   maxOrderQty: number;        // limit-order ceiling (940 for BNB)
   maxMktOrderQty: number;     // market-order ceiling (370 for BNB) — usually MUCH lower
   tickSize: number;
+  minNotionalValue: number;   // Bybit V5 lotSizeFilter.minNotionalValue (USDT); fallback 5 — never 0.
 }
 
 const instrumentCache = new Map<string, InstrumentInfo>();
@@ -67,6 +68,7 @@ export async function getInstrumentInfo(account: AccountKey, symbol: string): Pr
     maxOrderQty: parseFloat(item.lotSizeFilter?.maxOrderQty ?? '1e9'),
     maxMktOrderQty: parseFloat(item.lotSizeFilter?.maxMktOrderQty ?? item.lotSizeFilter?.maxOrderQty ?? '1e9'),
     tickSize: parseFloat(item.priceFilter?.tickSize ?? '0.1'),
+    minNotionalValue: parseFloat(item.lotSizeFilter?.minNotionalValue ?? '5'),
   };
   // Stash decimal counts on the object for formatting helpers
   (info as any)._qtyDecimals = decimalsOf(item.lotSizeFilter?.qtyStep ?? '0.001');
