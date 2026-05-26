@@ -19,6 +19,36 @@ function fileAgeMinutes(p: string): number | null {
   } catch { return null; }
 }
 
+const DAEMON_HEARTBEAT_PATH = '/tmp/position-monitor-heartbeat.json';
+const DAEMON_STALE_MS = 90_000;
+
+interface DaemonHeartbeat {
+  status: string;
+  writtenAt: number;
+  accounts: Array<{ account: string; wsConnected: boolean; lastWsEventAt: number }>;
+}
+
+function daemonStalenessReasons(): string[] {
+  const reasons: string[] = [];
+  try {
+    const raw = fs.readFileSync(DAEMON_HEARTBEAT_PATH, 'utf-8');
+    const hb = JSON.parse(raw) as DaemonHeartbeat;
+    const ageMs = Date.now() - hb.writtenAt;
+    if (ageMs > DAEMON_STALE_MS) {
+      reasons.push(`position-monitor heartbeat устарел ${Math.round(ageMs / 1000)}s — daemon мёртв?`);
+      return reasons;
+    }
+    for (const acc of hb.accounts ?? []) {
+      if (!acc.wsConnected) {
+        reasons.push(`position-monitor: WS отключён на аккаунте ${acc.account}`);
+      }
+    }
+  } catch {
+    reasons.push('position-monitor heartbeat отсутствует — daemon ещё не запущен или мёртв');
+  }
+  return reasons;
+}
+
 // State file to prevent double-firing within the same UTC hour.
 const HEARTBEAT_STATE_PATH = '/tmp/last-heartbeat-hour.txt';
 
@@ -106,6 +136,11 @@ async function main() {
   if (scanDecideAgeMin != null && scanDecideAgeMin > SCAN_DECIDE_STALE_MIN) {
     stalenessReasons.push(`scan-decide не обновлялся ${scanDecideAgeMin}m (top-of-hour падает)`);
   }
+
+  for (const reason of daemonStalenessReasons()) {
+    stalenessReasons.push(reason);
+  }
+
   const staleDegraded = stalenessReasons.length > 0;
 
   await notifyHeartbeat({
