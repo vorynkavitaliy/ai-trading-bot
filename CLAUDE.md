@@ -64,15 +64,26 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 4. **Reconcile before every cycle.** If `trades` DB rows and Bybit positions diverge → halt analysis until aligned (`src/runtime/reconcile.ts`).
 5. **No live entry until backtest gate passes:** PF ≥ 1.4, MaxDD ≤ 4%, expectancy ≥ 0.3R, ≥ 100 trades combined across the universe on OOS walk-forward. Per-pair expR may dip slightly (e.g. XRP 0.25R) provided combined portfolio metrics stay above gate.
 
-## Architecture: cron-driven (no Claude in hot path)
+## Architecture: cron-driven + sub-second WS daemon
 
-**Cron handles 100% of execution. Claude is invoked manually, not on schedule.**
+**Two layers handle 100% of execution. Claude is invoked manually, not on schedule.**
 
 ```
+[systemd: position-monitor.service]  (TASK-006, 2026-05-26)
+  src/runtime/position-monitor.ts (long-running daemon, one Bybit V5 private
+  WS connection per AccountKey for position/execution/order on linear)
+  → TP1 partial fill (≤1s)        → handleTp1Fill (DB + Telegram)
+  → Naked-SL detected (≤2s)       → handleNakedSl (amend OR closeAndVerify)
+  → Full close (position.size==0) → autoCloseTrade (trade-closer module)
+  → Dust (size < 1% × initial)    → closeAndVerify
+  → DCA fill (size grew)          → handleDcaFill (TP re-place)
+  → 30s REST poll fallback + on-reconnect REST resync
+  → /tmp/position-monitor-heartbeat.json every 30s (consumed by heartbeat.ts)
+
 [cron */5min]  scripts/cycle.sh:
-  → reconcile.ts     (auto-close db_without_bybit, sends Telegram exits — every 5min)
-  → position-watcher.ts (TP1 detect→no-move SL, naked-TP recovery, drawdown alerts, SL safety-net)
-  → heartbeat.ts     (self-throttles to 1/hour)
+  → reconcile.ts     (5-min catch-net audit: auto-close db_without_bybit, Telegram exits)
+  → position-watcher.ts (legacy cron path — kept during TASK-006 overlap; daemon owns these events sub-second)
+  → heartbeat.ts     (self-throttles to 1/hour; surfaces daemon-staleness via /tmp/position-monitor-heartbeat.json)
   → if top-of-hour (HH:00-04):
        → scan-decide.ts   (refresh + enrichment + risk-check, writes /tmp/scan-decide-latest.json)
        → if enterCount > 0:
@@ -81,6 +92,21 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 ```
 
 Why no `/loop /trade-watch` execution: 365d walk-decide proved trade-level filtering on enrichment data is approximately neutral (≈+1.7% lift, mostly variance — algo edge already strong). Cron-direct execute closes a 5–30 min latency gap that previously caused 70%+ of intraday setups to slip past their entry windows.
+
+### 24-48h overlap migration (TASK-006)
+
+The WS daemon and cron `position-watcher` overlap for the first 24-48h after `npm run monitor:install && npm run monitor:start`. Both run; whichever sees an event first writes to DB. Handlers gate on `tp1_filled_at IS NULL` and `status='open'`, so a double-fire is a no-op for the loser.
+
+Migration steps for the operator:
+
+1. `npm run monitor:install` — copies systemd unit, enables on boot.
+2. `npm run monitor:start` — starts the daemon.
+3. `npm run monitor:health` — exit 0 means WS connected + heartbeat fresh.
+4. `journalctl -u position-monitor -f` — watch for `TP1 fill processed` / `auto-closed trade` log lines during the overlap day.
+5. Once daemon has been seen handling at least one real TP1/SL/close event AND `/tmp/cycle-watcher.out` shows `actions: []` for the same events: edit `scripts/cycle.sh` to remove the `position-watcher` block.
+6. 2 weeks later: delete `position-watcher.ts main()` if no operator-side need to run it manually.
+
+If the daemon misbehaves: `npm run monitor:stop` halts it. Cron `position-watcher` resumes responsibility within the next 5min tick.
 
 **Claude's role (manual invocation only, no live execution path):**
 - News halt — `/pause` via Telegram bot creates `vault/Watchlist/PAUSE.md` (auto-execute halts while it exists; `/resume` removes it).
@@ -107,7 +133,8 @@ Strategies live in `src/strategies/cg-fade.ts` (4 factories: `lsTopPositionFade`
 
 ## Cadence discipline
 
-- **5m fire** = reconcile + position-watcher only. NOT decision-making.
+- **Sub-second** = position-monitor daemon (WS push). TP1, naked-SL, full-close, dust, DCA. NO decision-making.
+- **5m fire** = reconcile + (during TASK-006 overlap) position-watcher catch-net. NOT decision-making.
 - **1H close** = scan-decide runs (HH:00-04 cron). Strategy.decide() polls CG/bars; for 4H-based CG strategies, returns 'hold' unless 4H boundary has just closed → effectively triggers at 00/04/08/12/16/20 UTC.
 - **Do not cancel pending limit orders younger than 15 minutes** except for catastrophic events (kill switch, FOMC surprise, exchange outage).
 
