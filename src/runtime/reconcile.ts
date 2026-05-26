@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
 import { loadAccounts, AccountKey } from '../core/accounts';
 import { getRest, withRetry } from '../core/bybit';
+import { closeAndVerify } from '../core/close-verifier';
 import { query } from '../core/db';
 import { notifyClose } from '../core/tg-templates';
 import { log } from '../core/logger';
@@ -296,27 +296,28 @@ export async function runReconcile(): Promise<ReconcileResult> {
 
     if (verdict === 'dust') {
       const ratioVsInitial = pos.size / Math.max(match.initial_qty, 1);
-      log.info('reconcile: dust detected — closing on Bybit + auto-close DB', {
+      log.info('reconcile: dust detected — closing via closeAndVerify', {
         symbol: pos.symbol, account: pos.account,
         initial_qty: match.initial_qty, bybit_size: pos.size,
         ratio: ratioVsInitial.toFixed(4),
       });
-      try {
-        const accForDust = accounts.find((a) => `${a.bucket}/${a.keyName}` === pos.account);
-        if (accForDust) {
-          const c = getRest(accForDust);
-          const closingSide = pos.side === 'Buy' ? 'Sell' : 'Buy';
-          await withRetry(() => c.submitOrder({
-            category: 'linear', symbol: pos.symbol,
-            side: closingSide, orderType: 'Market', qty: String(pos.size),
-            timeInForce: 'IOC', reduceOnly: true,
-            orderLinkId: `dust-${randomUUID().replace(/-/g, '').slice(0, 16)}`,
-          }), { label: `dust-close-${pos.symbol}-${pos.account}`, tries: 2 });
-          // Mark pos as zero — db_without_bybit loop will then auto-close trade.
-          pos.size = 0;
+      const accForDust = accounts.find((a) => `${a.bucket}/${a.keyName}` === pos.account);
+      if (accForDust) {
+        try {
+          const r = await closeAndVerify(accForDust, pos.symbol, {
+            reason: `reconcile-dust trade=${match.id}`,
+            cancelOrders: false,
+          });
+          if (r.status === 'ok' || r.status === 'dust_below_min') {
+            pos.size = 0;
+          } else {
+            log.warn('reconcile dust close stuck', {
+              symbol: pos.symbol, status: r.status, finalSize: r.finalSize,
+            });
+          }
+        } catch (e: any) {
+          log.warn('reconcile dust close threw', { symbol: pos.symbol, err: e?.message });
         }
-      } catch (e: any) {
-        log.warn('dust close failed', { symbol: pos.symbol, err: e?.message });
       }
       continue;
     }
