@@ -161,11 +161,22 @@ export async function handleTp1Fill(
 ): Promise<RecoveryAction> {
   const accountLabel = `${pos.account.bucket}/${pos.account.keyName}`;
 
-  await query(
+  const res = await query(
     `UPDATE trades SET qty = $1, tp1_filled_at = NOW(), tp1_filled_qty = $2, tp1_realized_pnl_usd = $3
      WHERE id = $4 AND tp1_filled_at IS NULL`,
     [pos.size, fill.filledQty, fill.realizedPnl, pos.dbTradeId],
   );
+  if (res.rowCount === 0) {
+    log.debug('TP1 fill lost race — DB already updated by another writer', {
+      symbol: pos.symbol, account: pos.account.keyName, dbTradeId: pos.dbTradeId,
+    });
+    return {
+      symbol: pos.symbol,
+      account: accountLabel,
+      action: 'TP1-FILL-NOOP',
+      reason: 'already processed',
+    };
+  }
 
   const key = `${pos.symbol}-${pos.side}`;
   const grp = tp1Groups.get(key) ?? {

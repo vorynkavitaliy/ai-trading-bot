@@ -107,13 +107,17 @@ export async function autoCloseTrade(t: OpenTrade, fills: ClosedFill[]): Promise
   const exitReason = inferExitReason(t, wAvgExit);
   const pnlR = Position.fromOpenTrade(t).riskUnits(totalPnl);
 
-  await query(
+  const res = await query(
     `UPDATE trades SET status = 'closed',
        exit_price = $1, closed_at = to_timestamp($2 / 1000.0),
        realized_r = $3, pnl_usd = $4, exit_reason = $5
-     WHERE id = $6`,
+     WHERE id = $6 AND status = 'open'`,
     [wAvgExit, lastTs, pnlR, totalPnl, exitReason, t.id],
   );
+  if (res.rowCount === 0) {
+    log.info('autoCloseTrade lost race — already closed', { id: t.id, symbol: t.symbol });
+    return null;
+  }
 
   log.info('auto-closed trade', {
     id: t.id, symbol: t.symbol, account: `${t.account_bucket}/${t.account_key}`,

@@ -38,6 +38,7 @@ import {
   flushTp1Groups,
 } from './position-events';
 import { autoCloseTrade, fetchRecentClosedPnL, notifyConsolidatedCloses } from './trade-closer';
+import { nakedTpRecovery } from './naked-tp-recovery';
 
 const NAKED_SL_GRACE_MS = 60_000;
 const EXEC_ID_LRU_CAP = 1024;
@@ -54,6 +55,7 @@ interface SymbolState {
   lastFullCloseTs: number;
   lastSeq: number;
   createdMs: number;
+  lastTpRecoveryTs?: number;
 }
 
 interface AccountMonitorStatus {
@@ -90,6 +92,7 @@ export class AccountMonitor {
   private readonly ws: BybitWs;
   private readonly state = new Map<string, SymbolState>();
   private readonly recentExecIds = new ExecIdLru(EXEC_ID_LRU_CAP);
+  private readonly inflight = new Map<string, Promise<void>>();
   private restTimer: NodeJS.Timeout | null = null;
   private lastRestPollAt = 0;
   private stopped = false;
@@ -99,10 +102,20 @@ export class AccountMonitor {
     this.account = account;
     this.pollSec = pollSec;
     this.ws = new BybitWs(account);
-    this.ws.on('position', (e) => { void this.onPosition(e); });
+    this.ws.on('position', (e) => this.dispatchPosition(e));
     this.ws.on('execution', (e) => { void this.onExecution(e); });
     this.ws.on('order', (e) => { void this.onOrder(e); });
     this.ws.on('reconnected', () => { void this.restResync('reconnect'); });
+  }
+
+  private dispatchPosition(e: PositionUpdate): Promise<void> {
+    const sym = e.data.symbol;
+    const prev = this.inflight.get(sym) ?? Promise.resolve();
+    const next = prev.then(() => this.onPosition(e)).catch((err: any) => {
+      log.warn('onPosition crashed', { sym, err: err?.message });
+    });
+    this.inflight.set(sym, next);
+    return next;
   }
 
   async start(): Promise<void> {
@@ -259,6 +272,32 @@ export class AccountMonitor {
       return;
     }
 
+    if (size > 0 && stopLoss > 0 && !pos.tp1AlreadyFilled) {
+      const state = this.state.get(symbol);
+      const tpRecoveryLast = state?.lastTpRecoveryTs ?? 0;
+      if (Date.now() - tpRecoveryLast > 5 * 60_000) {
+        try {
+          const recovered = await nakedTpRecovery.check(pos, getRest(this.account));
+          if (recovered) {
+            log.info('daemon naked-TP recovery', {
+              symbol: recovered.symbol,
+              account: recovered.account,
+              action: recovered.action,
+              reason: recovered.reason,
+            });
+            if (state) {
+              state.lastTpRecoveryTs = Date.now();
+              this.state.set(symbol, state);
+            }
+          }
+        } catch (err: any) {
+          log.warn('daemon naked-TP check failed', {
+            symbol, account: this.account.keyName, err: err?.message,
+          });
+        }
+      }
+    }
+
     if (prevSL !== stopLoss || prevTP !== takeProfit) {
       log.debug('SL/TP amend ack', {
         account: this.account.keyName, symbol,
@@ -354,7 +393,7 @@ export class AccountMonitor {
         const prevSize = prev?.lastSize ?? 0;
         const prevSL = prev?.lastSL ?? 0;
         if (prev && prevSize === size && prevSL === parseFloat(p.stopLoss ?? '0')) continue;
-        await this.onPosition({
+        await this.dispatchPosition({
           account: this.account,
           data: {
             ...p,
@@ -365,7 +404,7 @@ export class AccountMonitor {
       }
       for (const sym of [...this.state.keys()]) {
         if (!seenSymbols.has(sym) && (this.state.get(sym)?.lastSize ?? 0) > 0) {
-          await this.onPosition({
+          await this.dispatchPosition({
             account: this.account,
             data: {
               symbol: sym,
