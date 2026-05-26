@@ -9,7 +9,43 @@
       "Bash(test -w *)",
       "Bash(stat *)",
       "Bash(realpath *)",
-      "Bash(readlink *)"
+      "Bash(readlink *)",
+      "Bash(mkdir -p /root/Projects/ai-trading-bot/board/**)",
+      "Bash(mv /root/Projects/ai-trading-bot/board/tasks/* /root/Projects/ai-trading-bot/board/archive/)",
+      "Bash(jq * /root/Projects/ai-trading-bot/board/index.json)",
+      "Read(/root/Projects/ai-trading-bot/board/**)",
+      "Read(/root/Projects/ai-trading-bot/.claude/**)",
+      "Read(/root/Projects/ai-trading-bot/specs/**)",
+      "Write(/root/Projects/ai-trading-bot/board/**)",
+      "Write(/root/Projects/ai-trading-bot/specs/**)",
+      "Edit(/root/Projects/ai-trading-bot/board/**)",
+      "Edit(/root/Projects/ai-trading-bot/specs/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /root/Projects/ai-trading-bot/.claude/hooks/block-heredoc.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash /root/Projects/ai-trading-bot/.claude/hooks/block-destructive.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /root/Projects/ai-trading-bot/.claude/hooks/warn-comments.sh"
+          }
+        ]
+      }
     ]
   }
 }

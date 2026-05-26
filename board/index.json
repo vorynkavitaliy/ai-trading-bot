@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "generated_at": "2026-05-24T09:05:00Z",
+  "counters": {
+    "next_task": 5,
+    "next_epic": 2
+  },
+  "tasks": {
+    "TASK-001": {
+      "status": "done",
+      "archived": true,
+      "assignee": "orchestrator",
+      "reviewer": "",
+      "epic": "",
+      "sprint": "",
+      "title": "Validate board + agent setup with a no-op task",
+      "live_sensitive": false,
+      "iteration": 1,
+      "blocked_by": [],
+      "created": "2026-05-24",
+      "updated": "2026-05-24T08:15:00Z"
+    },
+    "TASK-002": {
+      "status": "done",
+      "archived": true,
+      "assignee": "architect",
+      "reviewer": "",
+      "epic": "EPIC-001",
+      "sprint": "",
+      "title": "Verify/fix reconcile.ts:188 riskedUsd uses initial_qty, not qty (TP1-partial inflation)",
+      "live_sensitive": true,
+      "iteration": 0,
+      "blocked_by": [],
+      "created": "2026-05-24",
+      "updated": "2026-05-24T09:00:39Z",
+      "resolution": "verified-not-present (commits 369f54a + 4826ee6 + migration 005)"
+    },
+    "TASK-003": {
+      "status": "done",
+      "archived": true,
+      "assignee": "tester",
+      "reviewer": "code-reviewer",
+      "epic": "EPIC-001",
+      "sprint": "",
+      "title": "Verify/fix data/backfill.ts ON CONFLICT для D/W баров (look-ahead bias)",
+      "live_sensitive": true,
+      "iteration": 2,
+      "blocked_by": [],
+      "created": "2026-05-24",
+      "updated": "2026-05-24T13:25:00Z",
+      "verdict": "PASSED — DO UPDATE WHERE incomplete applied; DB scrubbed + re-fetched (730×7 + 104×7); aggregation Δ=0.0000%; sanity backtest +94.19%/PF 1.55/MaxDD 6.29% (all 5 metrics in band, slight improvement over baseline). Committed as e7b3a25."
+    },
+    "TASK-004": {
+      "status": "done",
+      "archived": true,
+      "assignee": "tester",
+      "reviewer": "code-reviewer",
+      "epic": "EPIC-001",
+      "sprint": "",
+      "title": "Wave 2 batch: Position.riskUnits + QtyNormalizer + RetryPolicy + diagnostics cleanup (DRY+KISS)",
+      "live_sensitive": true,
+      "iteration": 1,
+      "blocked_by": [],
+      "created": "2026-05-24",
+      "updated": "2026-05-24T13:55:00Z",
+      "verdict": "PASSED — 4 commits (1145edb/6448467/7b4926f/7ace203). Backtest BIT-IDENTICAL to baseline (519/55.3/1.55/+94.19/6.29 — all per-pair sumR exact). Smoke 6/6. Reconcile aligned. Deferred: valid→isValid naming + N1-N3 log observability."
+    }
+  },
+  "epics": {
+    "EPIC-001": {
+      "status": "active",
+      "title": "SOLID refactor v1: устранение находок аудита 2026-05-24 по принципам OOP/SOLID/KISS/DRY в hot-path и core/ слоях",
+      "target_sprint": "",
+      "tasks": ["TASK-002", "TASK-003", "TASK-004"],
+      "created": "2026-05-24",
+      "updated": "2026-05-24T13:30:00Z"
+    }
+  },
+  "sprints": {}
+}
