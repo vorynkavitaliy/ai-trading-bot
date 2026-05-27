@@ -72,6 +72,74 @@ export async function linkTradeId(orderLinkId: string, tradeId: number): Promise
   );
 }
 
+export interface PromotablePending {
+  id: number;
+  orderLinkId: string;
+  accountBucket: string;
+  accountKey: string;
+  symbol: string;
+  side: 'Buy' | 'Sell';
+  orderType: 'Market' | 'Limit';
+  entryPrice: number | null;
+  sl: number;
+  tp1: number | null;
+  tp2: number | null;
+  riskPct: number | null;
+  rationale: string | null;
+  bybitOrderId: string | null;
+}
+
+// Find the unresolved intent for a credited position: a 'placed' row with no
+// trade_id yet, keyed on account+symbol+side, newest first. This is what the
+// promoter consumes to materialize a trades row once Bybit credits the position.
+export async function findUnpromotedPending(
+  accountBucket: string,
+  accountKey: string,
+  symbol: string,
+  side: 'Buy' | 'Sell'
+): Promise<PromotablePending | null> {
+  const r = await query<any>(
+    `SELECT id, order_link_id, account_bucket, account_key, symbol, side, order_type,
+            entry_price, sl, tp1, tp2, risk_pct, rationale, bybit_order_id
+       FROM pending_orders
+      WHERE account_bucket = $1 AND account_key = $2 AND symbol = $3 AND side = $4
+        AND status = 'placed' AND trade_id IS NULL
+      ORDER BY requested_at DESC
+      LIMIT 1`,
+    [accountBucket, accountKey, symbol, side]
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  return {
+    id: typeof row.id === 'string' ? parseInt(row.id, 10) : row.id,
+    orderLinkId: row.order_link_id,
+    accountBucket: row.account_bucket,
+    accountKey: row.account_key,
+    symbol: row.symbol,
+    side: row.side,
+    orderType: row.order_type,
+    entryPrice: row.entry_price != null ? parseFloat(row.entry_price) : null,
+    sl: parseFloat(row.sl),
+    tp1: row.tp1 != null ? parseFloat(row.tp1) : null,
+    tp2: row.tp2 != null ? parseFloat(row.tp2) : null,
+    riskPct: row.risk_pct != null ? parseFloat(row.risk_pct) : null,
+    rationale: row.rationale,
+    bybitOrderId: row.bybit_order_id,
+  };
+}
+
+// Mark a pending intent orphaned when its live limit is cancelled (e.g. by
+// cancelScaledInOrphans after a close). Keeps it out of the stale-orphan report
+// since it will never become a trade. Only touches still-unresolved rows.
+export async function markPendingOrphanedByLink(orderLinkId: string): Promise<void> {
+  await query(
+    `UPDATE pending_orders
+        SET status='orphaned', resolved_at=NOW()
+      WHERE order_link_id=$1 AND trade_id IS NULL AND status <> 'orphaned'`,
+    [orderLinkId]
+  );
+}
+
 export interface StalePending {
   id: number;
   orderLinkId: string;
