@@ -2,7 +2,7 @@
   "version": 1,
   "generated_at": "2026-05-24T09:05:00Z",
   "counters": {
-    "next_task": 5,
+    "next_task": 8,
     "next_epic": 2
   },
   "tasks": {
@@ -64,6 +64,51 @@
       "created": "2026-05-24",
       "updated": "2026-05-24T13:55:00Z",
       "verdict": "PASSED — 4 commits (1145edb/6448467/7b4926f/7ace203). Backtest BIT-IDENTICAL to baseline (519/55.3/1.55/+94.19/6.29 — all per-pair sumR exact). Smoke 6/6. Reconcile aligned. Deferred: valid→isValid naming + N1-N3 log observability."
+    },
+    "TASK-005": {
+      "status": "done",
+      "archived": true,
+      "assignee": "tester",
+      "reviewer": "code-reviewer",
+      "epic": "EPIC-001",
+      "sprint": "",
+      "title": "URGENT: atomic close verifier + dust/naked safety-net trifecta (ARB overnight incident)",
+      "live_sensitive": true,
+      "iteration": 1,
+      "blocked_by": [],
+      "created": "2026-05-26",
+      "updated": "2026-05-26T09:45:00Z",
+      "verdict": "PASSED — 8 commits (0ab03d4..7fded20). Review 0 Important. Smoke 7/7. Reconcile aligned + 0 divergences. close-symbol на flat state вернул no_position для 3/3 accounts (exercises full closeAcrossAccounts→closeAndVerify path без live submits). 3 ETH позиции (operator Tier-2 WIP) все с server-side SL = безопасно."
+    },
+    "TASK-006": {
+      "status": "done",
+      "archived": true,
+      "assignee": "tester",
+      "reviewer": "code-reviewer",
+      "epic": "EPIC-001",
+      "sprint": "",
+      "title": "Sub-10s position event reaction: hybrid WS+REST daemon via systemd",
+      "live_sensitive": true,
+      "iteration": 2,
+      "blocked_by": [],
+      "created": "2026-05-26",
+      "updated": "2026-05-26T12:45:00Z",
+      "verdict": "PASSED — 9 commits (a681fa6..c820062). Review iter1 4 Important + iter2 approved 0 Important. Typecheck clean. cron-shim path работает. Smoke 7/7. Reconcile aligned. monitor-health корректно detects daemon-missing (exit 1). 9 commits scope-isolated, operator WIP intact, cycle.sh unchanged. **Live deploy остаётся за operator: monitor:install → monitor:start → 24-48h overlap → remove position-watcher из cycle.sh.** DEPLOYED 2026-05-26: daemon active, WS на stream-demo.bybit.com (demoTrading override testnet), 3 accounts connected."
+    },
+    "TASK-007": {
+      "status": "done",
+      "archived": true,
+      "assignee": "tester",
+      "reviewer": "code-reviewer",
+      "epic": "EPIC-001",
+      "sprint": "",
+      "title": "Truthful limit-entry fill state: defer trade-row + Telegram until position credited",
+      "live_sensitive": true,
+      "iteration": 2,
+      "blocked_by": [],
+      "created": "2026-05-27",
+      "updated": "2026-05-27T09:30:00Z",
+      "verdict": "PASSED — 7 commits (bd29e7c..eeb6eed). iter1 1 Important (reconcile guard) → iter2 fix eeb6eed approved 0 Important. Typecheck clean, smoke 7/7, reconcile no-crash. Honest fill + pending-promoter (idempotent FOR-UPDATE) + truthful Telegram + risk-guard pending-aware + orphan-on-cancel. XRP incident fully resolved: limits filled→positions materialized→restored #240/241/242 to open (init_qty set)→reconcile aligned 6/6. OPERATOR: monitor:restart нужен чтобы daemon promotion code стал live."
     }
   },
   "epics": {
@@ -71,9 +116,9 @@
       "status": "active",
       "title": "SOLID refactor v1: устранение находок аудита 2026-05-24 по принципам OOP/SOLID/KISS/DRY в hot-path и core/ слоях",
       "target_sprint": "",
-      "tasks": ["TASK-002", "TASK-003", "TASK-004"],
+      "tasks": ["TASK-002", "TASK-003", "TASK-004", "TASK-005", "TASK-006", "TASK-007"],
       "created": "2026-05-24",
-      "updated": "2026-05-24T13:30:00Z"
+      "updated": "2026-05-27T09:30:00Z"
     }
   },
   "sprints": {}

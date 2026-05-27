@@ -7,11 +7,17 @@
  *
  * Key changes from v4:
  *   - BTCUSDT removed: 0R on honest engine (funding window blocks half its setups)
- *   - TAOUSDT removed: marginal +4.84R baseline, −1R with scaled-in
  *   - SOLUSDT added (S4 funding+TA confluence)
  *   - HYPEUSDT added (S4 funding+TA confluence)
  *   - All pairs run scaled-in FIXED: 3 ATR-spaced limits, dca_boost decay 0.5,
  *     TP locked at signal+2·ATR (does NOT recompute on DCA fills)
+ *
+ * 2026-05-27 — TAOUSDT re-added with S1 (NOT S3). It was benched in v5 as
+ * "marginal/0R" but that was on S3 funding fade. Re-screened all 4 archetypes:
+ * S1 (LS-top-pos fade + pair trend) gives sumR 15.21 / PF 2.72 / WR 68% in-sample.
+ * Walk-forward 50/50: both halves positive (TRAIN +8.01, TEST +7.76, TEST PF 2.18).
+ * Per-quarter: 4/4 positive (Tier-1 grade). Low frequency (~22 trades/yr) is the
+ * only caveat. Universe now 10 pairs.
  *
  * Multi-entry execution: scaledIn config flows from strategy.decide() → Action →
  * scan-decide JSON → auto-execute → execute.ts which places 3 limit orders with
@@ -86,6 +92,14 @@ export const TIER1_PORTFOLIO: PairStrategyCfg[] = [
   // PF 1.38, +6.63% return — classic TRAIN→TEST degradation but TEST profitable).
   { pair: 'BNBUSDT', enabled: true,
     strategy: fundingFade({ riskPct: LIVE_RISK_PCT, scaledIn: SCALED_IN_FIXED }) },
+  // S1 ls-top-pos fade + pair trend (re-added 2026-05-27 with CORRECT strategy —
+  // was benched on S3 funding. Walk-forward both halves +, per-quarter 4/4 Tier-1.
+  // TEST PF 2.18 / WR 64% / avgR 0.555. Low freq ~22 trades/yr).
+  { pair: 'TAOUSDT', enabled: true,
+    strategy: lsTopPositionFade({ pctHi: 0.85, pctLo: 0.15,
+      usePairTrend: true, useBtcTrend: false,
+      slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12,
+      riskPct: LIVE_RISK_PCT, scaledIn: SCALED_IN_FIXED }) },
 ];
 
 export function getStrategyForPair(pair: string): Strategy | null {
