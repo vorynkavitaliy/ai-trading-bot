@@ -567,7 +567,12 @@ async function notifyTelegram(args: CliArgs, results: AccountResult[]): Promise<
   const succ = results.filter(r => r.ok);
   const fail = results.filter(r => !r.ok);
   if (succ.length === 0) return;
-  const qtyTotal = succ.reduce((s, r) => s + (r.qty ?? 0), 0);
+
+  const allPending = succ.every(r => r.pendingOnly);
+  const status: 'filled' | 'pending' = allPending ? 'pending' : 'filled';
+  const qtyForResult = (r: AccountResult): number =>
+    allPending ? (r.plannedQty ?? 0) : (r.qty ?? 0);
+  const qtyTotal = succ.reduce((s, r) => s + qtyForResult(r), 0);
   // Aggregate grid slots across accounts: sum qty per slot level so message
   // shows total ladder qty (not per-account, which would be cluttered).
   let gridSlots: OpenTradeArgs['gridSlots'] | undefined;
@@ -598,7 +603,8 @@ async function notifyTelegram(args: CliArgs, results: AccountResult[]): Promise<
     tp2: args.tp2,
     riskPct: args.riskPct,
     qtyTotal,
-    accountSummaries: succ.map(r => `${r.bucket}/${r.keyName} — ${r.qty} ${args.symbol.replace(/USDT$/, '')}`),
+    status,
+    accountSummaries: succ.map(r => `${r.bucket}/${r.keyName} — ${qtyForResult(r)} ${args.symbol.replace(/USDT$/, '')}`),
     failedAccounts: fail.map(r => ({ label: `${r.bucket}/${r.keyName}`, error: r.error ?? 'unknown' })),
     rationale: args.rationale,
     gridSlots,

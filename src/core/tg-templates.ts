@@ -66,6 +66,10 @@ export interface OpenTradeArgs {
   rationale: string;
   failedAccounts?: Array<{ label: string; error: string }>;
   cycle?: string;
+  // 'pending' = slot-1 limit placed but not yet credited (no position). Header and
+  // size line reflect "order placed, awaiting fill"; default 'filled' keeps market
+  // entries unchanged. notifyEntryConfirmed follows up when the limit actually fills.
+  status?: 'filled' | 'pending';
   // S5 scaled-in: per-slot grid info for display ("DCA grid"). When set the
   // open message shows entry as slot 1 + pending limit DCA slots 2..N.
   gridSlots?: Array<{ level: number; price: number; qtyTotal: number; filled: boolean }>;
@@ -81,11 +85,16 @@ export async function notifyOpen(a: OpenTradeArgs): Promise<void> {
   const tp1Pct = ep > 0 && a.tp1 ? pctFromPrices(ep, a.tp1, isLong) : 0;
   const tp2Pct = ep > 0 && a.tp2 ? pctFromPrices(ep, a.tp2, isLong) : 0;
 
+  const isPending = a.status === 'pending';
+  const headerVerb = isPending ? 'ОРДЕР РАЗМЕЩЁН' : 'ВХОД';
+  const headerDot = isPending ? '🟡' : dot;
+  const priceLabel = isPending ? 'Цена ордера' : 'Цена входа';
+
   const lines: string[] = [
-    `${dot} <b>ВХОД ${dir} • ${a.symbol}</b>`,
+    `${headerDot} <b>${headerVerb} ${dir} • ${a.symbol}</b>`,
     SEP,
     ``,
-    `📍 Цена входа: <b>$${fmtNum(ep)}</b>`,
+    `📍 ${priceLabel}: <b>$${fmtNum(ep)}</b>`,
     `🛡 Стоп:       $${fmtNum(a.sl)}  (${fmtPctSigned(slPct)})`,
   ];
   // Single TP case (tp1 == tp2): strategy uses one target → execute.ts places
@@ -108,7 +117,8 @@ export async function notifyOpen(a: OpenTradeArgs): Promise<void> {
     }
   }
   lines.push(``);
-  lines.push(`💼 <b>Размер (slot 1):</b> ${fmtNum(a.qtyTotal, 2)} ${tag}`);
+  const sizeSuffix = isPending ? ' <i>(ожидает заполнения)</i>' : '';
+  lines.push(`💼 <b>Размер (slot 1):</b> ${fmtNum(a.qtyTotal, 2)} ${tag}${sizeSuffix}`);
   if (a.gridSlots && a.gridSlots.length > 1) {
     const totalIfFull = a.gridSlots.reduce((s, x) => s + x.qtyTotal, 0);
     lines.push(`   <i>Если все ${a.gridSlots.length} slots filled: ${fmtNum(totalIfFull, 2)} ${tag}</i>`);
@@ -129,6 +139,49 @@ export async function notifyOpen(a: OpenTradeArgs): Promise<void> {
   lines.push(``);
   lines.push(SEP);
   lines.push(`<i>CG-fade v4 • ${escapeHtml(a.cycle ?? '')} • ${nowUtcShort()}</i>`);
+
+  await send(lines.join('\n'), { raw: true });
+}
+
+// -----------------------------------------------------------
+// ENTRY CONFIRMED (pending limit actually filled → promotion)
+// -----------------------------------------------------------
+export interface EntryConfirmedArgs {
+  symbol: string;
+  side: 'Buy' | 'Sell';
+  size: number;
+  avgPrice: number;
+  sl: number;
+  tp: number | null;
+  account: string;
+}
+
+export async function notifyEntryConfirmed(a: EntryConfirmedArgs): Promise<void> {
+  const side: 'buy' | 'sell' = a.side === 'Buy' ? 'buy' : 'sell';
+  const dir = dirLabel(side);
+  const isLong = a.side === 'Buy';
+  const tag = pairTag(a.symbol);
+  const slPct = a.avgPrice > 0 ? pctFromPrices(a.avgPrice, a.sl, isLong) : 0;
+  const tpPct = a.avgPrice > 0 && a.tp ? pctFromPrices(a.avgPrice, a.tp, isLong) : 0;
+
+  const lines: string[] = [
+    `✅ <b>ВХОД ПОДТВЕРЖДЁН • ${a.symbol}</b>  ${dir}`,
+    SEP,
+    ``,
+    `Лимитка заполнилась — позиция активна.`,
+    ``,
+    `📍 Фактическая цена входа: <b>$${fmtNum(a.avgPrice)}</b>`,
+    `💼 Размер: <b>${fmtNum(a.size, 2)}</b> ${tag}`,
+    `🛡 Стоп: $${fmtNum(a.sl)}  (${fmtPctSigned(slPct)})`,
+  ];
+  if (a.tp) lines.push(`🎯 Тейк: $${fmtNum(a.tp)}  (${fmtPctSigned(tpPct)})  — reduce-only лимит`);
+  lines.push(``);
+  lines.push(`<b>Аккаунт:</b> ${escapeHtml(a.account)}`);
+  lines.push(``);
+  lines.push(`<i>Дальше: позиция активна, стоп выставлен, ждём тейк.</i>`);
+  lines.push(``);
+  lines.push(SEP);
+  lines.push(`<i>CG-fade v4 • ${nowUtcShort()}</i>`);
 
   await send(lines.join('\n'), { raw: true });
 }
