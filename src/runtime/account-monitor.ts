@@ -39,6 +39,9 @@ import {
 } from './position-events';
 import { autoCloseTrade, fetchRecentClosedPnL, notifyConsolidatedCloses } from './trade-closer';
 import { nakedTpRecovery } from './naked-tp-recovery';
+import { findUnpromotedPending } from '../core/pending-orders';
+import { promotePendingToTrade } from './pending-promoter';
+import { notifyEntryConfirmed } from '../core/tg-templates';
 
 const NAKED_SL_GRACE_MS = 60_000;
 const EXEC_ID_LRU_CAP = 1024;
@@ -56,6 +59,11 @@ interface SymbolState {
   lastSeq: number;
   createdMs: number;
   lastTpRecoveryTs?: number;
+  // When Bybit signals size=0 but autoCloseTrade couldn't finalize (closed-pnl
+  // API propagation delay), set closePending=true so next position update / REST
+  // poll retries instead of being short-circuited by the "size==0 && prevSize==0"
+  // dedup check. Cleared once autoCloseTrade succeeds.
+  closePending: boolean;
 }
 
 interface AccountMonitorStatus {
@@ -142,7 +150,12 @@ export class AccountMonitor {
       wsConnected: this.ws.isConnected(),
       lastWsEventAt: this.ws.lastEventTs,
       lastRestPollAt: this.lastRestPollAt,
-      openSymbols: [...this.state.keys()],
+      // Filter to symbols actually held (lastSize > 0). Stale entries with
+      // lastSize=0 are kept in the map for closePending tracking but should
+      // not appear in operational "open" view.
+      openSymbols: [...this.state.entries()]
+        .filter(([, s]) => s.lastSize > 0 || s.closePending)
+        .map(([sym]) => sym),
     };
   }
 
@@ -182,6 +195,33 @@ export class AccountMonitor {
     };
   }
 
+  private async tryPromotePending(
+    symbol: string,
+    side: 'Buy' | 'Sell',
+    size: number,
+    avgPrice: number,
+  ): Promise<void> {
+    try {
+      const pending = await findUnpromotedPending(
+        this.account.bucket, this.account.keyName, symbol, side,
+      );
+      if (!pending) return;
+
+      const r = await promotePendingToTrade(pending, { size, avgPrice });
+      if (r?.created) {
+        await notifyEntryConfirmed({
+          symbol, side, size, avgPrice,
+          sl: pending.sl, tp: pending.tp1,
+          account: `${this.account.bucket}/${this.account.keyName}`,
+        }).catch((err: any) => log.warn('notifyEntryConfirmed failed', { symbol, err: err?.message }));
+      }
+    } catch (err: any) {
+      log.warn('daemon pending promotion failed', {
+        symbol, account: this.account.keyName, err: err?.message,
+      });
+    }
+  }
+
   private async onPosition(e: PositionUpdate): Promise<void> {
     if (this.stopped) return;
     const p = e.data;
@@ -198,8 +238,12 @@ export class AccountMonitor {
     const prevSize = prev?.lastSize ?? 0;
     const prevSL = prev?.lastSL ?? 0;
     const prevTP = prev?.lastTP ?? null;
+    const prevClosePending = prev?.closePending ?? false;
 
-    if (size === 0 && prevSize === 0) return;
+    // Early-exit only if BOTH sizes are 0 AND no close is pending. closePending
+    // means a prior autoclose attempt couldn't finalize (Bybit closed-pnl API
+    // propagation delay) — keep retrying until it succeeds.
+    if (size === 0 && prevSize === 0 && !prevClosePending) return;
 
     this.state.set(symbol, {
       symbol,
@@ -211,13 +255,19 @@ export class AccountMonitor {
       lastFullCloseTs: prev?.lastFullCloseTs ?? 0,
       lastSeq: p.seq,
       createdMs: createdMs > 0 ? createdMs : (prev?.createdMs ?? Date.now()),
+      closePending: prevClosePending,
     });
 
     if (size === 0) {
-      if (prev && Date.now() - prev.lastFullCloseTs < 5_000) return;
-      await this.handleFullCloseEvent(symbol, side);
+      // No more 5s dedup window — handleFullCloseEvent itself is idempotent
+      // (autoCloseTrade UPDATE has `WHERE status = 'open'` guard, returns null
+      // on already-closed rows). We DO retry on every poll/event until success.
+      const closed = await this.handleFullCloseEvent(symbol, side);
       const after = this.state.get(symbol);
-      if (after) after.lastFullCloseTs = Date.now();
+      if (after) {
+        after.closePending = !closed;
+        if (closed) after.lastFullCloseTs = Date.now();
+      }
       return;
     }
 
@@ -251,7 +301,10 @@ export class AccountMonitor {
       positionValue: parseFloat(p.positionValue || '0'),
       createdMs,
     });
-    if (!pos) return;
+    if (!pos) {
+      await this.tryPromotePending(symbol, side, size, parseFloat(p.entryPrice || '0'));
+      return;
+    }
 
     if (size > 0 && size < pos.dbInitialQty * DUST_RATIO) {
       try {
@@ -330,18 +383,36 @@ export class AccountMonitor {
     await flushTp1Groups(tp1Groups);
   }
 
-  private async handleFullCloseEvent(symbol: string, side: 'Buy' | 'Sell'): Promise<void> {
+  /**
+   * Returns true if the close was finalized (DB updated + Telegram notify sent
+   * OR no open trade existed to close). Returns false if autoCloseTrade couldn't
+   * match closing fills yet (Bybit closed-pnl API propagation delay) — caller
+   * should set closePending=true so the next poll/event retries.
+   */
+  private async handleFullCloseEvent(symbol: string, side: 'Buy' | 'Sell'): Promise<boolean> {
     const trades = await tradeRepo.openTradesForAccount(this.account.keyName);
     const t = trades.find((row) => row.symbol === symbol && row.side === side);
-    if (!t) return;
+    if (!t) return true;  // nothing to close (DB already aligned) — counts as success
     try {
       const fills = await fetchRecentClosedPnL(this.account, symbol);
       const evt = await autoCloseTrade(t, fills);
-      if (evt) await notifyConsolidatedCloses([evt]);
+      if (!evt) {
+        // autoCloseTrade returned null — fills not yet propagated. Will retry.
+        log.info('daemon full-close pending — fills not yet propagated, will retry', {
+          symbol, account: this.account.keyName, dbId: t.id,
+        });
+        return false;
+      }
+      await notifyConsolidatedCloses([evt]);
+      log.info('daemon full-close finalized', {
+        symbol, account: this.account.keyName, dbId: t.id, pnlR: evt.pnlR?.toFixed(2),
+      });
+      return true;
     } catch (e: any) {
       log.warn('daemon full-close handling failed', {
         symbol, account: this.account.keyName, err: e?.message,
       });
+      return false;
     }
   }
 
@@ -402,21 +473,29 @@ export class AccountMonitor {
           receivedAt: Date.now(),
         });
       }
+      // Symbols Bybit no longer reports but our state still tracks: dispatch a
+      // synthetic size=0 event. Trigger for both:
+      //   - lastSize > 0 (was open, just closed)
+      //   - closePending (was already detected as closed but autoclose didn't
+      //     finalize because Bybit's closed-pnl API hadn't propagated yet)
       for (const sym of [...this.state.keys()]) {
-        if (!seenSymbols.has(sym) && (this.state.get(sym)?.lastSize ?? 0) > 0) {
+        if (seenSymbols.has(sym)) continue;
+        const s = this.state.get(sym);
+        if (!s) continue;
+        if (s.lastSize > 0 || s.closePending) {
           await this.dispatchPosition({
             account: this.account,
             data: {
               symbol: sym,
-              side: this.state.get(sym)?.side ?? 'Buy',
+              side: s.side,
               size: '0',
               stopLoss: '0',
               takeProfit: '0',
               entryPrice: '0',
               unrealisedPnl: '0',
               positionValue: '0',
-              createdTime: String(this.state.get(sym)?.createdMs ?? 0),
-              seq: (this.state.get(sym)?.lastSeq ?? 0) + 1,
+              createdTime: String(s.createdMs),
+              seq: s.lastSeq + 1,
             } as any,
             receivedAt: Date.now(),
           });

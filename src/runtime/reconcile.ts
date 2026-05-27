@@ -2,8 +2,10 @@ import { loadAccounts, AccountKey } from '../core/accounts';
 import { getRest, withRetry } from '../core/bybit';
 import { closeAndVerify } from '../core/close-verifier';
 import { log } from '../core/logger';
-import { findStaleOrphans, StalePending } from '../core/pending-orders';
+import { findStaleOrphans, findUnpromotedPending, StalePending } from '../core/pending-orders';
 import { tradeRepo, OpenTrade } from '../data/trade-repo';
+import { promotePendingToTrade } from './pending-promoter';
+import { EntryConfirmedArgs, notifyEntryConfirmed } from '../core/tg-templates';
 import { divergenceDetector } from './divergence-detector';
 import {
   ClosedFill,
@@ -107,8 +109,9 @@ export async function runReconcile(): Promise<ReconcileResult> {
   ]);
 
   const divergences: Divergence[] = [];
+  const accountByLabel = new Map(accounts.map((a) => [`${a.bucket}/${a.keyName}`, a]));
+  const confirmedEntries: EntryConfirmedArgs[] = [];
 
-  // Build account lookup
   for (const pos of allBybit) {
     const match = dbOpen.find(t =>
       `${t.account_bucket}/${t.account_key}` === pos.account &&
@@ -116,6 +119,20 @@ export async function runReconcile(): Promise<ReconcileResult> {
       t.side.toLowerCase() === pos.side.toLowerCase()
     );
     if (!match) {
+      const acc = accountByLabel.get(pos.account);
+      if (acc && (pos.side === 'Buy' || pos.side === 'Sell')) {
+        const pending = await findUnpromotedPending(acc.bucket, acc.keyName, pos.symbol, pos.side);
+        if (pending) {
+          const r = await promotePendingToTrade(pending, { size: pos.size, avgPrice: pos.entry });
+          if (r?.created) {
+            confirmedEntries.push({
+              symbol: pos.symbol, side: pos.side, size: pos.size, avgPrice: pos.entry,
+              sl: pending.sl, tp: pending.tp1, account: pos.account,
+            });
+          }
+          continue;
+        }
+      }
       divergences.push({ type: 'bybit_without_db', account: pos.account, symbol: pos.symbol, size: pos.size });
       continue;
     }
@@ -182,7 +199,6 @@ export async function runReconcile(): Promise<ReconcileResult> {
   // Without this loop, a SL hit during a cron downtime would never be journaled
   // and daily-DD would be computed off a stale equity baseline.
   // ────────────────────────────────────────────────────────────────────────────────
-  const accountByLabel = new Map(accounts.map((a) => [`${a.bucket}/${a.keyName}`, a]));
   const closedFillsCache = new Map<string, ClosedFill[]>();
   const closeEvents: CloseEvent[] = [];
 
@@ -228,6 +244,13 @@ export async function runReconcile(): Promise<ReconcileResult> {
 
   // Send consolidated Telegram messages: one per (symbol+side+exitReason) group.
   await notifyConsolidatedCloses(closeEvents);
+
+  // Promotion catch-net confirmations: a limit that filled while the daemon was
+  // down is journaled here; tell the operator the entry is now live.
+  for (const e of confirmedEntries) {
+    await notifyEntryConfirmed(e).catch((err) =>
+      log.warn('reconcile notifyEntryConfirmed failed', { symbol: e.symbol, err: err?.message }));
+  }
 
   // ─── Pending-orders sweep: surface intents that never made it to a trades row ───
   // A 'pending_orders' row with NULL trade_id older than 5 min means either:
