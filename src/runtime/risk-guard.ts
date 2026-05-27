@@ -230,6 +230,19 @@ async function runPrecheck(symbol: string, riskPct: number, state: RiskState): P
   if (pairOpenCount > 0) {
     return { allowed: false, reason: `${symbol} already has ${pairOpenCount} open position(s) — duplicate signal` };
   }
+  // A still-pending limit intent (placed on Bybit, not yet credited, no trades row)
+  // also occupies the pair: re-signalling would stack a second ladder against the
+  // live limit. status in ('pending','placed') AND trade_id IS NULL means active and
+  // unresolved; cancelled/orphaned/failed intents are excluded.
+  const pairPendingR = await query<{ c: string }>(
+    `SELECT COUNT(*)::text AS c FROM pending_orders
+      WHERE symbol = $1 AND trade_id IS NULL AND status IN ('pending', 'placed')`,
+    [symbol]
+  );
+  const pairPendingCount = parseInt(pairPendingR.rows[0]?.c ?? '0', 10);
+  if (pairPendingCount > 0) {
+    return { allowed: false, reason: `${symbol} has ${pairPendingCount} pending limit order(s) — duplicate signal` };
+  }
   if (riskPct > RISK.riskPctCap) {
     return { allowed: false, reason: `risk ${riskPct}% exceeds cap ${RISK.riskPctCap}%` };
   }
