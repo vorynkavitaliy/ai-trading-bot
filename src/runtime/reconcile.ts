@@ -128,16 +128,22 @@ export async function runReconcile(): Promise<ReconcileResult> {
     if (!match) {
       const acc = accountByLabel.get(pos.account);
       if (acc && (pos.side === 'Buy' || pos.side === 'Sell')) {
-        const pending = await findUnpromotedPending(acc.bucket, acc.keyName, pos.symbol, pos.side);
-        if (pending) {
-          const r = await promotePendingToTrade(pending, { size: pos.size, avgPrice: pos.entry });
-          if (r?.created) {
-            confirmedEntries.push({
-              symbol: pos.symbol, side: pos.side, size: pos.size, avgPrice: pos.entry,
-              sl: pending.sl, tp: pending.tp1, account: pos.account,
-            });
+        try {
+          const pending = await findUnpromotedPending(acc.bucket, acc.keyName, pos.symbol, pos.side);
+          if (pending) {
+            const r = await promotePendingToTrade(pending, { size: pos.size, avgPrice: pos.entry });
+            if (r?.created) {
+              confirmedEntries.push({
+                symbol: pos.symbol, side: pos.side, size: pos.size, avgPrice: pos.entry,
+                sl: pending.sl, tp: pending.tp1, account: pos.account,
+              });
+            }
+            continue;
           }
-          continue;
+        } catch (e: any) {
+          log.warn('pending promotion failed during reconcile; falling through to bybit_without_db', {
+            account: pos.account, symbol: pos.symbol, side: pos.side, err: e?.message,
+          });
         }
       }
       divergences.push({ type: 'bybit_without_db', account: pos.account, symbol: pos.symbol, size: pos.size });
