@@ -2,7 +2,7 @@ import { loadAccounts, AccountKey } from '../core/accounts';
 import { getRest, withRetry } from '../core/bybit';
 import { closeAndVerify } from '../core/close-verifier';
 import { log } from '../core/logger';
-import { findStaleOrphans, findUnpromotedPending, StalePending } from '../core/pending-orders';
+import { findStaleOrphans, findUnpromotedPending, markPendingOrphanedByLink, StalePending } from '../core/pending-orders';
 import { tradeRepo, OpenTrade } from '../data/trade-repo';
 import { promotePendingToTrade } from './pending-promoter';
 import { EntryConfirmedArgs, notifyEntryConfirmed } from '../core/tg-templates';
@@ -61,8 +61,15 @@ async function cancelScaledInOrphans(a: AccountKey, symbol: string): Promise<num
         const r: any = await withRetry(() => c.cancelOrder({
           category: 'linear', symbol, orderId: o.orderId,
         }), { label: `cancelOrphan-${a.keyName}-${o.orderLinkId}` });
-        if (r.retCode === 0) cancelled++;
-        else log.warn('orphan cancel failed', { symbol, linkId: o.orderLinkId, msg: r.retMsg });
+        if (r.retCode === 0) {
+          cancelled++;
+          if (o.orderLinkId) {
+            await markPendingOrphanedByLink(o.orderLinkId).catch((e: any) =>
+              log.warn('mark pending orphaned failed', { linkId: o.orderLinkId, err: e?.message }));
+          }
+        } else {
+          log.warn('orphan cancel failed', { symbol, linkId: o.orderLinkId, msg: r.retMsg });
+        }
       } catch (e: any) {
         log.warn('orphan cancel threw', { symbol, linkId: o.orderLinkId, err: e?.message });
       }
