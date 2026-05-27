@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { loadAccounts, AccountKey } from '../core/accounts';
 import { getRest, withRetry, getInstrumentInfo, roundPriceToTick } from '../core/bybit';
@@ -11,6 +10,7 @@ import { config } from '../core/config';
 import { log } from '../core/logger';
 import { insertPending, markPlaced, markFailed, linkTradeId } from '../core/pending-orders';
 import { tpPlanner } from './tp-planner';
+import { writeTradeJournal } from './trade-journal';
 
 // S5 scaled-in entry config — when present, execute places 3 ATR-spaced limit
 // orders with dca-boost qty allocation. Serialized as JSON via --scaled-in CLI arg.
@@ -90,6 +90,12 @@ interface AccountResult {
   qty?: number;
   fillPrice?: number;
   error?: string;
+  // Limit slot 1 placed but not yet credited (actualFilledQty===0). ok stays true
+  // (placement succeeded); callers branch on pendingOnly, not ok. The trades row is
+  // deferred until promotion (pending-promoter.ts) sees Bybit credit the position.
+  pendingOnly?: boolean;
+  plannedQty?: number;
+  plannedEntry?: number;
   // S5 scaled-in: per-slot ladder info for Telegram message display
   gridSlots?: Array<{ level: number; price: number; qty: number; filled: boolean }>;
 }
@@ -393,9 +399,9 @@ async function placeScaledIn(
   }
 
   // Place all slots. Slot 1 (level=1) carries stopLoss to anchor position SL.
-  // Slot 1 is MARKET (when args.orderType==='market') for guaranteed immediate
-  // fill — this ensures position exists before TP placement attempt and avoids
-  // the "no TP at open, watcher recovers 5min later" race. Slots 2..N stay Limit.
+  // Slot 1 fills immediately only when orderType==='market'; in prod auto-execute
+  // sends 'limit', so slot 1 is a GTC limit that may fill later or never — promotion
+  // (pending-promoter.ts) creates the trades row on actual fill. Slots 2..N are Limit.
   let firstOrderResp: any = null;
   for (const slot of slots) {
     const isFirst = slot.level === 1;
@@ -427,119 +433,118 @@ async function placeScaledIn(
     await markPlaced(pendingId, firstOrderResp.result?.orderId);
   }
 
-  // Compute total qty across slots — TP placed at signal+tpAtrMult·ATR with TOTAL qty
-  // (so when DCA slots fill later, TP already covers full filled position).
-  const totalQty = slots.reduce((s, x) => s + x.qtyNum, 0);
-  const { qtyStr: totalQtyStr, valid: totalQtyValid } = normalizeQty(totalQty, info);
-  if (!totalQtyValid) {
-    log.warn('scaled-in total TP qty invalid — TP not placed', { symbol: args.symbol, totalQty });
-  } else {
-    // tpAtrMult applied to ORIGINAL signal price (entryPrice in args), NOT avg.
-    // tpRecomputeOnFill: false means we never move TP — it stays at this initial target.
-    const tpPrice = args.entryPrice + (args.side === 'buy' ? +1 : -1) * cfg.tpAtrMult * cfg.atr;
-    // Aggressive wait for slot 0 limit fill: limits can take seconds to fill at the BBO.
-    // Single-entry path waits 5s with 10 attempts × 500ms. We need at least the same.
-    const expectedSide = args.side === 'buy' ? 'Buy' : 'Sell';
-    let positionReady = false;
-    for (let attempt = 0; attempt < 20; attempt++) {
-      await new Promise((res) => setTimeout(res, 500));
-      try {
-        const pr: any = await c.getPositionInfo({ category: 'linear', symbol: args.symbol });
-        const pos = (pr.result?.list ?? []).find((p: any) => p.symbol === args.symbol && p.side === expectedSide);
-        if (pos && parseFloat(pos.size) > 0) { positionReady = true; break; }
-      } catch {}
-    }
-    if (!positionReady) {
-      log.warn('scaled-in: slot 0 not credited after 10s — TP via tpPlanner', { symbol: args.symbol });
-    }
-    // Use tpPlanner — it handles retry, native fallback, and "no position yet" gracefully.
-    // tp1 == tp2 forces SingleLimit mode (one reduce-only limit at the locked price for total qty).
-    await tpPlanner.place({
-      client: c,
-      symbol: args.symbol,
-      account: account.keyName,
-      closeSide: args.side === 'buy' ? 'Sell' : 'Buy',
-      qtyStr: totalQtyStr,
-      qtyNum: totalQty,
-      tp1: tpPrice,
-      tp2: tpPrice,  // == tp1 → SingleLimit mode
-      tp1LinkId,
-      tp2LinkId: tp1LinkId + '-tp2',
-      instrumentInfo: info,
+  // TP placement strategy: cover ACTUAL filled qty, not full ladder total.
+  // Rationale: slot 1 (Market/IOC) fills immediately, slot 2/3 are limits that may
+  // fill later or never. Placing TP for full totalQty when only slot 1 is filled
+  // causes Bybit to reject with retCode 110017 ("current position is zero" or
+  // "qty exceeds position"). position-watcher.ts step 0.7 detects DCA fills and
+  // re-places TP for the full position size — so initial TP covering slot 1 is
+  // sufficient and safe.
+  const tpPrice = args.entryPrice + (args.side === 'buy' ? +1 : -1) * cfg.tpAtrMult * cfg.atr;
+  const expectedSide = args.side === 'buy' ? 'Buy' : 'Sell';
+
+  // Wait for position to be credited by Bybit. Testnet/demo credit lag has been
+  // observed up to 15s — give 30s (60 attempts × 500ms) for safety margin.
+  // First non-zero pos.size wins; we don't wait for "stable" because slot 2/3 fills
+  // are handled by position-watcher DCA detection.
+  let actualFilledQty = 0;
+  for (let attempt = 0; attempt < 60; attempt++) {
+    await new Promise((res) => setTimeout(res, 500));
+    try {
+      const pr: any = await c.getPositionInfo({ category: 'linear', symbol: args.symbol });
+      const pos = (pr.result?.list ?? []).find((p: any) => p.symbol === args.symbol && p.side === expectedSide);
+      if (pos && parseFloat(pos.size) > 0) {
+        actualFilledQty = parseFloat(pos.size);
+        break;
+      }
+    } catch {}
+  }
+
+  if (actualFilledQty === 0) {
+    // Position never credited within 30s — expected when slot 1 is a GTC limit that
+    // price hasn't reached. Skip TP (no position = no risk). The trades row is NOT
+    // created here; the surviving pending_orders intent is promoted by the daemon /
+    // reconcile (pending-promoter.ts) if/when the limit fills later.
+    log.warn('scaled-in: position not credited after 30s — skipping TP (promotion handles later fill)', {
+      symbol: args.symbol, account: account.keyName,
     });
+  } else {
+    const { qtyStr: filledQtyStr, valid: filledQtyValid } = normalizeQty(actualFilledQty, info);
+    if (!filledQtyValid) {
+      log.warn('scaled-in: filled qty invalid for TP — TP not placed', {
+        symbol: args.symbol, account: account.keyName, actualFilledQty,
+      });
+    } else {
+      // tp1 == tp2 → SingleLimit mode (one reduce-only limit at the locked price).
+      // TP qty = ACTUAL filled position. DCA slot 2/3 fills detected later by
+      // position-watcher.ts step 0.7.
+      await tpPlanner.place({
+        client: c,
+        symbol: args.symbol,
+        account: account.keyName,
+        closeSide: args.side === 'buy' ? 'Sell' : 'Buy',
+        qtyStr: filledQtyStr,
+        qtyNum: actualFilledQty,
+        tp1: tpPrice,
+        tp2: tpPrice,
+        tp1LinkId,
+        tp2LinkId: tp1LinkId + '-tp2',
+        instrumentInfo: info,
+      });
+    }
   }
 
   result.ok = true;
   result.bybitOrderId = firstOrderResp?.result?.orderId;
   result.orderLinkId = entryLinkId;
-  // Read ACTUAL filled position size from Bybit for honest telegram reporting.
-  let actualFilledQty = slots[0].qtyNum;
-  try {
-    const expectedSide = args.side === 'buy' ? 'Buy' : 'Sell';
-    const pr: any = await c.getPositionInfo({ category: 'linear', symbol: args.symbol });
-    const pos = (pr.result?.list ?? []).find((p: any) => p.symbol === args.symbol && p.side === expectedSide);
-    if (pos && parseFloat(pos.size) > 0) {
-      actualFilledQty = parseFloat(pos.size);
-    }
-  } catch (e: any) {
-    log.warn('scaled-in: position read for actual qty failed', { err: e?.message });
-  }
+
+  const slot1Filled = actualFilledQty > 0;
   result.qty = actualFilledQty;
-  result.fillPrice = slots[0].priceNum;
-  // Expose grid ladder for Telegram message
+  result.fillPrice = slot1Filled ? slots[0].priceNum : undefined;
+  result.pendingOnly = !slot1Filled;
+  result.plannedQty = slots[0].qtyNum;
+  result.plannedEntry = slots[0].priceNum;
+
   result.gridSlots = slots.map(s => ({
     level: s.level,
     price: s.priceNum,
     qty: s.qtyNum,
-    filled: s.level === 1,  // slot 1 is market-filled or limit-at-signal-price; 2/3 pending
+    filled: s.level === 1 && slot1Filled,
   }));
   return result;
 }
 
 async function persistTrade(args: CliArgs, results: AccountResult[]): Promise<void> {
-  const succ = results.filter(r => r.ok);
-  if (succ.length === 0) return;
-  const sumQty = succ.reduce((s, r) => s + (r.qty ?? 0), 0);
-  const date = new Date().toISOString().slice(0, 10);
-  const dir = args.side === 'buy' ? 'LONG' : 'SHORT';
-  const tradeFile = path.join('vault/Trades', `${date}_${args.symbol}_${dir}.md`);
-  fs.mkdirSync(path.dirname(tradeFile), { recursive: true });
-  const fm = [
-    '---',
-    `symbol: ${args.symbol}`,
-    `side: ${args.side}`,
-    `order_type: ${args.orderType}`,
-    `entry_price: ${args.entryPrice ?? ''}`,
-    `sl: ${args.sl}`,
-    `tp1: ${args.tp1 ?? ''}`,
-    `tp2: ${args.tp2 ?? ''}`,
-    `risk_pct: ${args.riskPct ?? ''}`,
-    `total_qty: ${sumQty}`,
-    `accounts: ${JSON.stringify(succ.map(r => `${r.bucket}/${r.keyName}=${r.qty}`))}`,
-    `opened_at: ${new Date().toISOString()}`,
-    `status: open`,
-    '---',
-    '',
-    '## Rationale',
-    '',
-    args.rationale,
-    '',
-  ].join('\n');
-  fs.writeFileSync(tradeFile, fm);
+  const filled = results.filter(r => r.ok && !r.pendingOnly && (r.qty ?? 0) > 0);
+  if (filled.length === 0) return;
+  const sumQty = filled.reduce((s, r) => s + (r.qty ?? 0), 0);
+  const tradeFile = writeTradeJournal({
+    symbol: args.symbol,
+    side: args.side,
+    orderType: args.orderType,
+    entryPrice: args.entryPrice ?? null,
+    sl: args.sl,
+    tp1: args.tp1 ?? null,
+    tp2: args.tp2 ?? null,
+    riskPct: args.riskPct ?? null,
+    totalQty: sumQty,
+    accounts: filled.map(r => `${r.bucket}/${r.keyName}=${r.qty}`),
+    rationale: args.rationale,
+  });
 
   // Persist per-account row in trades table, then link pending_orders.trade_id so the
   // intent row is fully resolved (status='placed' AND trade_id IS NOT NULL).
-  for (const r of succ) {
+  for (const r of filled) {
     const ins = await query<{ id: string }>(
       `INSERT INTO trades (
-        account_bucket, account_key, symbol, side, order_type, qty,
+        account_bucket, account_key, symbol, side, order_type, qty, initial_qty,
         entry_price, sl, tp1, tp2, status, rationale,
         bybit_order_id, vault_trade_file, opened_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, NOW())
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, NOW())
       RETURNING id`,
       [
         r.bucket, r.keyName, args.symbol, args.side === 'buy' ? 'Buy' : 'Sell',
-        args.orderType === 'market' ? 'Market' : 'Limit', r.qty,
+        args.orderType === 'market' ? 'Market' : 'Limit', r.qty, r.qty,
         args.entryPrice ?? null, args.sl, args.tp1 ?? null, args.tp2 ?? null,
         'open', args.rationale.slice(0, 4000),
         r.bybitOrderId ?? null, tradeFile,
@@ -554,7 +559,7 @@ async function persistTrade(args: CliArgs, results: AccountResult[]): Promise<vo
       }
     }
   }
-  log.info('trade persisted', { tradeFile, accounts: succ.length });
+  log.info('trade persisted', { tradeFile, accounts: filled.length });
 }
 
 async function notifyTelegram(args: CliArgs, results: AccountResult[]): Promise<void> {
