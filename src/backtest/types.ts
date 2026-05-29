@@ -99,6 +99,15 @@ export interface ClosedTrade {
   pnlR: number;               // (pnl - fees - funding) / risked_usd
   exitReason: 'sl' | 'tp1' | 'tp2' | 'tp1_then_sl_be' | 'time_stop' | 'strategy_exit';
   rationale: string;
+  // MAE/MFE — Max Adverse / Favorable Excursion in R units, computed bar-by-bar
+  // during the position's lifetime. Enables honest MTM (mark-to-market) intraday
+  // DDD calculation downstream (peak-to-trough within a calendar day). Without
+  // these, daily DDD is close-only granularity and systematically underestimates
+  // real-world trailing-peak drawdown.
+  mfeR?: number;              // best unrealized R seen during trade life (≥ 0)
+  maeR?: number;              // worst unrealized R seen during trade life (≤ 0)
+  mfeTs?: number;             // timestamp of MFE
+  maeTs?: number;             // timestamp of MAE
 }
 
 export interface BacktestSettings {
@@ -180,6 +189,12 @@ export interface StrategyContext {
   // engine after each close. Strategies use this to implement cooldown-after-TP
   // (prevent re-entry into a freshly-resolved cycle).
   lastClosedTrade?: { exitTs: number; exitReason: ClosedTrade['exitReason']; side: Side };
+  // Cross-process same-direction cooldown snapshot. Populated ONLY by the live
+  // scan-decide loop (loaded once per cycle from `strategy_cooldowns` table).
+  // Backtest engines leave this undefined — the cg-fade strategy falls back to
+  // its in-process Map, which is fine for a single-process backtest run.
+  // Key: symbol. Value: { side, ts } of the most recent entry on that symbol.
+  cooldownState?: Map<string, { side: Side; ts: number }>;
 }
 
 export interface Strategy {

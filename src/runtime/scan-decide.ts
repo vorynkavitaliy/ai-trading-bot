@@ -28,6 +28,7 @@ import { getLiveTickers } from '../core/bybit';
 import { loadAccounts } from '../core/accounts';
 import { refreshForScan } from '../data/backfill';
 import { log } from '../core/logger';
+import { loadAll as loadCooldowns, CooldownState } from '../core/strategy-cooldowns';
 
 // 2026-05-23: pivot from VP-SMC to Tier-1 CG-fade portfolio.
 // Universe = 7 pairs validated via walk-forward (cg-fade.ts strategies).
@@ -61,7 +62,13 @@ const HOUR_MS = 60 * 60_000;
 const DAY_MS = 24 * HOUR_MS;
 const STALE_TOLERANCE_MS = 5 * 60_000;    // 1H bar must close within 65 min ago = current bar fresh enough
 
-async function buildContext(symbol: string, nowTs: number, livePrice: number | null, btcBars4h?: Bar[]): Promise<ContextResult> {
+async function buildContext(
+  symbol: string,
+  nowTs: number,
+  livePrice: number | null,
+  btcBars4h?: Bar[],
+  cooldownState?: CooldownState,
+): Promise<ContextResult> {
   if (livePrice == null) {
     return { ctx: null, reason: 'live-price-unavailable' };
   }
@@ -178,6 +185,7 @@ async function buildContext(symbol: string, nowTs: number, livePrice: number | n
     bars1dRecent: closedD.slice(-60),
     bars1wRecent: closedW.slice(-12),
     btcBars4hRecent: btcBars4h ? btcBars4h.filter((b) => b.ts < nowTs).slice(-200) : undefined,
+    cooldownState,
   };
   return { ctx, features5m, features15m, features4h, cgMissing, cgReason };
 }
@@ -476,11 +484,18 @@ export async function scanDecide(): Promise<ScanDecideResult> {
     log.error('live tickers fetch failed — all pairs will hold', { err: e?.message ?? String(e) });
   }
 
+  // STEP 2.5: load same-direction cooldown snapshot ONCE per cycle from DB.
+  // The cg-fade strategy reads this via ctx.cooldownState to enforce its
+  // `cooldownHours` gate (default 6h) across cron forks — its in-process Map
+  // would otherwise reset to empty on every `npx tsx` invocation, making the
+  // gate a no-op in production. See src/core/strategy-cooldowns.ts.
+  const cooldownState = await loadCooldowns();
+
   // STEP 3a: BTC global context — fetched first so all alts can reference it.
   let btcContext: BtcContext | null = null;
   const btcLive = livePrices.get('BTCUSDT');
   if (btcLive != null) {
-    const btcR = await buildContext('BTCUSDT', nowTs, btcLive);
+    const btcR = await buildContext('BTCUSDT', nowTs, btcLive, undefined, cooldownState);
     if (btcR.ctx) btcContext = buildBtcContext(btcR.ctx, btcR.features4h);
   }
 
@@ -499,7 +514,7 @@ export async function scanDecide(): Promise<ScanDecideResult> {
       continue;
     }
     const live = livePrices.get(symbol) ?? null;
-    const r = await buildContext(symbol, nowTs, live, btcBars4h);
+    const r = await buildContext(symbol, nowTs, live, btcBars4h, cooldownState);
     if (r.cgMissing) cgMissingSymbols.push(symbol);
     if (!r.ctx) {
       decisions.push({ symbol, price: live ?? 0, action: 'hold', reason: r.reason });

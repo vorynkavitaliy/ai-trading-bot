@@ -31,6 +31,7 @@
 import { Action, Strategy, StrategyContext, Bar } from '../backtest/types';
 import { CoinglassFeatures } from '../data/coinglass-features';
 import { atr, percentile, trendUp } from '../core/indicators';
+import { recordEntry as recordEntryDb } from '../core/strategy-cooldowns';
 
 export interface CgFadeParams {
   pctHi: number;
@@ -74,8 +75,12 @@ const DEFAULTS: CgFadeParams = {
   cooldownHours: 6,
 };
 
-// In-process cooldown state, shared across strategies (key = symbol).
-// Resets on process restart, which is fine — live restart is rare.
+// In-process cooldown state (legacy). Used by backtest engines where the entire
+// run lives in a single process. Live (scan-decide) instead loads the cooldown
+// snapshot from the strategy_cooldowns DB table and passes it via
+// StrategyContext.cooldownState — see src/core/strategy-cooldowns.ts. The DB
+// path survives cron forks; this in-process Map does not (it resets on every
+// `npx tsx` invocation, which silently disabled the cooldown in production).
 const lastEntryByPair: Map<string, { side: 'long' | 'short'; ts: number }> = new Map();
 export function resetCgFadeCooldownState() { lastEntryByPair.clear(); }
 
@@ -125,7 +130,7 @@ export abstract class CgFadeStrategy implements Strategy {
     const sig = this.extractSide(cg, this.p);
     if (!sig) return { kind: 'hold' };
 
-    if (inCooldown(ctx.symbol, sig.side, ctx.ts, this.p.cooldownHours)) return { kind: 'hold' };
+    if (inCooldown(ctx, sig.side, this.p.cooldownHours)) return { kind: 'hold' };
     // Cooldown after TP: prevent re-entry to a freshly-closed-with-profit cycle.
     // Stops the "extra trades" pattern that broke equal-R scaled-in on BTC.
     if (this.p.cooldownAfterTpHours && this.p.cooldownAfterTpHours > 0 && ctx.lastClosedTrade) {
@@ -265,14 +270,32 @@ export function lsTopPositionFundingConfluence(params: Partial<CgFadeParams> = {
 }
 
 // ─── Shared helpers ────────────────────────────────────────────────────────────
-function inCooldown(symbol: string, side: 'long' | 'short', ts: number, hours: number): boolean {
-  const last = lastEntryByPair.get(symbol);
+// Cooldown read: prefer the live DB-loaded snapshot in ctx; fall back to the
+// in-process Map (backtest). The two surfaces are intentionally identical in
+// shape so the decision branch is just "which Map do I read from?".
+function inCooldown(ctx: StrategyContext, side: 'long' | 'short', hours: number): boolean {
+  const source = ctx.cooldownState ?? lastEntryByPair;
+  const last = source.get(ctx.symbol);
   if (!last) return false;
   if (last.side !== side) return false;
-  return ts - last.ts < hours * 3_600_000;
+  return ctx.ts - last.ts < hours * 3_600_000;
 }
-function markEntry(symbol: string, side: 'long' | 'short', ts: number) {
-  lastEntryByPair.set(symbol, { side, ts });
+
+// Cooldown write: always update the in-process Map (so a long backtest run sees
+// its own previous entries) AND fire-and-forget the DB write only when we're
+// in the live path (signaled by ctx.cooldownState being defined). Keeps backtest
+// hot path zero-DB. The DB helper itself swallows errors — a write failure must
+// never block a live entry being built.
+function markEntry(ctx: StrategyContext, side: 'long' | 'short') {
+  lastEntryByPair.set(ctx.symbol, { side, ts: ctx.ts });
+  if (ctx.cooldownState) {
+    // Reflect the write into the in-memory snapshot too, so any subsequent
+    // pair processed in THIS cycle sees the fresh entry. (scan-decide loops
+    // pairs serially; without this update a same-symbol re-decision in the
+    // same cycle would skip the gate. Defensive — not strictly needed today.)
+    ctx.cooldownState.set(ctx.symbol, { side, ts: ctx.ts });
+    void recordEntryDb(ctx.symbol, side, ctx.ts);
+  }
 }
 
 function trendFiltersAllow(side: 'long' | 'short', ctx: StrategyContext, p: CgFadeParams): boolean {
@@ -310,7 +333,7 @@ function buildEnter(
   // will overwrite on each fill).
   const effectiveTpMult = p.scaledIn?.tpAtrMult ?? p.tpAtrMult;
   const tp = side === 'long' ? ctx.price + effectiveTpMult * a : ctx.price - effectiveTpMult * a;
-  markEntry(ctx.symbol, side, ctx.ts);
+  markEntry(ctx, side);
   return {
     kind: 'enter',
     side,
