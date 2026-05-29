@@ -8,7 +8,7 @@ import { notifyOpen, OpenTradeArgs } from '../core/tg-templates';
 import { precheckEntry, RISK } from './risk-guard';
 import { config } from '../core/config';
 import { log } from '../core/logger';
-import { insertPending, markPlaced, markFailed, linkTradeId } from '../core/pending-orders';
+import { insertPending, markPlaced, markFailed, linkTradeId, getLinkedTradeId } from '../core/pending-orders';
 import { tpPlanner } from './tp-planner';
 import { writeTradeJournal } from './trade-journal';
 
@@ -398,10 +398,15 @@ async function placeScaledIn(
     });
   }
 
-  // Place all slots. Slot 1 (level=1) carries stopLoss to anchor position SL.
-  // Slot 1 fills immediately only when orderType==='market'; in prod auto-execute
-  // sends 'limit', so slot 1 is a GTC limit that may fill later or never — promotion
-  // (pending-promoter.ts) creates the trades row on actual fill. Slots 2..N are Limit.
+  // TP price for the position-level take-profit attached to slot 1 (see below).
+  const tpPriceAttached = args.entryPrice + (args.side === 'buy' ? +1 : -1) * cfg.tpAtrMult * cfg.atr;
+
+  // Place all slots. Slot 1 (level=1) carries BOTH stopLoss AND takeProfit as
+  // position-level conditionals — set atomically with the fill (no separate TP
+  // placement, no naked-TP race). Slot 1 is MARKET in prod (auto-execute sends
+  // 'market' for scaled-in) → immediate fill, matches backtest fill-at-signal.
+  // Position-level TP/SL auto-cover the full position as DCA slots 2/3 fill
+  // (Bybit one-way mode). Slots 2..N are plain Limit (the DCA ladder).
   let firstOrderResp: any = null;
   for (const slot of slots) {
     const isFirst = slot.level === 1;
@@ -420,6 +425,11 @@ async function placeScaledIn(
     if (isFirst) {
       orderParams.stopLoss = roundPriceToTick(slPrice, info);
       orderParams.slTriggerBy = 'LastPrice';
+      // TP attached to the entry order — position-level, market-on-trigger (same
+      // mechanism as SL). Covers full position as DCA fills. Trade-off vs a
+      // reduce-only limit TP: taker fee on exit, but eliminates the naked-TP race.
+      orderParams.takeProfit = roundPriceToTick(tpPriceAttached, info);
+      orderParams.tpTriggerBy = 'LastPrice';
     }
     const r: any = await withRetry(() => c.submitOrder(orderParams), {
       label: `scaledIn-slot${slot.level}-${args.symbol}-${account.keyName}`,
@@ -433,22 +443,14 @@ async function placeScaledIn(
     await markPlaced(pendingId, firstOrderResp.result?.orderId);
   }
 
-  // TP placement strategy: cover ACTUAL filled qty, not full ladder total.
-  // Rationale: slot 1 (Market/IOC) fills immediately, slot 2/3 are limits that may
-  // fill later or never. Placing TP for full totalQty when only slot 1 is filled
-  // causes Bybit to reject with retCode 110017 ("current position is zero" or
-  // "qty exceeds position"). position-watcher.ts step 0.7 detects DCA fills and
-  // re-places TP for the full position size — so initial TP covering slot 1 is
-  // sufficient and safe.
-  const tpPrice = args.entryPrice + (args.side === 'buy' ? +1 : -1) * cfg.tpAtrMult * cfg.atr;
+  // TP + SL are now attached to the slot-1 order above (position-level, atomic
+  // with fill — no separate placement, no naked-TP race). We only READ the filled
+  // qty here for accurate Telegram reporting + pendingOnly state. Market slot-1
+  // fills immediately; a short poll covers any testnet credit lag. Even if the
+  // read times out, TP/SL are already live on the order, so there's no risk.
   const expectedSide = args.side === 'buy' ? 'Buy' : 'Sell';
-
-  // Wait for position to be credited by Bybit. Testnet/demo credit lag has been
-  // observed up to 15s — give 30s (60 attempts × 500ms) for safety margin.
-  // First non-zero pos.size wins; we don't wait for "stable" because slot 2/3 fills
-  // are handled by position-watcher DCA detection.
   let actualFilledQty = 0;
-  for (let attempt = 0; attempt < 60; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {   // 10s — market IOC fills fast
     await new Promise((res) => setTimeout(res, 500));
     try {
       const pr: any = await c.getPositionInfo({ category: 'linear', symbol: args.symbol });
@@ -461,37 +463,11 @@ async function placeScaledIn(
   }
 
   if (actualFilledQty === 0) {
-    // Position never credited within 30s — expected when slot 1 is a GTC limit that
-    // price hasn't reached. Skip TP (no position = no risk). The trades row is NOT
-    // created here; the surviving pending_orders intent is promoted by the daemon /
-    // reconcile (pending-promoter.ts) if/when the limit fills later.
-    log.warn('scaled-in: position not credited after 30s — skipping TP (promotion handles later fill)', {
+    // Unexpected for a market slot-1 (should fill instantly). TP/SL are attached
+    // to the order regardless, so no risk — promotion/reconcile reconciles state.
+    log.warn('scaled-in: market slot-1 not credited after 10s (TP/SL attached to order, no risk)', {
       symbol: args.symbol, account: account.keyName,
     });
-  } else {
-    const { qtyStr: filledQtyStr, valid: filledQtyValid } = normalizeQty(actualFilledQty, info);
-    if (!filledQtyValid) {
-      log.warn('scaled-in: filled qty invalid for TP — TP not placed', {
-        symbol: args.symbol, account: account.keyName, actualFilledQty,
-      });
-    } else {
-      // tp1 == tp2 → SingleLimit mode (one reduce-only limit at the locked price).
-      // TP qty = ACTUAL filled position. DCA slot 2/3 fills detected later by
-      // position-watcher.ts step 0.7.
-      await tpPlanner.place({
-        client: c,
-        symbol: args.symbol,
-        account: account.keyName,
-        closeSide: args.side === 'buy' ? 'Sell' : 'Buy',
-        qtyStr: filledQtyStr,
-        qtyNum: actualFilledQty,
-        tp1: tpPrice,
-        tp2: tpPrice,
-        tp1LinkId,
-        tp2LinkId: tp1LinkId + '-tp2',
-        instrumentInfo: info,
-      });
-    }
   }
 
   result.ok = true;
@@ -532,9 +508,44 @@ async function persistTrade(args: CliArgs, results: AccountResult[]): Promise<vo
     rationale: args.rationale,
   });
 
-  // Persist per-account row in trades table, then link pending_orders.trade_id so the
-  // intent row is fully resolved (status='placed' AND trade_id IS NOT NULL).
+  // Persist per-account row in trades table. Idempotent-with-promoter:
+  // if the WS daemon (account-monitor) already saw a position-credit event and
+  // promoted the pending_orders intent into a trades row, we DO NOT insert a
+  // second row — that was the 2026-05-28 stack-and-sum bug (ARB/BNB/SOL had
+  // twin trade rows for the same Bybit position because both code paths fired).
+  // Instead we update the existing row's qty to the latest filled size we
+  // observed locally; the promoter's initial qty is also from the position-info
+  // poll, so any small drift just gets resyncd on the next position event.
   for (const r of filled) {
+    let existingTradeId: number | null = null;
+    if (r.orderLinkId) {
+      try { existingTradeId = await getLinkedTradeId(r.orderLinkId); } catch (e: any) {
+        log.warn('getLinkedTradeId failed — proceeding with INSERT', {
+          orderLinkId: r.orderLinkId, err: e?.message,
+        });
+      }
+    }
+
+    if (existingTradeId != null) {
+      // Promoter won the race. Refresh qty (best-effort) and skip the duplicate INSERT.
+      try {
+        await query(
+          `UPDATE trades SET qty = $1, initial_qty = GREATEST(initial_qty, $1)
+             WHERE id = $2 AND status = 'open'`,
+          [r.qty, existingTradeId]
+        );
+      } catch (e: any) {
+        log.warn('refresh promoted trade qty failed (non-fatal)', {
+          tradeId: existingTradeId, err: e?.message,
+        });
+      }
+      log.info('trade already promoted by daemon — skipped duplicate INSERT', {
+        symbol: args.symbol, account: `${r.bucket}/${r.keyName}`,
+        tradeId: existingTradeId, qty: r.qty,
+      });
+      continue;
+    }
+
     const ins = await query<{ id: string }>(
       `INSERT INTO trades (
         account_bucket, account_key, symbol, side, order_type, qty, initial_qty,

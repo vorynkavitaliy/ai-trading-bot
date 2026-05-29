@@ -65,11 +65,29 @@ export async function markFailed(id: number, error: string): Promise<void> {
 
 // Called after persistTrade's INSERT INTO trades succeeds. Links the pending row
 // to the trade row by orderLinkId (which we passed to Bybit as clientOrderId).
+//
+// Idempotency: only set trade_id when still NULL. Otherwise we'd silently
+// overwrite a trade_id already set by promotePendingToTrade — that race was the
+// 2026-05-28 stack-and-sum bug, where execute.ts and the WS daemon both fired
+// for scaled-in fills and each created its own trades row.
 export async function linkTradeId(orderLinkId: string, tradeId: number): Promise<void> {
   await query(
-    `UPDATE pending_orders SET trade_id=$1 WHERE order_link_id=$2`,
+    `UPDATE pending_orders SET trade_id=$1
+      WHERE order_link_id=$2 AND trade_id IS NULL`,
     [tradeId, orderLinkId]
   );
+}
+
+// Returns the trade_id currently linked to a pending intent (set by either
+// promotePendingToTrade or linkTradeId), or null if unlinked. Used by persistTrade
+// to skip duplicate INSERTs when the WS daemon already promoted the intent.
+export async function getLinkedTradeId(orderLinkId: string): Promise<number | null> {
+  const r = await query<{ trade_id: string | null }>(
+    `SELECT trade_id FROM pending_orders WHERE order_link_id=$1`,
+    [orderLinkId]
+  );
+  const v = r.rows[0]?.trade_id;
+  return v != null ? parseInt(v, 10) : null;
 }
 
 export interface PromotablePending {

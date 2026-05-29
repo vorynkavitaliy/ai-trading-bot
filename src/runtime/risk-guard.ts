@@ -48,7 +48,16 @@ export interface RiskState {
   totalEquityUsd: number;
   dailyOpenEquityUsd: number;              // equity at session start (UTC midnight)
   dailyPnlUsd: number;
-  dailyPnlPct: number;
+  dailyPnlPct: number;                     // P&L from session open (informational)
+  // HyroTrader-faithful DDD: peak equity since UTC midnight AND the lowest
+  // equity observed AFTER that peak (including unrealized P&L). DDD =
+  // (trough - peak) / peak * 100. Kill switches use this, NOT dailyPnlPct
+  // (from open), because Hyro terminates at -5% from PEAK and the breach
+  // latches on the worst point seen — even if equity recovers before the
+  // next risk-guard tick, the account is dead.
+  dailyPeakEquityUsd: number;
+  dailyTroughEquityUsd: number;            // lowest equity since the current peak was set
+  dailyDdFromPeakPct: number;              // (trough - peak) / peak * 100
   openPositionsCount: number;
   totalHeatPct: number;
   pairBlocked: Record<string, string>;     // 'BTCUSDT' → reason
@@ -88,6 +97,46 @@ async function fetchSessionStartEquity(now: Date): Promise<number> {
   );
   const v = r.rows[0]?.eq;
   return v ? parseFloat(v) : 0;
+}
+
+// HyroTrader-faithful DDD tracking. UPSERT current equity into risk_daily_peak
+// and maintain both:
+//   - peak_equity   = highest equity seen today (UTC)
+//   - trough_equity = lowest equity observed AFTER that peak was set
+//
+// When current > stored peak: a fresh leg starts → peak := current, trough := current.
+// Otherwise: peak stays, trough := LEAST(stored trough, current).
+//
+// DDD = (trough - peak) / peak * 100  (always ≤ 0). Kill switches latch on the
+// trough so a brief dip to -5% terminates the account even if equity recovers
+// before the next risk-guard cycle — matching HyroTrader semantics.
+//
+// Pre-deploy day will under-estimate the early peak (tracking starts at first
+// read, not actual midnight). From day 2 onward, tracking is accurate.
+async function fetchAndUpsertDailyPeak(
+  now: Date,
+  currentEquity: number,
+): Promise<{ peak: number; trough: number }> {
+  const utcDay = now.toISOString().slice(0, 10);  // YYYY-MM-DD in UTC
+  const r = await query<{ peak: string; trough: string }>(
+    `INSERT INTO risk_daily_peak (utc_day, peak_equity, trough_equity)
+     VALUES ($1::date, $2, $2)
+     ON CONFLICT (utc_day) DO UPDATE
+       SET peak_equity = GREATEST(risk_daily_peak.peak_equity, EXCLUDED.peak_equity),
+           trough_equity = CASE
+             WHEN EXCLUDED.peak_equity > risk_daily_peak.peak_equity
+               THEN EXCLUDED.peak_equity
+             ELSE LEAST(risk_daily_peak.trough_equity, EXCLUDED.peak_equity)
+           END,
+           updated_at = NOW()
+     RETURNING peak_equity::text AS peak, trough_equity::text AS trough`,
+    [utcDay, currentEquity]
+  );
+  const row = r.rows[0];
+  return {
+    peak: row?.peak ? parseFloat(row.peak) : currentEquity,
+    trough: row?.trough ? parseFloat(row.trough) : currentEquity,
+  };
 }
 
 // Returns a cooldown-block reason string if the pair is in cooldown; null otherwise.
@@ -132,6 +181,16 @@ export async function getRiskState(now: Date = new Date()): Promise<RiskState> {
   const sessionEquity = equity - dayPnl.netUsd;
   const dailyPnl = dayPnl.netUsd;
   const dailyPnlPct = dayPnl.netPct;
+
+  // HyroTrader DDD: upsert current equity, get back today's peak AND the lowest
+  // equity since that peak. DDD = (trough - peak) / peak * 100 — Hyro-faithful
+  // because it latches on the worst point seen, not just the current value.
+  const { peak: dailyPeakEquityUsd, trough: dailyTroughEquityUsd } =
+    await fetchAndUpsertDailyPeak(now, equity);
+  const dailyDdFromPeakPct = dailyPeakEquityUsd > 0
+    ? (dailyTroughEquityUsd - dailyPeakEquityUsd) / dailyPeakEquityUsd * 100
+    : 0;
+
   const openPositions = await fetchOpenPositions();
   // Cap-4 should count UNIQUE pairs, not raw trade rows. One signal placed on N
   // accounts creates N rows in the DB but it's still ONE pair-position. Strategy
@@ -161,13 +220,18 @@ export async function getRiskState(now: Date = new Date()): Promise<RiskState> {
     totalEquityUsd: equity,
     dailyOpenEquityUsd: sessionEquity,
     dailyPnlUsd: dailyPnl,
-    dailyPnlPct,
+    dailyPnlPct,                                   // informational (from-open P&L)
+    dailyPeakEquityUsd,
+    dailyTroughEquityUsd,
+    dailyDdFromPeakPct,
     openPositionsCount: uniquePositionsCount,
     totalHeatPct,
     pairBlocked,
     inFundingWindow: isFundingWindow(now),
-    softKillTriggered: dailyPnlPct <= RISK.dailyDrawdownSoftKillPct,
-    hardKillTriggered: dailyPnlPct <= RISK.dailyDrawdownHardKillPct,
+    // Kill switches measure from PEAK (Hyro semantics). Account can be in profit
+    // for the day net-net but still trigger kill if it gave back enough from peak.
+    softKillTriggered: dailyDdFromPeakPct <= RISK.dailyDrawdownSoftKillPct,
+    hardKillTriggered: dailyDdFromPeakPct <= RISK.dailyDrawdownHardKillPct,
     totalKillTriggered: false,                     // requires baseline equity tracking — TODO
   };
 }
@@ -207,10 +271,10 @@ async function runPrecheck(symbol: string, riskPct: number, state: RiskState): P
     return { allowed: false, reason: `funding window (UTC ${state.iso})` };
   }
   if (state.hardKillTriggered) {
-    return { allowed: false, reason: `daily P&L ${state.dailyPnlPct.toFixed(2)}% breached hard kill ${RISK.dailyDrawdownHardKillPct}%` };
+    return { allowed: false, reason: `trailing-peak DDD ${state.dailyDdFromPeakPct.toFixed(2)}% breached hard kill ${RISK.dailyDrawdownHardKillPct}% (peak $${state.dailyPeakEquityUsd.toFixed(0)})` };
   }
   if (state.softKillTriggered) {
-    return { allowed: false, reason: `daily P&L ${state.dailyPnlPct.toFixed(2)}% breached soft kill ${RISK.dailyDrawdownSoftKillPct}%` };
+    return { allowed: false, reason: `trailing-peak DDD ${state.dailyDdFromPeakPct.toFixed(2)}% breached soft kill ${RISK.dailyDrawdownSoftKillPct}% (peak $${state.dailyPeakEquityUsd.toFixed(0)})` };
   }
   if (state.openPositionsCount >= RISK.maxParallelPositions) {
     return { allowed: false, reason: `${state.openPositionsCount} open positions (cap ${RISK.maxParallelPositions})` };
@@ -230,18 +294,31 @@ async function runPrecheck(symbol: string, riskPct: number, state: RiskState): P
   if (pairOpenCount > 0) {
     return { allowed: false, reason: `${symbol} already has ${pairOpenCount} open position(s) — duplicate signal` };
   }
-  // A still-pending limit intent (placed on Bybit, not yet credited, no trades row)
-  // also occupies the pair: re-signalling would stack a second ladder against the
-  // live limit. status in ('pending','placed') AND trade_id IS NULL means active and
-  // unresolved; cancelled/orphaned/failed intents are excluded.
+  // Strengthened pair-uniqueness — catches the ARB-248 dupe-fire bug on 2026-05-27:
+  // first ladder placed at 17:00 UTC didn't fill (slot-1 LIMIT), reconcile marked
+  // it `orphaned` at 17:19, then at 18:00 the next scan-decide fired and the
+  // legacy filter (`status IN ('pending','placed') AND trade_id IS NULL`) failed
+  // because `orphaned` was excluded and the row had resolved_at set. Bybit-side
+  // the cancelled-orphan promise was best-effort, so a second ladder stacked on
+  // the pair and inflated effective sizing 2.4×.
+  //
+  // New rule: any pending_orders row placed in the last 90 minutes on this pair
+  // counts as "pair occupied" UNLESS explicitly cancelled/failed AND its trade
+  // (if any) has closed. The 90-min window covers the next 4H decision boundary
+  // plus reconcile latency. Matches the spirit of cg-fade's in-process 6h cooldown
+  // (which is a no-op across cron forks).
   const pairPendingR = await query<{ c: string }>(
-    `SELECT COUNT(*)::text AS c FROM pending_orders
-      WHERE symbol = $1 AND trade_id IS NULL AND status IN ('pending', 'placed')`,
+    `SELECT COUNT(*)::text AS c FROM pending_orders po
+      LEFT JOIN trades t ON po.trade_id = t.id
+      WHERE po.symbol = $1
+        AND po.requested_at > NOW() - INTERVAL '90 minutes'
+        AND po.status NOT IN ('cancelled', 'failed')
+        AND (po.trade_id IS NULL OR t.status = 'open')`,
     [symbol]
   );
   const pairPendingCount = parseInt(pairPendingR.rows[0]?.c ?? '0', 10);
   if (pairPendingCount > 0) {
-    return { allowed: false, reason: `${symbol} has ${pairPendingCount} pending limit order(s) — duplicate signal` };
+    return { allowed: false, reason: `${symbol} has ${pairPendingCount} unresolved pending order(s) in last 90min — duplicate signal` };
   }
   if (riskPct > RISK.riskPctCap) {
     return { allowed: false, reason: `risk ${riskPct}% exceeds cap ${RISK.riskPctCap}%` };
@@ -270,12 +347,15 @@ export function formatRiskState(s: RiskState): string {
     `risk state @ ${s.iso}`,
     `  equity:        $${s.totalEquityUsd.toFixed(0)}`,
     `  session start: $${s.dailyOpenEquityUsd.toFixed(0)}`,
-    `  daily P&L:     $${s.dailyPnlUsd.toFixed(0)} (${s.dailyPnlPct.toFixed(2)}%)`,
+    `  daily P&L:     $${s.dailyPnlUsd.toFixed(0)} (${s.dailyPnlPct.toFixed(2)}%)  ← from open (informational)`,
+    `  day peak:      $${s.dailyPeakEquityUsd.toFixed(0)}`,
+    `  trough (post-peak): $${s.dailyTroughEquityUsd.toFixed(0)}`,
+    `  DDD = peak − trough: ${s.dailyDdFromPeakPct.toFixed(2)}%  ← kill metric (Hyro -5% limit)`,
     `  open positions: ${s.openPositionsCount} / ${RISK.maxParallelPositions}`,
     `  total heat:    ${s.totalHeatPct.toFixed(2)}% / ${RISK.totalHeatCapPct}%`,
     `  funding window: ${s.inFundingWindow}`,
-    `  soft kill:      ${s.softKillTriggered}`,
-    `  hard kill:      ${s.hardKillTriggered}`,
+    `  soft kill:      ${s.softKillTriggered}  (threshold ${RISK.dailyDrawdownSoftKillPct}% from peak)`,
+    `  hard kill:      ${s.hardKillTriggered}  (threshold ${RISK.dailyDrawdownHardKillPct}% from peak)`,
     `  pair blocks:    ${Object.keys(s.pairBlocked).length === 0 ? 'none' : JSON.stringify(s.pairBlocked)}`,
   ].join('\n');
 }
