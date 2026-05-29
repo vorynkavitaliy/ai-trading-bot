@@ -9,6 +9,18 @@
  * relevant events plus a 'reconnected' hook the daemon uses to trigger REST
  * resync.
  *
+ * Stale-WS watchdog (2026-05-29): bybit-api's app-layer ping/pong machinery
+ * relies on `ws.send({op:'ping'})` succeeding. On a TCP half-open socket
+ * (server-side stream silently dropped, no FIN received) the send buffers
+ * locally and no pong-timeout ever arms, so the lib's `isConnected()` stays
+ * true while events stop arriving. Observed 2026-05-29: 4 accounts went
+ * silent simultaneously for >100min with `wsConnected:true`. The watchdog
+ * runs every WATCHDOG_INTERVAL_MS, and if no event has arrived in
+ * STALE_THRESHOLD_MS while we believe we're connected, force-terminates the
+ * underlying socket. Terminating with the lib's connection-state still set
+ * to CONNECTED triggers its onWsClose → reconnectWithDelay → auto-resubscribe
+ * path (topics are remembered in the lib's WsStore).
+ *
  * Why a class: holds the WebsocketClient lifecycle for one account, owns
  * `lastEventTs` for the heartbeat staleness check, single responsibility.
  */
@@ -57,12 +69,17 @@ export declare interface BybitWs {
   emit<K extends keyof BybitWsEvents>(event: K, ...args: Parameters<BybitWsEvents[K]>): boolean;
 }
 
+const WATCHDOG_INTERVAL_MS = 30_000;
+const STALE_THRESHOLD_MS = 60_000;
+
 export class BybitWs extends EventEmitter {
   private readonly _account: AccountKey;
   private readonly client: WebsocketClient;
   private _connected = false;
   private _lastEventTs = 0;
   private started = false;
+  private watchdogTimer: NodeJS.Timeout | null = null;
+  private lastStaleKickTs = 0;
 
   constructor(account: AccountKey) {
     super();
@@ -99,11 +116,13 @@ export class BybitWs extends EventEmitter {
       account: `${this._account.bucket}/${this._account.keyName}`,
       topics: ['position', 'execution', 'order'],
     });
+    this.startWatchdog();
   }
 
   async stop(): Promise<void> {
     if (!this.started) return;
     this.started = false;
+    this.stopWatchdog();
     try {
       await Promise.all(this.client.unsubscribeV5(['position', 'execution', 'order'], 'linear'));
     } catch (e: any) {
@@ -117,6 +136,76 @@ export class BybitWs extends EventEmitter {
       log.warn('bybit-ws closeAll error', { account: this._account.keyName, err: e?.message });
     }
     this._connected = false;
+  }
+
+  private startWatchdog(): void {
+    if (this.watchdogTimer) return;
+    this.watchdogTimer = setInterval(() => this.watchdogTick(), WATCHDOG_INTERVAL_MS);
+    this.watchdogTimer.unref();
+  }
+
+  private stopWatchdog(): void {
+    if (!this.watchdogTimer) return;
+    clearInterval(this.watchdogTimer);
+    this.watchdogTimer = null;
+  }
+
+  /**
+   * Detect TCP half-open sockets: lib still reports CONNECTED but no
+   * messages (data OR pong) have arrived in STALE_THRESHOLD_MS. Force a
+   * terminate so the lib's onWsClose reconnect path runs. Throttled to one
+   * kick per WATCHDOG_INTERVAL_MS so we don't pile up terminates while the
+   * reconnect handshake is in flight.
+   */
+  private watchdogTick(): void {
+    if (!this.started || !this._connected) return;
+    if (this._lastEventTs === 0) return;
+    const sinceLast = Date.now() - this._lastEventTs;
+    if (sinceLast < STALE_THRESHOLD_MS) return;
+    const sinceKick = Date.now() - this.lastStaleKickTs;
+    if (sinceKick < WATCHDOG_INTERVAL_MS) return;
+    this.lastStaleKickTs = Date.now();
+    const accLabel = `${this._account.bucket}/${this._account.keyName}`;
+    log.warn('bybit-ws stale — forcing reconnect', {
+      account: accLabel, sinceLastEventMs: sinceLast,
+    });
+    this.forceReconnect();
+  }
+
+  /**
+   * Reaches into the bybit-api WsStore, grabs each underlying ws, and calls
+   * `terminate()` (forceful RST). The lib's connection-state remains CONNECTED
+   * at the moment of termination, so its `onWsClose` handler treats it as
+   * unintentional and triggers `reconnectWithDelay` + topic auto-resubscribe.
+   * Public access via `getWsStore()` (documented surface); falls back to a
+   * no-op if the lib changes shape.
+   */
+  private forceReconnect(): void {
+    try {
+      const store: any = (this.client as any).getWsStore?.();
+      if (!store || typeof store.getKeys !== 'function') return;
+      const keys: string[] = store.getKeys();
+      for (const k of keys) {
+        const ws: any = store.getWs?.(k);
+        if (!ws) continue;
+        try {
+          if (typeof ws.terminate === 'function') ws.terminate();
+          else if (typeof ws.close === 'function') ws.close();
+        } catch (e: any) {
+          log.warn('bybit-ws terminate failed', {
+            account: this._account.keyName, wsKey: k, err: e?.message,
+          });
+        }
+      }
+      // Local state: mark disconnected so a parallel watchdog tick doesn't
+      // double-kick. onWsClose will flip _connected=false too, but that's
+      // async; this avoids the race.
+      this._connected = false;
+    } catch (e: any) {
+      log.warn('bybit-ws forceReconnect failed', {
+        account: this._account.keyName, err: e?.message,
+      });
+    }
   }
 
   private wireListeners(): void {
