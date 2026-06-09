@@ -10,6 +10,13 @@ WorkingDirectory=/root/Projects/ai-trading-bot
 EnvironmentFile=/root/Projects/ai-trading-bot/.env
 Environment=NODE_ENV=production
 Environment=POSITION_MONITOR_POLL_SEC=30
+# 2026-06-03: ARM the emergency daily-DD flatten (was shadow-only). Closes ALL
+# positions for an account when its intraday equity drops 4.3% from the day's peak
+# (tick-level WS). This is now the PRIMARY daily-DD protection (risk-guard kill
+# switches -2.5/-4.0 disabled in tandem). Requires monitor:install + monitor:restart
+# to take effect (daemon caches env at start).
+Environment=DD_FLATTEN_ENABLED=1
+Environment=DD_FLATTEN_PCT=4.3
 ExecStart=/usr/bin/env npx tsx src/runtime/position-monitor.ts
 Restart=on-failure
 RestartSec=10

@@ -31,6 +31,7 @@ import type {
   WSPositionV5,
   WSExecutionV5,
   WSAccountOrderV5,
+  WSWalletV5,
 } from 'bybit-api/lib/types/websockets/ws-events';
 import { AccountKey } from './accounts';
 import { log } from './logger';
@@ -53,10 +54,17 @@ export interface OrderUpdate {
   receivedAt: number;
 }
 
+export interface WalletUpdate {
+  account: AccountKey;
+  data: WSWalletV5;
+  receivedAt: number;
+}
+
 export interface BybitWsEvents {
   position: (e: PositionUpdate) => void;
   execution: (e: ExecutionUpdate) => void;
   order: (e: OrderUpdate) => void;
+  wallet: (e: WalletUpdate) => void;
   connected: () => void;
   reconnected: () => void;
   disconnected: (reason: string) => void;
@@ -80,6 +88,7 @@ export class BybitWs extends EventEmitter {
   private started = false;
   private watchdogTimer: NodeJS.Timeout | null = null;
   private lastStaleKickTs = 0;
+  private readonly hookedSockets = new WeakSet<object>();
 
   constructor(account: AccountKey) {
     super();
@@ -111,10 +120,10 @@ export class BybitWs extends EventEmitter {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
-    await Promise.all(this.client.subscribeV5(['position', 'execution', 'order'], 'linear'));
+    await Promise.all(this.client.subscribeV5(['position', 'execution', 'order', 'wallet'], 'linear'));
     log.info('bybit-ws subscribed', {
       account: `${this._account.bucket}/${this._account.keyName}`,
-      topics: ['position', 'execution', 'order'],
+      topics: ['position', 'execution', 'order', 'wallet'],
     });
     this.startWatchdog();
   }
@@ -151,6 +160,34 @@ export class BybitWs extends EventEmitter {
   }
 
   /**
+   * Attach a raw 'message' listener to each underlying ws socket so that ANY
+   * inbound frame — server ping, our-ping's pong, or business data — refreshes
+   * `_lastEventTs`. Without this the watchdog only sees business events (position/
+   * execution/order) and false-fires on a HEALTHY-but-quiet private stream (no
+   * trades for >60s), causing a ~90s reconnect flap. A genuinely half-open socket
+   * receives NO frames, so the watchdog still catches it. Idempotent (WeakSet) and
+   * re-run from open/reconnected/watchdogTick so new sockets after reconnect are
+   * always hooked. Reaches into getWsStore() — same documented surface as
+   * forceReconnect(); no-ops if the lib changes shape.
+   */
+  private attachLivenessHook(): void {
+    try {
+      const store: any = (this.client as any).getWsStore?.();
+      if (!store || typeof store.getKeys !== 'function') return;
+      for (const k of store.getKeys()) {
+        const ws: any = store.getWs?.(k);
+        if (!ws || typeof ws.on !== 'function' || this.hookedSockets.has(ws)) continue;
+        this.hookedSockets.add(ws);
+        ws.on('message', () => { this._lastEventTs = Date.now(); });
+      }
+    } catch (e: any) {
+      log.warn('bybit-ws liveness hook attach failed', {
+        account: this._account.keyName, err: e?.message,
+      });
+    }
+  }
+
+  /**
    * Detect TCP half-open sockets: lib still reports CONNECTED but no
    * messages (data OR pong) have arrived in STALE_THRESHOLD_MS. Force a
    * terminate so the lib's onWsClose reconnect path runs. Throttled to one
@@ -159,6 +196,9 @@ export class BybitWs extends EventEmitter {
    */
   private watchdogTick(): void {
     if (!this.started || !this._connected) return;
+    // Ensure the raw-socket liveness hook is attached to whatever socket(s) exist
+    // now (covers reconnects that didn't route through our open/reconnected hooks).
+    this.attachLivenessHook();
     if (this._lastEventTs === 0) return;
     const sinceLast = Date.now() - this._lastEventTs;
     if (sinceLast < STALE_THRESHOLD_MS) return;
@@ -214,6 +254,7 @@ export class BybitWs extends EventEmitter {
     this.client.on('open', () => {
       this._connected = true;
       this._lastEventTs = Date.now();
+      this.attachLivenessHook();
       log.info('bybit-ws open', { account: accLabel });
       this.emit('connected');
     });
@@ -226,6 +267,7 @@ export class BybitWs extends EventEmitter {
     this.client.on('reconnected', () => {
       this._connected = true;
       this._lastEventTs = Date.now();
+      this.attachLivenessHook();
       log.info('bybit-ws reconnected', { account: accLabel });
       this.emit('reconnected');
     });
@@ -268,6 +310,12 @@ export class BybitWs extends EventEmitter {
       if (topic === 'order' && Array.isArray(evt.data)) {
         for (const data of evt.data as WSAccountOrderV5[]) {
           this.emit('order', { account: this._account, data, receivedAt: now });
+        }
+        return;
+      }
+      if (topic === 'wallet' && Array.isArray(evt.data)) {
+        for (const data of evt.data as WSWalletV5[]) {
+          this.emit('wallet', { account: this._account, data, receivedAt: now });
         }
         return;
       }

@@ -10,19 +10,26 @@ import { Strategy } from '../types';
 import { close as closePg } from '../../core/db';
 import { BACKTEST_COMMON } from '../defaults';
 
+// HONEST=1 → mirror live execution conditions (cron-realistic entry timing on the
+// 4H→HH:00 grid past funding windows, slip 0.25%, prop startEquity) instead of the
+// optimistic defaults (slip 0.05%, instant 4H entry). The optimistic mode is what
+// over-validated ETH/HYPE in the first place — always HONEST=1 for a real screen.
+const HONEST = process.env.HONEST === '1';
+
 const COMMON = {
   ...BACKTEST_COMMON,
-  startEquity: 200_000,
-  slippagePct: 0.05,
+  startEquity: HONEST ? 668_000 : 200_000,
+  slippagePct: HONEST ? 0.25 : 0.05,
   riskPctBase: 0.5,
   leverage: 10,
   decisionTf: '240m' as const,
   tp1SlMode: 'no_move' as const,
   bePlusBufferPct: 0.10,
+  cronRealistic: HONEST,
 };
 
 const SCALED_IN_FIXED = {
-  nEntries: 3, spacingAtr: 0.6, tpAtrMult: 2.0,
+  nEntries: 3, spacingAtr: 0.5, tpAtrMult: 2.0,     // 0.5 matches live (was stale 0.6)
   sizingMode: 'dca_boost' as const, dcaBoostDecay: 0.5,
   tpRecomputeOnFill: false,
 };
@@ -51,10 +58,12 @@ async function main() {
   const days = parseFloat(process.argv[3] ?? '365');
   if (!pair) { console.error('usage: sweep-new-pair.ts <PAIR> [days=365]'); process.exit(1); }
 
-  const startTs = Date.now() - days * 24 * 3600_000;
-  const endTs = Date.now();
+  // SKIP=N ends the window N days before now → TRAIN/TEST split (both historical).
+  const skipDays = parseFloat(process.env.SKIP ?? '0');
+  const endTs = Date.now() - skipDays * 24 * 3600_000;
+  const startTs = endTs - days * 24 * 3600_000;
 
-  console.log(`Sweep ${pair} (${days}d) — honest engine\n`);
+  console.log(`Sweep ${pair} (${days}d${skipDays ? `, SKIP ${skipDays}d` : ''}) — ${HONEST ? 'HONEST: cron-realistic, slip 0.25%, $668k' : 'OPTIMISTIC: slip 0.05%, instant entry (overstates!)'}\n`);
   console.log('config                       | trades  WR     PF    sumR    MaxDD  return');
   console.log('─'.repeat(95));
 

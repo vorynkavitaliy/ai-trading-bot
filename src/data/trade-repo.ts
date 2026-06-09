@@ -63,6 +63,7 @@ export interface ITradeRepository {
   lastSlCloseTs(symbol: string): Promise<number | null>;
   lastCloseTs(symbol: string): Promise<number | null>;
   countSlInSession(symbol: string, sessionStartMs: number): Promise<number>;
+  countEntriesSince(sinceMs: number): Promise<number>;
 }
 
 export class TradeRepo implements ITradeRepository {
@@ -178,6 +179,22 @@ export class TradeRepo implements ITradeRepository {
          AND closed_at IS NOT NULL AND EXTRACT(EPOCH FROM closed_at) * 1000 >= $2
          AND realized_r < 0`,
       [symbol, sessionStartMs]
+    );
+    return parseInt(r.rows[0]?.c ?? '0', 10);
+  }
+
+  /**
+   * Count of DISTINCT entries opened (any status) since `sinceMs` (epoch ms). A
+   * signal broadcast to N accounts at the same second counts as ONE entry. Used by
+   * risk-guard for the rolling entry cap (RISK.maxEntriesPerWindow over
+   * RISK.entryCapWindowHours).
+   */
+  async countEntriesSince(sinceMs: number): Promise<number> {
+    const r = await query<{ c: string }>(
+      `SELECT COUNT(DISTINCT (symbol, side, date_trunc('second', opened_at)))::text AS c
+       FROM trades
+       WHERE opened_at IS NOT NULL AND EXTRACT(EPOCH FROM opened_at) * 1000 >= $1`,
+      [sinceMs]
     );
     return parseInt(r.rows[0]?.c ?? '0', 10);
   }

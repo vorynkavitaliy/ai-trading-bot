@@ -17,13 +17,16 @@ import { close as closePg } from '../../core/db';
 import { log } from '../../core/logger';
 import { BACKTEST_COMMON } from '../defaults';
 
-const MAX_CONCURRENT_POSITIONS = 6;  // live risk-guard cap
+const CAP_OVERRIDE = process.argv[4] != null ? parseInt(process.argv[4], 10) : null;
+const MAX_CONCURRENT_POSITIONS = CAP_OVERRIDE ?? 6;  // live risk-guard cap (overridable for sweeps)
+
+const RISK_PCT_OVERRIDE = process.argv[3] != null ? parseFloat(process.argv[3]) : null;
+const EFFECTIVE_RISK_PCT = RISK_PCT_OVERRIDE ?? LIVE_RISK_PCT;
 
 const COMMON = {
   ...BACKTEST_COMMON,
   startEquity: 200_000,
-  slippagePct: 0.05,
-  riskPctBase: LIVE_RISK_PCT,
+  riskPctBase: EFFECTIVE_RISK_PCT,
   leverage: 10,
   decisionTf: '240m' as const,
   tp1SlMode: 'no_move' as const,
@@ -59,6 +62,114 @@ function applyPortfolioKills(trades: ClosedTrade[], startEquity: number, riskPct
   return { keep: trades.filter(t => !dropped.has(t)), dropped: dropped.size };
 }
 
+// Per-trade maximum intra-day swing — assumes MFE→MAE on the same day. This is
+// the Hyro-faithful upper bound on a single trade's contribution to one-day DDD.
+// trades-overlap-day finds the worst day by summing each trade's full swing on
+// the day where its MAE occurs (worst-case alignment).
+function computeHyroBoundDdd(trades: ClosedTrade[], startEquity: number, riskUsd: number): { worstDayDd: number; worstDayDate: string; perTradeMaxSwingUsd: number; perTradeAvgSwingUsd: number } {
+  if (trades.length === 0) return { worstDayDd: 0, worstDayDate: '', perTradeMaxSwingUsd: 0, perTradeAvgSwingUsd: 0 };
+  let perTradeMaxSwing = 0;
+  let perTradeSumSwing = 0;
+  const dayContribUsd = new Map<string, number>();
+  for (const t of trades) {
+    const mfeR = t.mfeR ?? Math.max(0, t.pnlR);
+    const maeR = t.maeR ?? Math.min(0, t.pnlR);
+    const swingR = mfeR - maeR;
+    const swingUsd = swingR * riskUsd;
+    if (swingUsd > perTradeMaxSwing) perTradeMaxSwing = swingUsd;
+    perTradeSumSwing += swingUsd;
+    const maeDay = new Date(t.maeTs ?? t.exitTs).toISOString().slice(0, 10);
+    dayContribUsd.set(maeDay, (dayContribUsd.get(maeDay) ?? 0) + swingUsd);
+  }
+  let worstDay = '';
+  let worstUsd = 0;
+  for (const [day, usd] of dayContribUsd.entries()) {
+    if (usd > worstUsd) { worstUsd = usd; worstDay = day; }
+  }
+  return {
+    worstDayDd: -worstUsd / startEquity * 100,
+    worstDayDate: worstDay,
+    perTradeMaxSwingUsd: perTradeMaxSwing,
+    perTradeAvgSwingUsd: perTradeSumSwing / trades.length,
+  };
+}
+
+// Honest MTM (mark-to-market) intraday DDD per HyroTrader formula:
+//   Daily DD = today's HIGHEST equity (peak)  −  LOWEST equity AFTER that peak
+// Trough resets when a new peak is set within the day. Peak resets at 00:00 UTC.
+function computeHonestMtmDdd(trades: ClosedTrade[], startEquity: number, riskUsd: number): { worstDayDd: number; worstDayDate: string; maxDdPct: number } {
+  if (trades.length === 0) return { worstDayDd: 0, worstDayDate: '', maxDdPct: 0 };
+  type Ev = { ts: number; tradeId: number; rContribution: number; final: boolean };
+  const events: Ev[] = [];
+  trades.forEach((t, idx) => {
+    const mfeR = t.mfeR ?? Math.max(0, t.pnlR);
+    const maeR = t.maeR ?? Math.min(0, t.pnlR);
+    const mfeTs = t.mfeTs ?? t.exitTs;
+    const maeTs = t.maeTs ?? t.exitTs;
+    events.push({ ts: t.entryTs, tradeId: idx, rContribution: 0, final: false });
+    if (mfeTs <= maeTs) {
+      events.push({ ts: mfeTs, tradeId: idx, rContribution: mfeR, final: false });
+      events.push({ ts: maeTs, tradeId: idx, rContribution: maeR, final: false });
+    } else {
+      events.push({ ts: maeTs, tradeId: idx, rContribution: maeR, final: false });
+      events.push({ ts: mfeTs, tradeId: idx, rContribution: mfeR, final: false });
+    }
+    events.push({ ts: t.exitTs, tradeId: idx, rContribution: t.pnlR, final: true });
+  });
+  events.sort((a, b) => a.ts !== b.ts ? a.ts - b.ts : (a.final ? 1 : -1));
+  const tradeCurR = new Map<number, number>();
+  const realizedR = new Map<number, number>();
+  let equity = startEquity;
+  let peak = startEquity;
+  let maxDdPct = 0;
+  let dailyKey = '';
+  let dailyPeak = startEquity;
+  let dailyTrough = startEquity;
+  let worstDayDd = 0;
+  let worstDayDate = '';
+  const finalizeDay = () => {
+    if (dailyKey === '') return;
+    const dd = (dailyTrough - dailyPeak) / dailyPeak * 100;
+    if (dd < worstDayDd) { worstDayDd = dd; worstDayDate = dailyKey; }
+  };
+  for (const ev of events) {
+    const day = new Date(ev.ts).toISOString().slice(0, 10);
+    if (day !== dailyKey) {
+      finalizeDay();
+      dailyKey = day;
+      dailyPeak = equity;
+      dailyTrough = equity;
+    }
+    if (ev.final) {
+      const before = tradeCurR.get(ev.tradeId) ?? 0;
+      const finalR = ev.rContribution;
+      const delta = (finalR - before) * riskUsd;
+      equity += delta;
+      realizedR.set(ev.tradeId, finalR);
+      tradeCurR.delete(ev.tradeId);
+    } else {
+      const before = tradeCurR.get(ev.tradeId) ?? 0;
+      const after = ev.rContribution;
+      const delta = (after - before) * riskUsd;
+      equity += delta;
+      tradeCurR.set(ev.tradeId, after);
+    }
+    if (equity > peak) peak = equity;
+    const ddPct = (peak - equity) / peak * 100;
+    if (ddPct > maxDdPct) maxDdPct = ddPct;
+    if (equity > dailyPeak) {
+      dailyPeak = equity;
+      dailyTrough = equity;
+    } else if (equity < dailyTrough) {
+      dailyTrough = equity;
+      const dd = (dailyTrough - dailyPeak) / dailyPeak * 100;
+      if (dd < worstDayDd) { worstDayDd = dd; worstDayDate = dailyKey; }
+    }
+  }
+  finalizeDay();
+  return { worstDayDd, worstDayDate, maxDdPct };
+}
+
 function aggregate(trades: ClosedTrade[], label: string) {
   const { keep, dropped } = applyPortfolioKills(trades, COMMON.startEquity, COMMON.riskPctBase);
   if (dropped > 0) console.log(`  (${label} portfolio kills dropped ${dropped}/${trades.length})`);
@@ -67,10 +178,26 @@ function aggregate(trades: ClosedTrade[], label: string) {
   let equity = COMMON.startEquity, peak = equity, maxDD = 0;
   let wins = 0, losses = 0, sumR = 0;
   const monthly: Record<string, number> = {};
-  for (const t of trades) {
+  const sortedByExit = [...trades].sort((a, b) => a.exitTs - b.exitTs);
+  let dailyPeak = COMMON.startEquity;
+  let dailyDay = new Date(sortedByExit[0]?.exitTs ?? Date.now()).toISOString().slice(0, 10);
+  let worstDailyDdFromPeakPct = 0;
+  let worstDailyDdDay = '';
+  let dailyMin = COMMON.startEquity;
+  for (const t of sortedByExit) {
+    const day = new Date(t.exitTs).toISOString().slice(0, 10);
+    if (day !== dailyDay) {
+      const dailyDd = (dailyMin - dailyPeak) / dailyPeak * 100;
+      if (dailyDd < worstDailyDdFromPeakPct) { worstDailyDdFromPeakPct = dailyDd; worstDailyDdDay = dailyDay; }
+      dailyDay = day;
+      dailyPeak = equity;
+      dailyMin = equity;
+    }
     const pnlUsd = t.pnlR * fixedRiskUsd;
     equity += pnlUsd;
     if (equity > peak) peak = equity;
+    if (equity > dailyPeak) dailyPeak = equity;
+    if (equity < dailyMin) dailyMin = equity;
     const dd = (peak - equity) / peak * 100;
     if (dd > maxDD) maxDD = dd;
     sumR += t.pnlR;
@@ -78,12 +205,21 @@ function aggregate(trades: ClosedTrade[], label: string) {
     const m = new Date(t.entryTs).toISOString().slice(0, 7);
     monthly[m] = (monthly[m] ?? 0) + pnlUsd;
   }
+  {
+    const dailyDd = (dailyMin - dailyPeak) / dailyPeak * 100;
+    if (dailyDd < worstDailyDdFromPeakPct) { worstDailyDdFromPeakPct = dailyDd; worstDailyDdDay = dailyDay; }
+  }
   const total = wins + losses;
   const winR = trades.filter(t => t.pnlR > 0).reduce((s, t) => s + t.pnlR, 0);
   const lossR = Math.abs(trades.filter(t => t.pnlR < 0).reduce((s, t) => s + t.pnlR, 0));
   const ret = (equity - COMMON.startEquity) / COMMON.startEquity * 100;
-  console.log(`${label}: n=${total} WR=${(wins/Math.max(1,total)*100).toFixed(1)}% PF=${(winR/Math.max(0.01,lossR)).toFixed(2)} sumR=${sumR.toFixed(2)} return=${ret.toFixed(2)}% MaxDD=${maxDD.toFixed(2)}%`);
-  return { equity, monthly, ret, maxDD };
+  const mtm = computeHonestMtmDdd(trades, COMMON.startEquity, fixedRiskUsd);
+  const hyro = computeHyroBoundDdd(trades, COMMON.startEquity, fixedRiskUsd);
+  console.log(`${label}: n=${total} WR=${(wins/Math.max(1,total)*100).toFixed(1)}% PF=${(winR/Math.max(0.01,lossR)).toFixed(2)} sumR=${sumR.toFixed(2)} return=${ret.toFixed(2)}%`);
+  console.log(`       close-only:  MaxDD=${maxDD.toFixed(2)}%  worstDailyDDD=${worstDailyDdFromPeakPct.toFixed(2)}%@${worstDailyDdDay}`);
+  console.log(`       per-trade swing: max=$${hyro.perTradeMaxSwingUsd.toFixed(0)}  avg=$${hyro.perTradeAvgSwingUsd.toFixed(0)}`);
+  console.log(`       HYRO Daily DD:  max peak-to-trough = ${mtm.maxDdPct.toFixed(2)}%   worst single-day = ${mtm.worstDayDd.toFixed(2)}% @ ${mtm.worstDayDate}`);
+  return { equity, monthly, ret, maxDD, worstDailyDdFromPeakPct, worstDailyDdDay, mtm, hyro };
 }
 
 async function main() {
@@ -95,7 +231,7 @@ async function main() {
   const active = TIER1_PORTFOLIO.filter(c => c.enabled);
   console.log(`\n═══════════════════════════════════════════════════════════════════════`);
   console.log(`  PORTFOLIO LIVE CONFIG — ${active.length} pairs, ${days}d honest engine`);
-  console.log(`  riskPct=${LIVE_RISK_PCT}% cap=${MAX_CONCURRENT_POSITIONS} | source: pair-strategies.ts`);
+  console.log(`  riskPct=${EFFECTIVE_RISK_PCT}%${RISK_PCT_OVERRIDE != null ? ` (OVERRIDE, source code = ${LIVE_RISK_PCT}%)` : ''} cap=${MAX_CONCURRENT_POSITIONS} | source: pair-strategies.ts`);
   console.log(`  Pairs: ${active.map(c => c.pair).join(', ')}`);
   console.log(`═══════════════════════════════════════════════════════════════════════\n`);
 

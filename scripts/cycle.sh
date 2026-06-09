@@ -95,6 +95,18 @@ fi
 #    without going through Claude /loop. Removes 5-30 min latency that caused
 #    setups to slip past their entry windows.
 if [ "$TOP_OF_HOUR" = "1" ]; then
+  # Coinglass refresh FIRST — the just-closed 4H CG bar MUST be ingested BEFORE
+  # scan-decide reads it, else scan-decide acts on the STALE prior bar and the new
+  # signal isn't seen until next hour (+1h entry lag). Measured 2026-06-09: CG API
+  # publishes the closed bar ~30s after close, our DB ~1.5min; reconcile/watcher/
+  # heartbeat above provide the buffer. Was AFTER scan-decide → that caused the lag.
+  npx tsx src/data/cli/cg-incremental.ts > /tmp/cycle-cg.out 2>&1
+  RC=$?
+  if [ "$RC" -ne 0 ]; then
+    log "cg-incremental failed (exit=$RC) — see /tmp/cycle-cg.out"
+    persist_out /tmp/cycle-history-errors.log /tmp/cycle-cg.out "$RC" "cg-incremental"
+  fi
+
   log "top-of-hour -> running scan-decide"
   npx tsx src/runtime/scan-decide.ts > /tmp/cycle-scan.out 2>&1
   RC=$?
@@ -123,13 +135,6 @@ if [ "$TOP_OF_HOUR" = "1" ]; then
     log "actionable=0 (no setups this hour)"
   fi
 
-  # Coinglass refresh at top of hour (granularity is 4h, hourly is plenty).
-  npx tsx src/data/cli/cg-incremental.ts > /tmp/cycle-cg.out 2>&1
-  RC=$?
-  if [ "$RC" -ne 0 ]; then
-    log "cg-incremental failed (exit=$RC) — see /tmp/cycle-cg.out"
-    persist_out /tmp/cycle-history-errors.log /tmp/cycle-cg.out "$RC" "cg-incremental"
-  fi
 else
   log "mid-hour cycle (skipping scan-decide; backtest-aligned timing)"
 fi

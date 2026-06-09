@@ -5,7 +5,7 @@ import { log } from '../core/logger';
 import { findStaleOrphans, findUnpromotedPending, markPendingOrphanedByLink, StalePending } from '../core/pending-orders';
 import { tradeRepo, OpenTrade } from '../data/trade-repo';
 import { promotePendingToTrade } from './pending-promoter';
-import { EntryConfirmedArgs, notifyEntryConfirmed } from '../core/tg-templates';
+import { EntryConfirmedArgs, notifyEntryConfirmedGroup } from '../core/tg-templates';
 import { divergenceDetector } from './divergence-detector';
 import {
   ClosedFill,
@@ -260,9 +260,24 @@ export async function runReconcile(): Promise<ReconcileResult> {
 
   // Promotion catch-net confirmations: a limit that filled while the daemon was
   // down is journaled here; tell the operator the entry is now live.
+  const confirmedGroups = new Map<string, EntryConfirmedArgs[]>();
   for (const e of confirmedEntries) {
-    await notifyEntryConfirmed(e).catch((err) =>
-      log.warn('reconcile notifyEntryConfirmed failed', { symbol: e.symbol, err: err?.message }));
+    const key = `${e.symbol}-${e.side}`;
+    (confirmedGroups.get(key) ?? confirmedGroups.set(key, []).get(key)!).push(e);
+  }
+  for (const group of confirmedGroups.values()) {
+    const first = group[0];
+    const tag = first.symbol.replace(/USDT$/, '');
+    await notifyEntryConfirmedGroup({
+      symbol: first.symbol,
+      side: first.side,
+      sizeTotal: group.reduce((s, e) => s + e.size, 0),
+      avgPrice: first.avgPrice,
+      sl: first.sl,
+      tp: first.tp,
+      accountSummaries: group.map((e) => `${e.account} — ${e.size.toFixed(2)} ${tag}`),
+    }).catch((err) =>
+      log.warn('reconcile notifyEntryConfirmedGroup failed', { symbol: first.symbol, err: err?.message }));
   }
 
   // ─── Pending-orders sweep: surface intents that never made it to a trades row ───

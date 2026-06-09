@@ -62,7 +62,7 @@ const HOUR_MS = 60 * 60_000;
 const DAY_MS = 24 * HOUR_MS;
 const STALE_TOLERANCE_MS = 5 * 60_000;    // 1H bar must close within 65 min ago = current bar fresh enough
 
-async function buildContext(
+export async function buildContext(
   symbol: string,
   nowTs: number,
   livePrice: number | null,
@@ -100,6 +100,20 @@ async function buildContext(
   }
 
   const decisionBar = closed1h[closed1h.length - 1];
+
+  // LEVER 1 (2026-06-03): decide on the last CLOSED 4H bar, not the forming 1H/CG.
+  // CG-fade is a 4H strategy. Live used to anchor ctx.price + the CG read to the last
+  // closed 1H bar — whose ts lands in the CURRENT, still-forming 4H CG bucket (CG is
+  // 4H-bucketed, inserted ON CONFLICT DO NOTHING). The honest 4H backtest instead reads
+  // the last COMPLETED 4H bucket + anchors levels to the 4H close. That divergence
+  // (forming vs completed CG + 1H vs 4H price anchor) cost ~half the edge: honest mirror
+  // (cap6/flatten/365d) = +31%/yr at the 1H anchor (current live) vs +46%/yr at the 4H
+  // anchor, and the 4H anchor held in BOTH OOS halves. So anchor BOTH ctx.price and the
+  // CG read to the last closed 4H bar. (The further 4H-cadence/+1h-defer lever to +62.8%
+  // was NOT robust OOS — recent +19.5pp but older −1.4pp — so it deliberately stays out.)
+  const FOUR_H_MS = 4 * 60 * 60_000;
+  const closed4h = bars4h.filter((b) => b.ts + FOUR_H_MS <= nowTs);
+  const anchorBar = closed4h.length > 0 ? closed4h[closed4h.length - 1] : decisionBar;
 
   // Build feature snapshots
   const slice1h = closed1h.slice(-300).map<CandleRow>((b) => ({
@@ -143,10 +157,10 @@ async function buildContext(
   let cgReason: string | undefined;
   try {
     const coin = symbol.replace(/USDT$/, '');
-    coinglass = await loadCoinglassAt(coin, symbol, decisionBar.ts);
+    coinglass = await loadCoinglassAt(coin, symbol, anchorBar.ts);
     if (coinglass.funding_oi_weighted == null) {
       cgMissing = true;
-      cgReason = 'no funding_oi_weighted row at decisionBar.ts';
+      cgReason = 'no funding_oi_weighted row at anchorBar.ts (last closed 4H)';
     }
   } catch (e: any) {
     coinglass = undefined;
@@ -171,7 +185,7 @@ async function buildContext(
   const ctx: StrategyContext = {
     symbol,
     ts: nowTs,
-    price: decisionBar.close,         // matches backtest engine
+    price: anchorBar.close,           // LEVER 1: last CLOSED 4H bar (was last closed 1H)
     features1h,
     features4h,
     featuresD,
@@ -505,7 +519,20 @@ export async function scanDecide(): Promise<ScanDecideResult> {
 
   // BTC 4H bars loaded ONCE — passed to buildContext for every pair that needs
   // cross-pair macro filter (CG-fade strategies with useBtcTrend).
-  const btcBars4h = await loadBars('BTCUSDT', '240m', 300);
+  const btcBars4hRaw = await loadBars('BTCUSDT', '240m', 300);
+  // Freshness guard: btcBars4h feeds the useBtcTrend macro filter for most live pairs
+  // (cg-fade trendFiltersAllow). If BTC ingestion lags and these go stale, do NOT
+  // silently gate entries on week-old BTC trend — drop them so useBtcTrend pairs
+  // fail-safe to HOLD (trendFiltersAllow returns false on insufficient bars) + log loud.
+  const BTC_BARS_STALE_MS = 12 * 60 * 60_000;
+  const btcLastTs = btcBars4hRaw.reduce((m, b) => Math.max(m, b.ts), 0);
+  const btcStale = btcLastTs === 0 || (nowTs - btcLastTs) > BTC_BARS_STALE_MS;
+  if (btcStale && btcBars4hRaw.length > 0) {
+    log.error('BTC 4H bars STALE — useBtcTrend filter disabled this cycle (affected pairs HOLD). Restore BTC candle ingestion (backfill SYMBOLS).', {
+      lastTs: btcLastTs, ageHours: Math.round((nowTs - btcLastTs) / 3_600_000),
+    });
+  }
+  const btcBars4h = btcStale ? [] : btcBars4hRaw;
 
   for (const symbol of UNIVERSE) {
     const strategy = getStrategyForPair(symbol);
@@ -543,6 +570,31 @@ export async function scanDecide(): Promise<ScanDecideResult> {
         allowed: false,
         reason: `rrTp2 ${enrichment.setupQuality.rrTp2.toFixed(2)} < min ${RISK.minRrTp2} (low-quality setup)`,
       };
+    }
+
+    // Macro-correlation overlay (L5, 2026-06-06): block the entry that would create
+    // the 3rd SAME-side open position across the book. The 4 pairs are highly
+    // BTC-correlated; an all-same-side stack is the gap-day tail risk that breaches
+    // Hyro −5% (2026-05-21 in backtest). Faithful mirror of the validated
+    // lever-macrocorr blk3: wouldBe = openSameSide + sameCycleApproved + 1; block if
+    // wouldBe ≥ RISK.maxSameSideConcentration (3). openSameSide = unique pairs already
+    // open this side (risk snapshot); sameCycleApproved = same-side entries approved
+    // earlier THIS cycle (the once-per-cycle snapshot can't see in-cycle approvals —
+    // this is the backtest's per-bar `pendingSame`, and UNIVERSE order == backtest BOOK
+    // priority order). A block here never reaches execute.ts → burns no strategy
+    // cooldown (the suppressed extreme re-fires next cycle).
+    if (finalRiskCheck.allowed && RISK.maxSameSideConcentration > 0) {
+      const openSameSide = action.side === 'long' ? risk.openLongCount : risk.openShortCount;
+      const sameCycleApproved = decisions.filter(
+        (d) => d.action === 'enter' && d.riskCheck?.allowed === true && d.side === action.side,
+      ).length;
+      const wouldBe = openSameSide + sameCycleApproved + 1;
+      if (wouldBe >= RISK.maxSameSideConcentration) {
+        finalRiskCheck = {
+          allowed: false,
+          reason: `same-side concentration: ${wouldBe}× ${action.side} (open ${openSameSide} + cycle ${sameCycleApproved} + this) ≥ cap ${RISK.maxSameSideConcentration} — macro-corr overlay`,
+        };
+      }
     }
 
     decisions.push({

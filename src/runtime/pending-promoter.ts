@@ -60,15 +60,17 @@ export async function promotePendingToTrade(
       `INSERT INTO trades (
          account_bucket, account_key, symbol, side, order_type, qty, initial_qty,
          entry_price, sl, tp1, tp2, status, rationale,
-         bybit_order_id, vault_trade_file, opened_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, NOW())
+         bybit_order_id, vault_trade_file, signal_price, opened_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, NOW())
        RETURNING id`,
       [
         pending.accountBucket, pending.accountKey, pending.symbol, pending.side,
         pending.orderType, bybitPos.size, bybitPos.size,
+        // entry_price = actual fill (avgPrice); signal_price = the strategy decision price
+        // the SL/TP/size were anchored to — slippage = signal_price − entry_price.
         entryPrice, pending.sl, pending.tp1, pending.tp2,
         'open', (pending.rationale ?? '').slice(0, 4000),
-        pending.bybitOrderId, tradeFile,
+        pending.bybitOrderId, tradeFile, pending.entryPrice,
       ]
     );
     const tradeId = parseInt(ins.rows[0].id, 10);

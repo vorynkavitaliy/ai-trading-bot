@@ -1,43 +1,43 @@
 /**
- * Per-pair strategy mapping for live Tier-1 portfolio.
+ * Per-pair strategy mapping for the live portfolio.
  *
- * Strategy v5 FINAL (2026-05-24): 7-pair portfolio with scaled-in FIXED on every
- * pair. Honest-engine backtest: +77.76%/yr FULL, OOS TEST +58% annualized,
- * MaxDD 6.75%, PF 1.91. See memory/portfolio_v5_final.md.
+ * ── STANDALONE TWO-SIDED-EDGE PORTFOLIO (2026-06-03 migration) ───────────────────
+ * Retired the v5 8-pair scaled-in alt book in favour of a 3-pair portfolio of
+ * individually walk-forward-validated, SINGLE-ENTRY (no DCA) strategies: BTC + SOL + ADA.
  *
- * Key changes from v4:
- *   - BTCUSDT removed: 0R on honest engine (funding window blocks half its setups)
- *   - SOLUSDT added (S4 funding+TA confluence)
- *   - HYPEUSDT added (S4 funding+TA confluence)
- *   - All pairs run scaled-in FIXED: 3 ATR-spaced limits, dca_boost decay 0.5,
- *     TP locked at signal+2·ATR (does NOT recompute on DCA fills)
+ * How it was built (see memory/project_standalone_pairs_2026_06_03 +
+ * project_btc_eth_signal_edge_2026_06_03):
+ *   - Per-pair config search (single entry, both OOS halves) → each pair's winner.
+ *   - Long/short balance = the robustness test. BTC + SOL are genuine TWO-SIDED edges
+ *     (both sides profitable). ADA is two-sided but short-tilted (long works, smaller) —
+ *     the watch-pair (weakest OOS, flat in the reverse walk-forward split).
+ *   - Walk-forward BOTH directions (select config on TRAIN, validate on untouched TEST),
+ *     selection by PF (robustness, not max-sumR): OOS +43-62%/yr, MaxDD 3-7%, 0 Hyro
+ *     breaches. Honest expectation ≈ +50%/yr (in-sample +64% was selection-inflated).
+ *   - Universal packaging: DROP scaled-in DCA (loses on low/mid-vol pairs — the tight-SL
+ *     artifact). BTC → ls_top_position fade (funding flips on BTC); alts → funding fade,
+ *     wider thresholds .70/.30. BTC-trend filter is load-bearing (alts follow BTC).
  *
- * 2026-05-27 — TAOUSDT re-added with S1 (NOT S3). It was benched in v5 as
- * "marginal/0R" but that was on S3 funding fade. Re-screened all 4 archetypes:
- * S1 (LS-top-pos fade + pair trend) gives sumR 15.21 / PF 2.72 / WR 68% in-sample.
- * Walk-forward 50/50: both halves positive (TRAIN +8.01, TEST +7.76, TEST PF 2.18).
- * Per-quarter: 4/4 positive (Tier-1 grade). Low frequency (~22 trades/yr) is the
- * only caveat. Universe now 10 pairs.
+ * pair-strategies.ts is the SINGLE SOURCE OF TRUTH for the live universe + per-pair
+ * strategy + per-pair risk. tier1Pairs()/getStrategyForPair() flow to scan-decide,
+ * risk-guard, reporting, ingestion. Disabling a pair here drops it everywhere at once.
  *
- * Multi-entry execution: scaledIn config flows from strategy.decide() → Action →
- * scan-decide JSON → auto-execute → execute.ts which places 3 limit orders with
- * per-slot qty determined by dca_boost (1R, 0.5R, 0.25R risk allocation).
+ * Multi-entry execution path (still present for any future scaled-in pair): scaledIn
+ * config flows strategy.decide() → Action → scan-decide JSON → auto-execute → execute.ts.
+ * The active 3 pairs are single-entry (no scaledIn) → one limit order each.
  */
 import { Strategy } from '../backtest/types';
 import { lsTopPositionFade, fundingFade, fundingTaConfluence } from '../strategies/cg-fade';
 
-// Live trial risk per trade. 0.5% per slot baseline — full-deploy (3 fills)
-// risks 1.75R = 0.875% deposit at full DCA.
-export const LIVE_RISK_PCT = 0.5;
+// Per-trade risk. SINGLE-ENTRY now, so this IS the per-trade risk (not per-slot).
+// Mixed: BTC carries more (cleanest two-sided edge, lowest DD); SOL/ADA less (correlated
+// to BTC, dialed back so a joint bad day stays under Hyro −5%). Validated mix.
+export const LIVE_RISK_PCT = 0.875;       // SOL / ADA per-trade risk
+export const LIVE_RISK_PCT_BTC = 1.25;    // BTC per-trade risk (more weight)
+export const LIVE_RISK_PCT_LINK = 0.6;    // LINK per-trade risk (thin edge n~30/yr, heat-fit: 1.25+0.875+0.875+0.6=3.6<3.75 cap)
 
-// Scaled-in FIXED config — same parameters used across all pairs.
-// Engine + execute.ts treat this as: 3 ATR-spaced limit orders, deeper entries
-// get bigger qty, TP price LOCKED at signal+2*ATR (does NOT pull closer on fills).
-//
-// 2026-05-25 — spacing 0.6→0.5 after XRP incident: at 0.6 spacing, slot 3 was at
-// +1.2*ATR vs SL at +1.5*ATR, leaving only 0.3*ATR buffer. Slot 3 qty (sized to
-// 0.125% risk on that tiny distance) inflated notional + had near-instant SL risk.
-// At 0.5 spacing: slot 3 at +1.0*ATR, buffer 0.5*ATR — safer.
+// Scaled-in FIXED config — ARCHIVED. Only the disabled v5 pairs below reference it.
+// The active 3-pair portfolio is single-entry (drop-DCA was a universal win).
 const SCALED_IN_FIXED = {
   nEntries: 3,
   spacingAtr: 0.5,
@@ -54,52 +54,57 @@ export interface PairStrategyCfg {
 }
 
 export const TIER1_PORTFOLIO: PairStrategyCfg[] = [
-  // S4 funding+TA confluence (replaced BTC — honest engine 0R, S4 SOL +10.65R)
+  // ═══ ACTIVE — standalone two-sided portfolio (2026-06-03), SINGLE ENTRY, mixed risk ═══
+  // BTC — ls_top_position fade (BTC's stable signal; funding flips on it) + BTC trend +
+  // wide stop (2.0×ATR survives the ~48h reversion). WF both halves +, PF 1.47/1.90.
+  { pair: 'BTCUSDT', enabled: true,
+    strategy: lsTopPositionFade({ pctHi: 0.85, pctLo: 0.15,
+      usePairTrend: false, useBtcTrend: true,
+      slAtrMult: 2.0, tpAtrMult: 2.0, maxHoldBars: 12,
+      riskPct: LIVE_RISK_PCT_BTC }) },
+  // SOL — funding fade, wider thresholds .70/.30 + wide stop. Strongest standalone,
+  // two-sided (long +$26.5k / short +$30.8k over the year). WF both halves +, PF 1.58/1.78.
   { pair: 'SOLUSDT', enabled: true,
-    strategy: fundingTaConfluence({ riskPct: LIVE_RISK_PCT, scaledIn: SCALED_IN_FIXED }) },
-  // S2 L/S Top Position fade + BTC macro
-  { pair: 'INJUSDT', enabled: true,
-    strategy: lsTopPositionFade({ pctHi: 0.85, pctLo: 0.15,
-      usePairTrend: false, useBtcTrend: true,
+    strategy: fundingFade({ pctHi: 0.70, pctLo: 0.30,
+      slAtrMult: 2.0, tpAtrMult: 2.0, maxHoldBars: 12,
+      riskPct: LIVE_RISK_PCT }) },
+  // ADA — funding fade .75/.25, tight stop. Two-sided but short-tilted (long works,
+  // smaller). WATCH-PAIR: weakest OOS (flat in reverse WF). Ready to drop if it lags live.
+  { pair: 'ADAUSDT', enabled: true,
+    strategy: fundingFade({ pctHi: 0.75, pctLo: 0.25,
       slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12,
-      riskPct: LIVE_RISK_PCT, scaledIn: SCALED_IN_FIXED }) },
-  // S3 funding fade
-  { pair: 'ATOMUSDT', enabled: true,
-    strategy: fundingFade({ riskPct: LIVE_RISK_PCT, scaledIn: SCALED_IN_FIXED }) },
-  { pair: 'ARBUSDT', enabled: true,
-    strategy: fundingFade({ riskPct: LIVE_RISK_PCT, scaledIn: SCALED_IN_FIXED }) },
-  // S4 funding+TA confluence
-  { pair: 'XRPUSDT', enabled: true,
-    strategy: fundingTaConfluence({ riskPct: LIVE_RISK_PCT, scaledIn: SCALED_IN_FIXED }) },
-  // S2 (validated 2026-05-23 — funding fade gave PF 1.02, S2 gave PF 1.31 in pair sweep)
-  { pair: 'LTCUSDT', enabled: true,
-    strategy: lsTopPositionFade({ pctHi: 0.85, pctLo: 0.15,
-      usePairTrend: false, useBtcTrend: true,
+      riskPct: LIVE_RISK_PCT }) },
+  // LINK — funding + L/S Top Account confluence (S4), .70/.30, tight stop. Added 2026-06-04
+  // (see memory/project_link_addition_flatten_2026_06_04): only ROBUST of 14 candidates in
+  // the two-sided WF screen (long+short both dirs +, same S4 config picked on both halves);
+  // 4-pair combined A/B +39pp/yr with MaxDD↓, and it fixes the 3-pair flatten-concentration
+  // pathology. Risk 0.6% (thin edge, heat-fit). 4-pair WF OOS +107%/+38%/yr both dirs.
+  { pair: 'LINKUSDT', enabled: true,
+    strategy: fundingTaConfluence({ pctHi: 0.70, pctLo: 0.30,
       slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12,
-      riskPct: LIVE_RISK_PCT, scaledIn: SCALED_IN_FIXED }) },
-  // S4 funding+TA confluence (new pair — backtest PF 1.83 / MaxDD 2.88%)
-  { pair: 'HYPEUSDT', enabled: true,
-    strategy: fundingTaConfluence({ riskPct: LIVE_RISK_PCT, scaledIn: SCALED_IN_FIXED }) },
-  // S1 ls-top-pos fade + pair trend (added 2026-05-25, walk-forward TEST n=21,
-  // WR 71.4%, PF 2.92, +13.34% return — atypical reverse degradation from TRAIN
-  // but TEST strongly profitable, MaxDD 1.99%).
-  { pair: 'ETHUSDT', enabled: true,
-    strategy: lsTopPositionFade({ pctHi: 0.85, pctLo: 0.15,
-      usePairTrend: true, useBtcTrend: false,
-      slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12,
-      riskPct: LIVE_RISK_PCT, scaledIn: SCALED_IN_FIXED }) },
-  // S3 funding fade (added 2026-05-25, walk-forward TEST n=42, WR 52.4%,
-  // PF 1.38, +6.63% return — classic TRAIN→TEST degradation but TEST profitable).
-  { pair: 'BNBUSDT', enabled: true,
-    strategy: fundingFade({ riskPct: LIVE_RISK_PCT, scaledIn: SCALED_IN_FIXED }) },
-  // S1 ls-top-pos fade + pair trend (re-added 2026-05-27 with CORRECT strategy —
-  // was benched on S3 funding. Walk-forward both halves +, per-quarter 4/4 Tier-1.
-  // TEST PF 2.18 / WR 64% / avgR 0.555. Low freq ~22 trades/yr).
-  { pair: 'TAOUSDT', enabled: true,
-    strategy: lsTopPositionFade({ pctHi: 0.85, pctLo: 0.15,
-      usePairTrend: true, useBtcTrend: false,
-      slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12,
-      riskPct: LIVE_RISK_PCT, scaledIn: SCALED_IN_FIXED }) },
+      riskPct: LIVE_RISK_PCT_LINK }) },
+
+  // ═══ ARCHIVED 2026-06-03 — prior v5 8-pair scaled-in alt book. Retired for the
+  //     standalone portfolio above. enabled:false (kept for history / fast rollback).
+  //     Used scaled-in FIXED DCA (decay 0.5) at 0.5%/slot — the DCA loses on low-vol pairs. ═══
+  { pair: 'INJUSDT', enabled: false,
+    strategy: lsTopPositionFade({ pctHi: 0.85, pctLo: 0.15, usePairTrend: false, useBtcTrend: true, slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12, riskPct: 0.5, scaledIn: SCALED_IN_FIXED }) },
+  { pair: 'ATOMUSDT', enabled: false,
+    strategy: fundingFade({ riskPct: 0.5, scaledIn: SCALED_IN_FIXED }) },
+  { pair: 'ARBUSDT', enabled: false,
+    strategy: fundingFade({ riskPct: 0.5, scaledIn: SCALED_IN_FIXED }) },
+  { pair: 'XRPUSDT', enabled: false,
+    strategy: fundingTaConfluence({ riskPct: 0.5, scaledIn: SCALED_IN_FIXED }) },
+  { pair: 'LTCUSDT', enabled: false,
+    strategy: lsTopPositionFade({ pctHi: 0.85, pctLo: 0.15, usePairTrend: false, useBtcTrend: true, slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12, riskPct: 0.5, scaledIn: SCALED_IN_FIXED }) },
+  { pair: 'HYPEUSDT', enabled: false,
+    strategy: fundingTaConfluence({ riskPct: 0.5, scaledIn: SCALED_IN_FIXED }) },
+  { pair: 'ETHUSDT', enabled: false,
+    strategy: lsTopPositionFade({ pctHi: 0.85, pctLo: 0.15, usePairTrend: true, useBtcTrend: false, slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12, riskPct: 0.5, scaledIn: SCALED_IN_FIXED }) },
+  { pair: 'BNBUSDT', enabled: false,
+    strategy: fundingFade({ riskPct: 0.5, scaledIn: SCALED_IN_FIXED }) },
+  { pair: 'TAOUSDT', enabled: false,
+    strategy: lsTopPositionFade({ pctHi: 0.85, pctLo: 0.15, usePairTrend: true, useBtcTrend: false, slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12, riskPct: 0.5, scaledIn: SCALED_IN_FIXED }) },
 ];
 
 export function getStrategyForPair(pair: string): Strategy | null {

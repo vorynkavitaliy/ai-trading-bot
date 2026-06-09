@@ -17,7 +17,8 @@ import { AccountKey } from '../core/accounts';
 import { getRest, getInstrumentInfo, roundPriceToTick, roundQtyToStep, withRetry } from '../core/bybit';
 import { closeAndVerify } from '../core/close-verifier';
 import { query } from '../core/db';
-import { notifyAlert, notifyClose, notifyDcaFill } from '../core/tg-templates';
+import { notifyClose } from '../core/tg-templates';
+import { coalesceDcaFill, coalesceNakedSlAlert } from './notification-coalescer';
 import { log } from '../core/logger';
 import { Position } from '../core/position';
 
@@ -288,11 +289,12 @@ export async function handleNakedSl(pos: BybitPos): Promise<RecoveryAction[]> {
       action: 'EMERGENCY-SL-SET',
       reason: 'naked position detected',
     });
-    await notifyAlert({
-      kind: 'reconcile_divergence',
+    coalesceNakedSlAlert({
       symbol: pos.symbol,
-      detail: `${pos.symbol} ${pos.side} был БЕЗ стоп-лосса! Установлен SL=${pos.dbInitialSL.toFixed(4)} (из DB).`,
-      action: 'Проверь Bybit — почему SL не сохранился при open. Возможен баг в execute.ts',
+      side: pos.side,
+      accountLabel,
+      outcome: 'sl_set',
+      detail: `SL установлен ${pos.dbInitialSL.toFixed(4)} (из DB)`,
     });
     return actions;
   } catch (slErr: any) {
@@ -309,29 +311,32 @@ export async function handleNakedSl(pos: BybitPos): Promise<RecoveryAction[]> {
           action: 'EMERGENCY-CLOSE',
           reason: 'naked + SL set rejected → force-closed',
         });
-        await notifyAlert({
-          kind: 'reconcile_divergence',
+        coalesceNakedSlAlert({
           symbol: pos.symbol,
-          detail: `${pos.symbol} ${pos.side} был БЕЗ SL и SL не удалось установить — экстренно закрыта по рынку. finalSize=${closeResult.finalSize}.`,
-          action: 'Проверь execute.ts и Bybit лог — почему SL не привязался при open.',
+          side: pos.side,
+          accountLabel,
+          outcome: 'closed',
+          detail: `SL set не прошёл — закрыта по рынку (finalSize=${closeResult.finalSize})`,
         });
       } else if (closeResult.status === 'dust_below_min') {
-        await notifyAlert({
-          kind: 'reconcile_divergence',
+        coalesceNakedSlAlert({
           symbol: pos.symbol,
-          detail: `${pos.symbol} ${pos.side} БЕЗ SL, остаток < min notional (size=${closeResult.finalSize}). Bybit не принимает reduce-only Market. Риск < $5, мониторим.`,
-          action: 'Ручное закрытие через UI, либо подожди дрейф до SL/ликвидации.',
+          side: pos.side,
+          accountLabel,
+          outcome: 'dust',
+          detail: `остаток < min notional (size=${closeResult.finalSize}), риск < $5, мониторим`,
         });
       } else {
         throw new Error(`closeAndVerify status=${closeResult.status} finalSize=${closeResult.finalSize}`);
       }
     } catch (closeErr: any) {
       log.error('EMERGENCY close ALSO FAILED', { err: closeErr?.message });
-      await notifyAlert({
-        kind: 'reconcile_divergence',
+      coalesceNakedSlAlert({
         symbol: pos.symbol,
-        detail: `🆘 КРИТИЧНО: ${pos.symbol} БЕЗ SL и не получилось ни установить SL, ни закрыть по рынку. Закрой вручную.`,
-        action: 'Закрой позицию через Bybit UI немедленно. SL fail: ' + (slErr?.message ?? '') + ' | Close fail: ' + (closeErr?.message ?? ''),
+        side: pos.side,
+        accountLabel,
+        outcome: 'critical',
+        detail: `🆘 не вышло ни поставить SL, ни закрыть. SL fail: ${slErr?.message ?? ''} | Close fail: ${closeErr?.message ?? ''}`,
       });
     }
     return actions;
@@ -360,70 +365,27 @@ export async function handleDcaFill(pos: BybitPos): Promise<RecoveryAction | nul
     log.warn('DCA fill — DB update failed', { err: e?.message });
   }
 
-  try {
-    const cli = getRest(pos.account);
-    const closingSide = pos.side === 'Sell' ? 'Buy' : 'Sell';
-    const ordersR: any = await withRetry(
-      () => cli.getActiveOrders({ category: 'linear', symbol: pos.symbol }),
-      { label: `reTP-getOrders-${accLabel}` },
-    );
-    const oldTps = (ordersR.result?.list ?? []).filter(
-      (o: any) => o.reduceOnly === true && o.side === closingSide && o.orderType === 'Limit',
-    );
-    for (const tp of oldTps) {
-      await withRetry(
-        () => cli.cancelOrder({ category: 'linear', symbol: pos.symbol, orderId: tp.orderId }),
-        { label: `reTP-cancel-${tp.orderLinkId}` },
-      );
-    }
-    const tpPrice = pos.dbTP1;
-    if (tpPrice != null) {
-      const info = await getInstrumentInfo(pos.account, pos.symbol);
-      const qtyStr = roundQtyToStep(pos.size, info);
-      const newLink = `rtp-dca-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-      await withRetry(
-        () => cli.submitOrder({
-          category: 'linear',
-          symbol: pos.symbol,
-          side: closingSide,
-          orderType: 'Limit',
-          qty: qtyStr,
-          price: roundPriceToTick(tpPrice, info),
-          timeInForce: 'GTC',
-          reduceOnly: true,
-          orderLinkId: newLink,
-        }),
-        { label: `reTP-place-${accLabel}` },
-      );
-      log.info('TP re-placed for full DCA-deployed position', {
-        symbol: pos.symbol, account: accLabel, newQty: pos.size, tpPrice,
-      });
-    }
-  } catch (e: any) {
-    log.warn('DCA fill — TP re-place failed', { err: e?.message });
-  }
+  // NO TP re-placement needed. TP+SL are attached to the slot-1 entry order as
+  // POSITION-LEVEL conditionals (execute.ts placeScaledIn). Bybit auto-applies
+  // them to the full position as DCA slots fill — the grown size is covered
+  // automatically. Placing a reduce-only limit TP here would create a DOUBLE TP
+  // (attached market-TP + limit-TP). We only update the DB qty above + notify.
 
-  try {
-    await notifyDcaFill({
-      symbol: pos.symbol,
-      side: pos.side.toLowerCase() === 'buy' ? 'buy' : 'sell',
-      prevSize: pos.dbInitialQty,
-      newSize: pos.size,
-      newAvgPrice: pos.entryPrice,
-      sl: pos.curSL,
-      tp: pos.curTP,
-      accountSummaries: [
-        `${accLabel} — ${pos.dbInitialQty.toFixed(2)} → ${pos.size.toFixed(2)} ${pos.symbol.replace(/USDT$/, '')}  (+${delta.toFixed(2)})`,
-      ],
-    });
-  } catch (e: any) {
-    log.warn('DCA fill — telegram failed', { err: e?.message });
-  }
+  coalesceDcaFill({
+    symbol: pos.symbol,
+    side: pos.side.toLowerCase() === 'buy' ? 'buy' : 'sell',
+    prevSize: pos.dbInitialQty,
+    newSize: pos.size,
+    newAvgPrice: pos.entryPrice,
+    sl: pos.curSL,
+    tp: pos.curTP,
+    accountSummary: `${accLabel} — ${pos.dbInitialQty.toFixed(2)} → ${pos.size.toFixed(2)} ${pos.symbol.replace(/USDT$/, '')}  (+${delta.toFixed(2)})`,
+  });
 
   return {
     symbol: pos.symbol,
     account: accLabel,
     action: 'DCA-FILL-DETECTED',
-    reason: `size grew ${pos.dbInitialQty}→${pos.size}; TP re-placed`,
+    reason: `size grew ${pos.dbInitialQty}→${pos.size}; position-level TP auto-covers`,
   };
 }

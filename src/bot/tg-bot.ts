@@ -7,19 +7,21 @@
 //   /cycle      — last cron tick + auto-execute summary (actionable/take/skip/executed)
 //   /pause      — create vault/Watchlist/PAUSE.md → auto-execute halts new entries
 //   /resume     — remove PAUSE.md
+//   /closeall   — emergency: cancel pending + market-close ALL positions across accounts (with inline confirm)
 //   /help       — list commands
 //
 // Run via: npm run tg-bot (tmux window or systemd unit). Restart on crash.
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { Telegraf } from 'telegraf';
+import { Telegraf, Markup } from 'telegraf';
 import { requireTelegram } from '../core/config';
 import { query, close as closePg } from '../core/db';
 import { loadAccounts } from '../core/accounts';
 import { getRest, withRetry } from '../core/bybit';
 import { getDayPnl, formatDayPnl } from '../core/pnl';
 import { RISK } from '../runtime/risk-guard';
+import { closeAllAcrossAccounts, listOpenSymbolsAcrossAccounts } from '../runtime/close-runner';
 import { log } from '../core/logger';
 
 // PAUSE.md marker at project root (src/bot → ../.. = root). Created on /pause,
@@ -192,14 +194,93 @@ function cmdHelp(): string {
     '/cycle — last cron + auto-execute summary',
     '/pause [reason] — halt new entries (PAUSE.md)',
     '/resume — remove PAUSE.md',
+    '/closeall — emergency: close ALL positions on ALL accounts (with confirm)',
     '/help — this message',
   ].join('\n');
 }
 
+interface CloseAllPending {
+  ts: number;
+  chatId: string;
+  symbolsPreview: string[];
+}
+const pendingCloseAll = new Map<string, CloseAllPending>();
+const CLOSEALL_CONFIRM_TTL_MS = 60_000;
+
+async function cmdCloseAllPreview(chatId: string): Promise<{ text: string; token: string | null }> {
+  const snapshot = await listOpenSymbolsAcrossAccounts();
+  if (snapshot.openCount === 0) {
+    return { text: '<b>📂 closeall</b>\n\nНет открытых позиций. Делать нечего.', token: null };
+  }
+  const token = `${chatId}-${Date.now()}`;
+  pendingCloseAll.set(token, { ts: Date.now(), chatId, symbolsPreview: snapshot.symbols });
+  const lines = [
+    '<b>🛑 closeall — ПОДТВЕРЖДЕНИЕ</b>',
+    '',
+    `Найдено <b>${snapshot.openCount}</b> позиций на ${snapshot.symbols.length} символах:`,
+    `<code>${snapshot.symbols.join(', ')}</code>`,
+    '',
+    'Действие:',
+    '  • Отмена pending limit-orders на всех аккаунтах',
+    '  • Reduce-only MARKET close по каждой паре',
+    '  • Auto-retry stuck до 3 раундов',
+    '',
+    '⚠ Это операция «всё или ничего». Подтверждение валидно 60 сек.',
+  ];
+  return { text: lines.join('\n'), token };
+}
+
+async function executeCloseAll(reply: (s: string) => Promise<void>, reason: string): Promise<void> {
+  const t0 = Date.now();
+  const buffer: string[] = [];
+  let lastFlush = Date.now();
+  const flush = async (force = false) => {
+    if (buffer.length === 0) return;
+    if (!force && Date.now() - lastFlush < 1500) return;
+    const chunk = buffer.splice(0, buffer.length).join('\n');
+    lastFlush = Date.now();
+    try { await reply(`<code>${chunk}</code>`); } catch (e: any) { log.warn('closeall reply chunk failed', { err: e.message }); }
+  };
+
+  await reply('🛑 closeall started — отменяю pending, закрываю позиции…');
+
+  let result;
+  try {
+    result = await closeAllAcrossAccounts({
+      cancelPending: true,
+      outerRetries: 3,
+      reason,
+      onProgress: async (line) => { buffer.push(line); await flush(); },
+    });
+    await flush(true);
+  } catch (e: any) {
+    log.error('closeall crashed', { err: e.message });
+    await reply(`❌ closeall crashed: <code>${e.message}</code>`);
+    return;
+  }
+
+  const took = ((Date.now() - t0) / 1000).toFixed(1);
+  const head = result.allClosed ? '✅ closeall завершён' : '⚠ closeall частично';
+  const lines = [
+    `<b>${head}</b>`,
+    '',
+    `Symbols: ${result.symbols.join(', ') || '—'}`,
+    `Attempts: ${result.totalOk}/${result.totalAttempts} OK, ${result.totalStuck} stuck`,
+    `Retries used: ${result.retriesUsed}`,
+    `Took: ${took}s`,
+  ];
+  if (!result.allClosed) {
+    lines.push('', '❌ <b>STUCK — нужен ручной разбор на Bybit-стороне</b>');
+  }
+  await reply(lines.join('\n'));
+}
+
 async function main() {
-  const { botToken, chatId: allowedChatIdRaw } = requireTelegram();
-  // TELEGRAM_CHAT_ID may be a single id or comma-separated list (multi-operator setups).
-  const allowedChatIds = new Set(String(allowedChatIdRaw).split(',').map((s) => s.trim()).filter(Boolean));
+  const { botToken, operatorChatId } = requireTelegram();
+  // Auth gate is TELEGRAM_OPERATOR_CHAT_ID (commands restricted) — separate from
+  // TELEGRAM_CHAT_ID which is the broadcast list for outbound alerts (telegram.ts).
+  // Comma-separated supported in case multiple operator IDs share command rights.
+  const allowedChatIds = new Set(String(operatorChatId).split(',').map((s) => s.trim()).filter(Boolean));
 
   const bot = new Telegraf(botToken);
 
@@ -248,6 +329,61 @@ async function main() {
   });
   bot.command('resume', async (ctx) => {
     await ctx.reply(cmdResume(), { parse_mode: 'HTML' });
+  });
+
+  bot.command('closeall', async (ctx) => {
+    try {
+      const chatId = String(ctx.chat?.id ?? '');
+      const { text, token } = await cmdCloseAllPreview(chatId);
+      if (!token) {
+        await ctx.reply(text, { parse_mode: 'HTML' });
+        return;
+      }
+      await ctx.reply(text, {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          Markup.button.callback('🛑 YES — close all', `closeall:yes:${token}`),
+          Markup.button.callback('Cancel', `closeall:no:${token}`),
+        ]),
+      });
+    } catch (e: any) {
+      log.error('tg-bot /closeall preview failed', { err: e.message });
+      await ctx.reply(`closeall preview failed: ${e.message}`);
+    }
+  });
+
+  bot.action(/^closeall:(yes|no):(.+)$/, async (ctx) => {
+    const verdict = ctx.match[1];
+    const token = ctx.match[2];
+    const chatId = String(ctx.chat?.id ?? '');
+    const pending = pendingCloseAll.get(token);
+
+    if (!pending || pending.chatId !== chatId) {
+      await ctx.answerCbQuery('Подтверждение не найдено (истекло?).');
+      try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+      return;
+    }
+    if (Date.now() - pending.ts > CLOSEALL_CONFIRM_TTL_MS) {
+      pendingCloseAll.delete(token);
+      await ctx.answerCbQuery('Срок подтверждения истёк, повтори /closeall.');
+      try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+      return;
+    }
+    pendingCloseAll.delete(token);
+
+    try { await ctx.editMessageReplyMarkup(undefined); } catch {}
+    await ctx.answerCbQuery(verdict === 'yes' ? 'Закрываю…' : 'Отменено.');
+
+    if (verdict === 'no') {
+      await ctx.reply('✋ closeall cancelled.');
+      return;
+    }
+
+    log.warn('TG /closeall executing', { chatId, symbols: pending.symbolsPreview });
+    await executeCloseAll(
+      async (s: string) => { await ctx.reply(s, { parse_mode: 'HTML' }); },
+      `tg-closeall by chat ${chatId}`,
+    );
   });
 
   bot.catch((err: any, ctx) => {

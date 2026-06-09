@@ -16,11 +16,24 @@ import { tier1Pairs } from './pair-strategies';
  */
 export const RISK = Object.freeze({
   riskPctBase: 0.375,                       // 3.75% heat cap / 10 parallel = 0.375%
-  riskPctCap: 0.6,                          // hard cap if scaled up by vol multiplier
-  maxParallelPositions: 6,                  // bt 2026-05-25: cap-6 = optimum (+66.96% / MaxDD 4.51% vs cap-7+ unlimited +64.69%). Operator-set.
+  riskPctCap: 1.5,                          // 2026-06-03: raised 0.6→1.5 for the 3-pair standalone portfolio (BTC 1.25%/trade, SOL/ADA 0.875%). Backstop vs runaway sizing. Full-deploy heat = 1.25+0.875+0.875 = 3.0% < 3.75% cap.
+  maxParallelPositions: 4,                  // 2026-06-04: 4-pair book (BTC+SOL+ADA+LINK, single entry) → cap-4 = one position per pair. Heat 1.25+0.875+0.875+0.6=3.6% < 3.75% cap. Was cap-3 (3-pair BTC+SOL+ADA), cap-6 (8-pair v5, archived).
+  maxSameSideConcentration: 0,              // L5 macro-corr overlay — DISABLED 2026-06-06 after direct verification REFUTED its justification. The claim "removes the 2026-05-21 Hyro gap-day breach" is FALSE on the honest recent-170d (fresh-$200k) window: base AND blk3 both breach 1/1 (raw DD −8.13% vs −7.74% — a price gap flatten can't catch either way). blk3 also UNDERPERFORMS base on BOTH halves (OLD −6.2pp, recent −9.6pp ret, +2.2pp MaxDD) — the lone FULL-340d +3.7pp gain is a compounding-path artifact, not a robust edge (flatten path-chaos: gap-day delta sign is noise). Plumbing (openLongCount/openShortCount, telemetry, scan-decide gate) is left in place but inert via this 0. Set to 3 to re-enable IF re-justified on decomposed windows. See memory/project_l5_macrocorr_overlay_2026_06_06.md. Block logic mirrors lever-macrocorr blk3: wouldBe = openSame + sameCycleApproved + 1; block if wouldBe ≥ this.
+  maxEntriesPerWindow: 6,                     // 2026-06-03: raised 3→6 for the 3-pair book — the validated WF used no entry-throttle; 6/12h lets all 3 pairs enter + re-enter without strangling the edge, while still a runaway backstop.
+  entryCapWindowHours: 12,                    // rolling window for maxEntriesPerWindow (operator: 12h, not calendar day)
+  entryCapEpochMs: 1780424189205,             // operator-reset 2026-06-02 18:16 UTC: counter cleared after ETH SL cluster. Entries BEFORE this don't count toward the cap.
   totalHeatCapPct: 3.75,                    // worst-case bt MaxDD 3.96% @ slip 0.40%
   dailyDrawdownSoftKillPct: -2.5,
   dailyDrawdownHardKillPct: -4.0,
+  // 2026-06-03: entry-block kills DISABLED. The DD-flatten daemon (−4.3% from daily
+  // peak, position-monitor) is now the ACTIVE daily-DD protection. Entry-block kills
+  // are useless for Hyro survival (they stop new entries but don't CLOSE the existing
+  // floating-loss positions that actually breach −5%) and deadlock with flatten (a
+  // flatten-realized loss trips the soft kill → blocks re-entry rest of day → strategy
+  // strangled; backtest profile C = −4.4%/n20). Mirrors the backtest's
+  // disableKillSwitches (engine-portfolio.ts) which is on whenever flatten is armed.
+  // Metric dailyDdFromPeakPct is still computed (telemetry). Flip true to re-enable.
+  dailyKillSwitchesEnabled: false,
   totalKillPct: -8.0,
   maxSlPerPairPerDay: 2,
   cooldownAfterSlHours: 12,                 // post-SL cooldown survives UTC-day boundary
@@ -59,6 +72,9 @@ export interface RiskState {
   dailyTroughEquityUsd: number;            // lowest equity since the current peak was set
   dailyDdFromPeakPct: number;              // (trough - peak) / peak * 100
   openPositionsCount: number;
+  openLongCount: number;                    // distinct pairs currently open LONG (macro-corr same-side overlay)
+  openShortCount: number;                   // distinct pairs currently open SHORT (macro-corr same-side overlay)
+  entriesInWindow: number;                  // distinct entries opened in the trailing entryCapWindowHours (any status) — rolling entry cap
   totalHeatPct: number;
   pairBlocked: Record<string, string>;     // 'BTCUSDT' → reason
   inFundingWindow: boolean;
@@ -164,11 +180,14 @@ async function countSlToday(now: Date, symbol: string): Promise<number> {
   return tradeRepo.countSlInSession(symbol, sessionStart);
 }
 
-async function fetchOpenPositions(): Promise<Array<{ symbol: string; riskedUsd: number }>> {
+async function fetchOpenPositions(): Promise<Array<{ symbol: string; riskedUsd: number; side: 'long' | 'short' }>> {
   const trades = await tradeRepo.openTrades();
   return trades.map((t) => {
     const p = Position.fromOpenTrade(t);
-    return { symbol: p.symbol, riskedUsd: p.riskedUsd() };
+    // trades.side is stored Bybit-style ('Buy'/'Sell'); normalize to long/short space
+    // so it compares against the strategy's action.side ('long'|'short').
+    const side: 'long' | 'short' = /^(buy|long)$/i.test(p.side) ? 'long' : 'short';
+    return { symbol: p.symbol, riskedUsd: p.riskedUsd(), side };
   });
 }
 
@@ -197,8 +216,18 @@ export async function getRiskState(now: Date = new Date()): Promise<RiskState> {
   // is symmetric across accounts (Promise.all broadcast), so they live and die together.
   const uniquePairs = new Set(openPositions.map((p) => p.symbol));
   const uniquePositionsCount = uniquePairs.size;
+  // Per-side UNIQUE-pair counts for the macro-corr overlay. Dedup by symbol (one
+  // signal broadcast to N accounts = N rows but ONE pair-position), same as uniquePairs.
+  const longOpenPairs = new Set(openPositions.filter((p) => p.side === 'long').map((p) => p.symbol));
+  const shortOpenPairs = new Set(openPositions.filter((p) => p.side === 'short').map((p) => p.symbol));
   const totalRisked = openPositions.reduce((s, p) => s + p.riskedUsd, 0);
   const totalHeatPct = equity > 0 ? (totalRisked / equity) * 100 : 0;
+
+  // Floor the rolling window at the cap-logic start epoch so entries opened before
+  // the operator activated this cap don't count (clean start). Once 12h pass, the
+  // rolling window naturally moves past the epoch and the floor is a no-op.
+  const entryWindowStartMs = Math.max(now.getTime() - RISK.entryCapWindowHours * 3_600_000, RISK.entryCapEpochMs);
+  const entriesInWindow = await tradeRepo.countEntriesSince(entryWindowStartMs);
 
   const pairBlocked: Record<string, string> = {};
   for (const symbol of tier1Pairs()) {
@@ -225,13 +254,17 @@ export async function getRiskState(now: Date = new Date()): Promise<RiskState> {
     dailyTroughEquityUsd,
     dailyDdFromPeakPct,
     openPositionsCount: uniquePositionsCount,
+    openLongCount: longOpenPairs.size,
+    openShortCount: shortOpenPairs.size,
+    entriesInWindow,
     totalHeatPct,
     pairBlocked,
     inFundingWindow: isFundingWindow(now),
     // Kill switches measure from PEAK (Hyro semantics). Account can be in profit
     // for the day net-net but still trigger kill if it gave back enough from peak.
-    softKillTriggered: dailyDdFromPeakPct <= RISK.dailyDrawdownSoftKillPct,
-    hardKillTriggered: dailyDdFromPeakPct <= RISK.dailyDrawdownHardKillPct,
+    // Gated by dailyKillSwitchesEnabled (now false — flatten daemon supersedes these).
+    softKillTriggered: RISK.dailyKillSwitchesEnabled && dailyDdFromPeakPct <= RISK.dailyDrawdownSoftKillPct,
+    hardKillTriggered: RISK.dailyKillSwitchesEnabled && dailyDdFromPeakPct <= RISK.dailyDrawdownHardKillPct,
     totalKillTriggered: false,                     // requires baseline equity tracking — TODO
   };
 }
@@ -278,6 +311,9 @@ async function runPrecheck(symbol: string, riskPct: number, state: RiskState): P
   }
   if (state.openPositionsCount >= RISK.maxParallelPositions) {
     return { allowed: false, reason: `${state.openPositionsCount} open positions (cap ${RISK.maxParallelPositions})` };
+  }
+  if (state.entriesInWindow >= RISK.maxEntriesPerWindow) {
+    return { allowed: false, reason: `${state.entriesInWindow} entries in last ${RISK.entryCapWindowHours}h (cap ${RISK.maxEntriesPerWindow}) — wait for window to clear` };
   }
   if (state.pairBlocked[symbol]) {
     return { allowed: false, reason: `pair disabled: ${state.pairBlocked[symbol]}` };
@@ -352,6 +388,7 @@ export function formatRiskState(s: RiskState): string {
     `  trough (post-peak): $${s.dailyTroughEquityUsd.toFixed(0)}`,
     `  DDD = peak − trough: ${s.dailyDdFromPeakPct.toFixed(2)}%  ← kill metric (Hyro -5% limit)`,
     `  open positions: ${s.openPositionsCount} / ${RISK.maxParallelPositions}`,
+    `  same-side open: ${s.openLongCount}L / ${s.openShortCount}S  ${RISK.maxSameSideConcentration > 0 ? `(max ${RISK.maxSameSideConcentration - 1}/side, macro-corr overlay)` : '(overlay off)'}`,
     `  total heat:    ${s.totalHeatPct.toFixed(2)}% / ${RISK.totalHeatCapPct}%`,
     `  funding window: ${s.inFundingWindow}`,
     `  soft kill:      ${s.softKillTriggered}  (threshold ${RISK.dailyDrawdownSoftKillPct}% from peak)`,

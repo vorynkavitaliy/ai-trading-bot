@@ -46,9 +46,23 @@ export class NakedTpRecovery {
    * Returns the recovery action taken (or null if no action). Logs and sends
    * Telegram on its own. Never throws — recovery failures are logged.
    */
-  async check(pos: NakedTpRecoveryPos, client: RestClientV5): Promise<RecoveryAction | null> {
+  async check(
+    pos: NakedTpRecoveryPos,
+    client: RestClientV5,
+    opts: { notify?: boolean } = {},
+  ): Promise<RecoveryAction | null> {
     if (pos.tp1AlreadyFilled) return null;
     if (pos.dbTP1 == null || pos.dbTP2 == null) return null;
+
+    // Attached position-level take-profit (set on the slot-1 entry order, see
+    // execute.ts) is NOT a reduce-only Limit order — it lives in the position's
+    // takeProfit field. If present, the position is protected → not naked. Skip
+    // recovery to avoid placing a redundant limit TP on top (double-TP).
+    try {
+      const pr: any = await client.getPositionInfo({ category: 'linear', symbol: pos.symbol });
+      const p = (pr.result?.list ?? []).find((x: any) => x.symbol === pos.symbol && parseFloat(x.size) > 0);
+      if (p && p.takeProfit && parseFloat(p.takeProfit) > 0) return null;
+    } catch { /* fall through to limit-order check below */ }
 
     let tpLimitCount: number;
     try {
@@ -102,12 +116,14 @@ export class NakedTpRecovery {
         orderLinkId: `rtp2-${recBase}`,
       }), { label: `naked-tp2-${pos.symbol}-${pos.account.keyName}`, tries: 2 });
 
-      await notifyAlert({
-        kind: 'reconcile_divergence',
-        symbol: pos.symbol,
-        detail: `${pos.symbol} ${pos.side} был БЕЗ TP1/TP2! Watcher восстановил из DB: TP1=${pos.dbTP1!.toFixed(4)}, TP2=${pos.dbTP2!.toFixed(4)}`,
-        action: 'Проверь execute.ts — почему TP не выставились при open',
-      });
+      if (opts.notify !== false) {
+        await notifyAlert({
+          kind: 'reconcile_divergence',
+          symbol: pos.symbol,
+          detail: `${pos.symbol} ${pos.side} был БЕЗ TP1/TP2! Watcher восстановил из DB: TP1=${pos.dbTP1!.toFixed(4)}, TP2=${pos.dbTP2!.toFixed(4)}`,
+          action: 'Проверь execute.ts — почему TP не выставились при open',
+        });
+      }
 
       return {
         symbol: pos.symbol,

@@ -10,8 +10,9 @@ const PACE_MS = 220;
 
 // Coinglass interval string for 4h
 const TF = '4h';
-// 4h × 540 = 90 days
-const HISTORY_LIMIT = 540;
+// 4h × 2160 = 360 days (the plan's max history; probed 2026-06-03). Was 540 (90d) —
+// raised to pull full backtest-grade history for newly-added coins (LINK/ADA).
+const HISTORY_LIMIT = 2160;
 
 // Pair to use for per-exchange Coinglass series. We use Binance because
 // it has the deepest data and is consistently available.
@@ -19,7 +20,10 @@ const REF_EXCHANGE = 'Binance';
 
 // v3 universe (post 2026-05-18, Standard plan): 14 pairs incl. HYPE.
 // Standard plan removes the 10-symbol cap of Hobbyist — full universe now covered.
-const SYMBOLS_COIN = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'LTC', 'ATOM', 'DOGE', 'TON', 'APT', 'ARB', 'INJ', 'TAO', 'HYPE', 'ZEC'];
+// 2026-06-03: added LINK + ADA for standalone-strategy research (operator). Adding here
+// also keeps them fresh via the cron incremental. Does NOT add them to the trading
+// universe (that's TIER1_PORTFOLIO in pair-strategies.ts) — ingestion only.
+const SYMBOLS_COIN = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'LTC', 'ATOM', 'DOGE', 'TON', 'APT', 'ARB', 'INJ', 'TAO', 'HYPE', 'ZEC', 'LINK', 'ADA'];
 const PAIRS = [
   { symbol: 'BTC',  pair: 'BTCUSDT'  },
   { symbol: 'ETH',  pair: 'ETHUSDT'  },
@@ -36,6 +40,8 @@ const PAIRS = [
   { symbol: 'TAO',  pair: 'TAOUSDT'  },
   { symbol: 'HYPE', pair: 'HYPEUSDT' },
   { symbol: 'ZEC',  pair: 'ZECUSDT'  },
+  { symbol: 'LINK', pair: 'LINKUSDT' },
+  { symbol: 'ADA',  pair: 'ADAUSDT'  },
 ];
 
 function delay(ms: number) {

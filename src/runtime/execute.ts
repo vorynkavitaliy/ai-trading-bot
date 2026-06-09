@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { loadAccounts, AccountKey } from '../core/accounts';
+import { isEmergencyHalted } from './emergency-halt';
 import { getRest, withRetry, getInstrumentInfo, roundPriceToTick } from '../core/bybit';
 import { normalizeQty } from '../core/qty-normalizer';
 import { query } from '../core/db';
 import { notifyOpen, OpenTradeArgs } from '../core/tg-templates';
 import { precheckEntry, RISK } from './risk-guard';
+import { recordEntry as recordStrategyCooldown } from '../core/strategy-cooldowns';
 import { config } from '../core/config';
 import { log } from '../core/logger';
 import { insertPending, markPlaced, markFailed, linkTradeId, getLinkedTradeId } from '../core/pending-orders';
@@ -39,6 +41,7 @@ interface CliArgs {
   dryRun: boolean;
   skipRiskCheck?: boolean;                  // operator-authorized manual override (bypass cooldowns/heat/kill)
   scaledIn?: ScaledInArgs;                  // S5 multi-entry config
+  onlyAccount?: string;                     // operator override: restrict to a single keyName (default: all)
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -64,6 +67,7 @@ function parseArgs(argv: string[]): CliArgs {
       case '--rationale-file': args.rationale = fs.readFileSync(next(), 'utf-8'); break;
       case '--dry-run': args.dryRun = true; break;
       case '--skip-risk-check': args.skipRiskCheck = true; break;
+      case '--only-account': args.onlyAccount = next(); break;
       case '--scaled-in': args.scaledIn = JSON.parse(next()); break;
       default: throw new Error(`unknown flag: ${a}`);
     }
@@ -109,10 +113,18 @@ async function fetchEquity(account: AccountKey): Promise<number> {
   return parseFloat(r.result?.list?.[0]?.totalEquity ?? '0');
 }
 
+// Risk is sized off the account's STARTING balance (prop bucket: 50000 / 200000),
+// NOT current equity — so position size stays fixed and does not compound with P&L.
+// Falls back to current equity only if the bucket isn't a positive number.
+function riskBaseUsd(account: AccountKey, currentEquity: number): number {
+  const startBal = parseFloat(account.bucket);
+  return Number.isFinite(startBal) && startBal > 0 ? startBal : currentEquity;
+}
+
 async function calcQtyFromRisk(account: AccountKey, args: CliArgs): Promise<number> {
   if (args.qty !== undefined) return args.qty;
   const equity = await fetchEquity(account);
-  const riskUsd = equity * (args.riskPct! / 100);
+  const riskUsd = riskBaseUsd(account, equity) * (args.riskPct! / 100);
   const refPrice = args.entryPrice ?? 0;
   if (refPrice <= 0) throw new Error('cannot compute qty: entry-price unknown for market order, supply --qty');
   const stopDist = Math.abs(refPrice - args.sl);
@@ -350,7 +362,7 @@ async function placeScaledIn(
     // Skip levels that would be beyond SL (cannot fill before SL triggers in live either)
     const onCorrectSide = args.side === 'buy' ? slotPrice > slPrice : slotPrice < slPrice;
     if (!onCorrectSide) continue;
-    const slotRiskUsd = equity * (slotRiskPcts[i] / 100);
+    const slotRiskUsd = riskBaseUsd(account, equity) * (slotRiskPcts[i] / 100);
     const slotDist = Math.abs(slotPrice - slPrice);
     if (slotDist <= 0) continue;
     let rawQty = slotRiskUsd / slotDist;
@@ -550,15 +562,15 @@ async function persistTrade(args: CliArgs, results: AccountResult[]): Promise<vo
       `INSERT INTO trades (
         account_bucket, account_key, symbol, side, order_type, qty, initial_qty,
         entry_price, sl, tp1, tp2, status, rationale,
-        bybit_order_id, vault_trade_file, opened_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, NOW())
+        bybit_order_id, vault_trade_file, signal_price, opened_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, NOW())
       RETURNING id`,
       [
         r.bucket, r.keyName, args.symbol, args.side === 'buy' ? 'Buy' : 'Sell',
         args.orderType === 'market' ? 'Market' : 'Limit', r.qty, r.qty,
         args.entryPrice ?? null, args.sl, args.tp1 ?? null, args.tp2 ?? null,
         'open', args.rationale.slice(0, 4000),
-        r.bybitOrderId ?? null, tradeFile,
+        r.bybitOrderId ?? null, tradeFile, args.entryPrice ?? null,
       ]
     );
     if (r.orderLinkId) {
@@ -652,10 +664,49 @@ async function main() {
     process.exit(0);
   }
 
-  const accounts = loadAccounts();
+  let accounts = loadAccounts();
+  if (args.onlyAccount) {
+    accounts = accounts.filter(a => a.keyName === args.onlyAccount);
+    if (accounts.length === 0) {
+      log.error('--only-account matched no key in accounts.json', { onlyAccount: args.onlyAccount });
+      console.error(`BLOCKED: --only-account "${args.onlyAccount}" matched no key`);
+      process.exit(2);
+    }
+    log.warn('⚠ --only-account restricts execution to a single key', {
+      onlyAccount: args.onlyAccount, matched: accounts.map(a => `${a.bucket}/${a.keyName}`),
+    });
+  }
+  // Skip accounts under an emergency daily-DD halt for the current UTC day
+  // (position-monitor flattened them; healthy accounts keep trading). Marker
+  // auto-expires at UTC midnight — see src/runtime/emergency-halt.ts.
+  accounts = accounts.filter(a => {
+    if (isEmergencyHalted(a.bucket, a.keyName)) {
+      log.warn('emergency DD halt active — skipping entry', { account: `${a.bucket}/${a.keyName}`, symbol: args.symbol });
+      return false;
+    }
+    return true;
+  });
+  if (accounts.length === 0) {
+    console.log(JSON.stringify({ ok: true, skipped: 'all accounts emergency-halted' }, null, 2));
+    return;
+  }
+
   const results = await Promise.all(accounts.map(a => placeOnAccount(a, args)));
 
   await persistTrade(args, results);
+
+  // Cooldown-on-COMMIT (strategy same-direction 6h gate). Record the entry into
+  // strategy_cooldowns ONLY after the order was actually placed on ≥1 account —
+  // never at signal time (cg-fade.ts markEntry no longer writes the DB). This is
+  // the live half of the cap↔cooldown chaos fix: a signal that risk-guard blocked
+  // never reaches execute.ts at all, so it can't burn the pair's 6h cooldown.
+  // scan-decide.loadCooldowns reads this on the next cycle. recordEntry swallows
+  // its own errors — a DB hiccup must never fail an already-committed entry.
+  if (results.some(r => r.ok)) {
+    const cooldownSide: 'long' | 'short' = args.side === 'buy' ? 'long' : 'short';
+    await recordStrategyCooldown(args.symbol, cooldownSide, Date.now());
+  }
+
   await notifyTelegram(args, results).catch(e => log.warn('telegram notify failed', { err: e?.message }));
 
   console.log(JSON.stringify({ ok: results.every(r => r.ok), results }, null, 2));

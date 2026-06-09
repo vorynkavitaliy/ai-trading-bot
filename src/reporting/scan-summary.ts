@@ -1,15 +1,13 @@
 import { query } from '../core/db';
 import { getFeatures, FeatureSnapshot } from '../data/features';
 import { getRiskState, RiskState } from '../runtime/risk-guard';
+import { tier1Pairs } from '../runtime/pair-strategies';
 import { log } from '../core/logger';
 
-const SYMBOLS = [
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
-  'BNBUSDT', 'LTCUSDT', 'ATOMUSDT',
-  'TONUSDT', 'DOGEUSDT',
-  'APTUSDT', 'ARBUSDT',
-  'TAOUSDT', 'INJUSDT',
-];
+// Report the actually-traded pairs (tier1Pairs — 2026-06-03: 3-pair standalone book
+// BTC+SOL+ADA). BTCUSDT is now itself traded so it's already in tier1Pairs; the explicit
+// add + Set-dedup keeps the market-context line correct if the universe ever drops BTC.
+const SYMBOLS = [...new Set([...tier1Pairs(), 'BTCUSDT'])];
 const TFS = ['5m', '15m', '60m', '240m'] as const;
 
 interface CgRecentRow {

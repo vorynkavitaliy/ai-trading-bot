@@ -16,6 +16,20 @@ function fmtNum(n: number, decimals = 2): string {
   return n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
+// Price-aware formatter — decimals scale with magnitude so sub-$1 pairs (ARB
+// 0.11003, DOGE) don't collapse to "$0.11". Covers our universe: BTC ~76000 →
+// ARB ~0.11. Use for ANY price display (entry/SL/TP/slot), NOT for qty/USD.
+function fmtPrice(n: number): string {
+  if (!Number.isFinite(n)) return '—';
+  const abs = Math.abs(n);
+  let decimals: number;
+  if (abs >= 1000) decimals = 1;       // BTC 75914.7
+  else if (abs >= 10) decimals = 2;    // TAO 274.45, SOL 85.56
+  else if (abs >= 1) decimals = 4;     // XRP 1.3346
+  else decimals = 5;                   // ARB 0.11003, sub-$1
+  return n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
 function fmtPctSigned(n: number): string {
   const s = n >= 0 ? '+' : '';
   return `${s}${n.toFixed(2)}%`;
@@ -94,17 +108,18 @@ export async function notifyOpen(a: OpenTradeArgs): Promise<void> {
     `${headerDot} <b>${headerVerb} ${dir} • ${a.symbol}</b>`,
     SEP,
     ``,
-    `📍 ${priceLabel}: <b>$${fmtNum(ep)}</b>`,
-    `🛡 Стоп:       $${fmtNum(a.sl)}  (${fmtPctSigned(slPct)})`,
+    `📍 ${priceLabel}: <b>$${fmtPrice(ep)}</b>`,
+    `🛡 Стоп:       $${fmtPrice(a.sl)}  (${fmtPctSigned(slPct)})`,
   ];
   // Single TP case (tp1 == tp2): strategy uses one target → execute.ts places
   // ONE limit; show as a single "🎯 Тейк" line instead of two duplicates.
-  const singleTp = a.tp1 != null && a.tp2 != null && Math.abs(a.tp1 - a.tp2) < 0.5;
+  // Threshold scales with price (0.5 abs is wrong for sub-$1 pairs) — use 0.01%.
+  const singleTp = a.tp1 != null && a.tp2 != null && Math.abs(a.tp1 - a.tp2) / Math.max(a.tp1, 1e-9) < 0.0001;
   if (singleTp) {
-    lines.push(`🎯 Тейк:       $${fmtNum(a.tp1!)}  (${fmtPctSigned(tp1Pct)})  — full position, reduce-only лимит`);
+    lines.push(`🎯 Тейк:       $${fmtPrice(a.tp1!)}  (${fmtPctSigned(tp1Pct)})  — full position, reduce-only лимит`);
   } else {
-    if (a.tp1) lines.push(`🎯 Тейк-1:     $${fmtNum(a.tp1)}  (${fmtPctSigned(tp1Pct)})  — 50% объёма, reduce-only лимит`);
-    if (a.tp2) lines.push(`🎯 Тейк-2:     $${fmtNum(a.tp2)}  (${fmtPctSigned(tp2Pct)})  — 50% объёма, reduce-only лимит`);
+    if (a.tp1) lines.push(`🎯 Тейк-1:     $${fmtPrice(a.tp1)}  (${fmtPctSigned(tp1Pct)})  — 50% объёма, reduce-only лимит`);
+    if (a.tp2) lines.push(`🎯 Тейк-2:     $${fmtPrice(a.tp2)}  (${fmtPctSigned(tp2Pct)})  — 50% объёма, reduce-only лимит`);
   }
   // S5 scaled-in: show grid limit ladder if present
   if (a.gridSlots && a.gridSlots.length > 1) {
@@ -113,7 +128,7 @@ export async function notifyOpen(a: OpenTradeArgs): Promise<void> {
     for (const s of a.gridSlots) {
       const pct = ep > 0 ? pctFromPrices(ep, s.price, isLong) : 0;
       const status = s.filled ? '✅ filled' : '⏳ pending';
-      lines.push(`   Slot ${s.level}: $${fmtNum(s.price)} (${fmtPctSigned(pct)})  ${fmtNum(s.qtyTotal, 2)} ${tag}  ${status}`);
+      lines.push(`   Slot ${s.level}: $${fmtPrice(s.price)} (${fmtPctSigned(pct)})  ${fmtNum(s.qtyTotal, 2)} ${tag}  ${status}`);
     }
   }
   lines.push(``);
@@ -145,6 +160,9 @@ export async function notifyOpen(a: OpenTradeArgs): Promise<void> {
 
 // -----------------------------------------------------------
 // ENTRY CONFIRMED (pending limit actually filled → promotion)
+// Per-account contributions are coalesced into ONE message via
+// notifyEntryConfirmedGroup (notification-coalescer.ts). EntryConfirmedArgs is
+// kept as the per-account record type the daemon/reconcile collect before grouping.
 // -----------------------------------------------------------
 export interface EntryConfirmedArgs {
   symbol: string;
@@ -156,7 +174,20 @@ export interface EntryConfirmedArgs {
   account: string;
 }
 
-export async function notifyEntryConfirmed(a: EntryConfirmedArgs): Promise<void> {
+// -----------------------------------------------------------
+// ENTRY CONFIRMED — consolidated across accounts (one message, N accounts)
+// -----------------------------------------------------------
+export interface EntryConfirmedGroupArgs {
+  symbol: string;
+  side: 'Buy' | 'Sell';
+  sizeTotal: number;
+  avgPrice: number;
+  sl: number;
+  tp: number | null;
+  accountSummaries: string[];
+}
+
+export async function notifyEntryConfirmedGroup(a: EntryConfirmedGroupArgs): Promise<void> {
   const side: 'buy' | 'sell' = a.side === 'Buy' ? 'buy' : 'sell';
   const dir = dirLabel(side);
   const isLong = a.side === 'Buy';
@@ -170,13 +201,14 @@ export async function notifyEntryConfirmed(a: EntryConfirmedArgs): Promise<void>
     ``,
     `Лимитка заполнилась — позиция активна.`,
     ``,
-    `📍 Фактическая цена входа: <b>$${fmtNum(a.avgPrice)}</b>`,
-    `💼 Размер: <b>${fmtNum(a.size, 2)}</b> ${tag}`,
-    `🛡 Стоп: $${fmtNum(a.sl)}  (${fmtPctSigned(slPct)})`,
+    `📍 Фактическая цена входа: <b>$${fmtPrice(a.avgPrice)}</b>`,
+    `💼 Размер: <b>${fmtNum(a.sizeTotal, 2)}</b> ${tag}`,
+    `🛡 Стоп: $${fmtPrice(a.sl)}  (${fmtPctSigned(slPct)})`,
   ];
-  if (a.tp) lines.push(`🎯 Тейк: $${fmtNum(a.tp)}  (${fmtPctSigned(tpPct)})  — reduce-only лимит`);
+  if (a.tp) lines.push(`🎯 Тейк: $${fmtPrice(a.tp)}  (${fmtPctSigned(tpPct)})  — reduce-only лимит`);
   lines.push(``);
-  lines.push(`<b>Аккаунт:</b> ${escapeHtml(a.account)}`);
+  lines.push(`<b>Аккаунты:</b> ${a.accountSummaries.length} ✅`);
+  for (const s of a.accountSummaries) lines.push(`   • ${escapeHtml(s)}`);
   lines.push(``);
   lines.push(`<i>Дальше: позиция активна, стоп выставлен, ждём тейк.</i>`);
   lines.push(``);
@@ -215,10 +247,10 @@ export async function notifyDcaFill(a: DcaFillArgs): Promise<void> {
     `Грид-лимитка сработала!`,
     ``,
     `💼 Position grew: ${fmtNum(a.prevSize, 2)} → <b>${fmtNum(a.newSize, 2)}</b> ${tag}  (+${fmtNum(delta, 2)})`,
-    `📍 New avg entry: <b>$${fmtNum(a.newAvgPrice)}</b>`,
-    `🛡 Stop:           $${fmtNum(a.sl)}  (${fmtPctSigned(slPct)} от новой avg)`,
+    `📍 New avg entry: <b>$${fmtPrice(a.newAvgPrice)}</b>`,
+    `🛡 Stop:           $${fmtPrice(a.sl)}  (${fmtPctSigned(slPct)} от новой avg)`,
   ];
-  if (a.tp) lines.push(`🎯 Take:           $${fmtNum(a.tp)}  (${fmtPctSigned(tpPct)} от новой avg)`);
+  if (a.tp) lines.push(`🎯 Take:           $${fmtPrice(a.tp)}  (${fmtPctSigned(tpPct)} от новой avg)`);
   lines.push(``);
   lines.push(`<b>Аккаунты:</b>`);
   for (const s of a.accountSummaries) lines.push(`   • ${escapeHtml(s)}`);
@@ -273,8 +305,8 @@ export async function notifyClose(a: CloseArgs): Promise<void> {
     ``,
     `🚪 Причина: <b>${reasonRu[a.exitReason]}</b>`,
     ``,
-    `📍 Вход:  $${fmtNum(a.entryPrice)}`,
-    `📍 Выход: $${fmtNum(a.exitPrice)}  (${fmtPctSigned(movePct)})`,
+    `📍 Вход:  $${fmtPrice(a.entryPrice)}`,
+    `📍 Выход: $${fmtPrice(a.exitPrice)}  (${fmtPctSigned(movePct)})`,
     ``,
     `${resultEmoji} <b>${resultLabel}: ${fmtUsdSigned(a.pnlUsd, 0)}  (${a.pnlR >= 0 ? '+' : ''}${a.pnlR.toFixed(2)}R)</b>`,
   ];

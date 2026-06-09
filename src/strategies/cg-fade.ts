@@ -31,7 +31,6 @@
 import { Action, Strategy, StrategyContext, Bar } from '../backtest/types';
 import { CoinglassFeatures } from '../data/coinglass-features';
 import { atr, percentile, trendUp } from '../core/indicators';
-import { recordEntry as recordEntryDb } from '../core/strategy-cooldowns';
 
 export interface CgFadeParams {
   pctHi: number;
@@ -83,6 +82,18 @@ const DEFAULTS: CgFadeParams = {
 // `npx tsx` invocation, which silently disabled the cooldown in production).
 const lastEntryByPair: Map<string, { side: 'long' | 'short'; ts: number }> = new Map();
 export function resetCgFadeCooldownState() { lastEntryByPair.clear(); }
+// Snapshot/restore the in-process cooldown for one pair. Used by the backtest
+// engine to implement "cooldown-on-COMMIT": decide()→buildEnter→markEntry burns the
+// cooldown at SIGNAL time, but if the engine then BLOCKS the entry (cap/heat/funding)
+// the cooldown must be rolled back — else a blocked signal silently silences the pair
+// for cooldownHours (the cap↔cooldown chaos: trade count non-monotonic in cap).
+export function peekCgFadeCooldown(symbol: string): { side: 'long' | 'short'; ts: number } | undefined {
+  return lastEntryByPair.get(symbol);
+}
+export function restoreCgFadeCooldown(symbol: string, prev: { side: 'long' | 'short'; ts: number } | undefined): void {
+  if (prev === undefined) lastEntryByPair.delete(symbol);
+  else lastEntryByPair.set(symbol, prev);
+}
 
 export interface SideDecision {
   side: 'long' | 'short';
@@ -281,21 +292,21 @@ function inCooldown(ctx: StrategyContext, side: 'long' | 'short', hours: number)
   return ctx.ts - last.ts < hours * 3_600_000;
 }
 
-// Cooldown write: always update the in-process Map (so a long backtest run sees
-// its own previous entries) AND fire-and-forget the DB write only when we're
-// in the live path (signaled by ctx.cooldownState being defined). Keeps backtest
-// hot path zero-DB. The DB helper itself swallows errors — a write failure must
-// never block a live entry being built.
+// Cooldown write (SIGNAL time, in-process only). Records the prospective entry in
+// the in-process Map so the backtest engine's peek/restore rollback can implement
+// cooldown-on-COMMIT: decide()→buildEnter→markEntry burns it at signal; the engine
+// restores it via restoreCgFadeCooldown if the entry is then blocked by cap/heat/
+// funding (see peekCgFadeCooldown above).
+//
+// Live (scan-decide) deliberately does NOT persist the cooldown here. It used to —
+// `recordEntryDb` fired on every SIGNAL, inside decide(), BEFORE risk-guard ran. A
+// signal that risk-guard then BLOCKED (cap/heat/funding/quality) still burned the 6h
+// DB cooldown, silently silencing the pair with no trade taken (the cap↔cooldown
+// chaos: trade count non-monotonic in cap). The live cooldown is now written at
+// COMMIT — after the order is actually placed — in execute.ts main() via
+// recordEntry(strategy-cooldowns); loadCooldowns reads it on the next cycle.
 function markEntry(ctx: StrategyContext, side: 'long' | 'short') {
   lastEntryByPair.set(ctx.symbol, { side, ts: ctx.ts });
-  if (ctx.cooldownState) {
-    // Reflect the write into the in-memory snapshot too, so any subsequent
-    // pair processed in THIS cycle sees the fresh entry. (scan-decide loops
-    // pairs serially; without this update a same-symbol re-decision in the
-    // same cycle would skip the gate. Defensive — not strictly needed today.)
-    ctx.cooldownState.set(ctx.symbol, { side, ts: ctx.ts });
-    void recordEntryDb(ctx.symbol, side, ctx.ts);
-  }
 }
 
 function trendFiltersAllow(side: 'long' | 'short', ctx: StrategyContext, p: CgFadeParams): boolean {
@@ -337,12 +348,14 @@ function buildEnter(
   return {
     kind: 'enter',
     side,
-    // S5 scaled-in: slot 0 = MARKET (guarantees immediate fill so TP/SL can be
-    // placed without waiting for limit to fill). Single-entry trades keep limit
-    // semantics. The small taker fee on slot 0 is the cost of TP-placement
-    // certainty (otherwise limit may not fill, TP submit rejects, watcher
-    // recovers 5 min later — see ETH+XRP incidents 2026-05-25).
-    orderType: p.scaledIn ? 'market' : 'limit',
+    // MARKET entry (2026-06-04): ALL entries — scaled-in slot-0 AND single-entry — use
+    // market for guaranteed immediate fill. TP/SL place cleanly, the daemon tracks the
+    // position at once, and no phantom 'open' DB row is created from an unfilled limit.
+    // The single-entry standalone portfolio hit exactly that: BTC limit @66097 never
+    // filled → db_without_bybit divergence + blocked re-entry + missed the (correct) move.
+    // Market is also closer to the cron-realistic backtest, which assumes fill at the
+    // decision price. The small taker fee/slip is the cost of fill certainty.
+    orderType: 'market',
     entryPrice: ctx.price,
     sl,
     tp1: tp, tp2: tp,

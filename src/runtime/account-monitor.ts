@@ -26,7 +26,10 @@ import {
   PositionUpdate,
   ExecutionUpdate,
   OrderUpdate,
+  WalletUpdate,
 } from '../core/bybit-ws';
+import { DailyDdGuard, DailyDdGuardStatus } from './daily-dd-guard';
+import { writeEmergencyHalt } from './emergency-halt';
 import {
   BybitPos,
   Tp1FillGroup,
@@ -35,18 +38,22 @@ import {
   handleTp1Fill,
   handleNakedSl,
   handleDcaFill,
-  flushTp1Groups,
 } from './position-events';
-import { autoCloseTrade, fetchRecentClosedPnL, notifyConsolidatedCloses } from './trade-closer';
+import { autoCloseTrade, fetchRecentClosedPnL } from './trade-closer';
 import { nakedTpRecovery } from './naked-tp-recovery';
 import { findUnpromotedPending } from '../core/pending-orders';
 import { promotePendingToTrade } from './pending-promoter';
-import { notifyEntryConfirmed } from '../core/tg-templates';
+import { coalesceEntryConfirmed, coalesceClose, coalesceNakedTpAlert } from './notification-coalescer';
 
 const NAKED_SL_GRACE_MS = 60_000;
 const EXEC_ID_LRU_CAP = 1024;
 const DUST_RATIO = 0.01;
 const DEFAULT_REST_POLL_SEC = 30;
+// Emergency daily-DD flatten (operator spec 2026-06-03). Threshold = % of the
+// account BASE bucket. DEFAULT IS SHADOW MODE: the guard tracks + logs what it
+// WOULD do but does NOT close — flip DD_FLATTEN_ENABLED=1 to arm live closing.
+const DD_FLATTEN_PCT = parseFloat(process.env.DD_FLATTEN_PCT ?? '4.3');
+const DD_FLATTEN_ENABLED = process.env.DD_FLATTEN_ENABLED === '1';
 
 interface SymbolState {
   symbol: string;
@@ -72,6 +79,7 @@ interface AccountMonitorStatus {
   lastWsEventAt: number;
   lastRestPollAt: number;
   openSymbols: string[];
+  ddGuard: DailyDdGuardStatus & { enabled: boolean };
 }
 
 class ExecIdLru {
@@ -105,14 +113,21 @@ export class AccountMonitor {
   private lastRestPollAt = 0;
   private stopped = false;
   private readonly pollSec: number;
+  // ─── Emergency daily-DD guard state ───
+  private readonly ddGuard: DailyDdGuard;
+  private readonly posUpl = new Map<string, number>(); // symbol → latest unrealisedPnl
+  private walletBalance = 0;                            // realized wallet balance (USDT)
+  private ddFlattenInflight = false;
 
   constructor(account: AccountKey, pollSec: number = DEFAULT_REST_POLL_SEC) {
     this.account = account;
     this.pollSec = pollSec;
     this.ws = new BybitWs(account);
+    this.ddGuard = new DailyDdGuard(parseFloat(account.bucket), DD_FLATTEN_PCT);
     this.ws.on('position', (e) => this.dispatchPosition(e));
     this.ws.on('execution', (e) => { void this.onExecution(e); });
     this.ws.on('order', (e) => { void this.onOrder(e); });
+    this.ws.on('wallet', (e) => this.onWallet(e));
     this.ws.on('reconnected', () => { void this.restResync('reconnect'); });
   }
 
@@ -127,6 +142,7 @@ export class AccountMonitor {
   }
 
   async start(): Promise<void> {
+    await this.seedWalletBalance();
     await this.restResync('startup');
     await this.ws.start();
     this.restTimer = setInterval(() => {
@@ -156,7 +172,79 @@ export class AccountMonitor {
       openSymbols: [...this.state.entries()]
         .filter(([, s]) => s.lastSize > 0 || s.closePending)
         .map(([sym]) => sym),
+      ddGuard: { ...this.ddGuard.status(), enabled: DD_FLATTEN_ENABLED },
     };
+  }
+
+  // ─── Emergency daily-DD guard ──────────────────────────────────────────────
+  // Wallet topic keeps the realized balance fresh; position topic feeds floating
+  // PnL per symbol. equity = walletBalance + Σ floating. On every update we ask
+  // the guard whether the intraday drawdown breached the base-relative threshold.
+  private async seedWalletBalance(): Promise<void> {
+    try {
+      const res: any = await withRetry(
+        () => getRest(this.account).getWalletBalance({ accountType: 'UNIFIED' }),
+        { label: `seed-wallet-${this.account.keyName}` },
+      );
+      const bal = parseFloat(res?.result?.list?.[0]?.totalWalletBalance ?? '');
+      if (Number.isFinite(bal) && bal > 0) this.walletBalance = bal;
+    } catch (err: any) {
+      log.warn('seed wallet balance failed', { account: `${this.account.bucket}/${this.account.keyName}`, err: err?.message });
+    }
+  }
+
+  private onWallet(e: WalletUpdate): void {
+    const bal = parseFloat((e.data as any).totalWalletBalance ?? '');
+    if (Number.isFinite(bal) && bal > 0) this.walletBalance = bal;
+    this.evaluateDailyDd();
+  }
+
+  private evaluateDailyDd(): void {
+    if (this.stopped || this.walletBalance <= 0) return;
+    let sumUpl = 0;
+    for (const v of this.posUpl.values()) sumUpl += v;
+    const equity = this.walletBalance + sumUpl;
+    const { breach, status } = this.ddGuard.update(equity);
+    if (!breach) return;
+    const label = `${this.account.bucket}/${this.account.keyName}`;
+    if (DD_FLATTEN_ENABLED) {
+      log.warn('EMERGENCY DAILY-DD BREACH → flattening', { account: label, ...status });
+      void this.triggerEmergencyFlatten(status);
+    } else {
+      log.warn('EMERGENCY DAILY-DD BREACH (SHADOW — no action taken)', { account: label, ...status });
+    }
+  }
+
+  private async triggerEmergencyFlatten(status: DailyDdGuardStatus): Promise<void> {
+    if (this.ddFlattenInflight) return;
+    this.ddFlattenInflight = true;
+    const label = `${this.account.bucket}/${this.account.keyName}`;
+    try {
+      const symbols = [...this.state.entries()].filter(([, s]) => s.lastSize > 0).map(([sym]) => sym);
+      log.warn('emergency flatten: closing all', { account: label, symbols });
+      // Cancel every pending order on the account first (settleCoin = all symbols).
+      try {
+        await withRetry(
+          () => getRest(this.account).cancelAllOrders({ category: 'linear', settleCoin: 'USDT' }),
+          { label: `emergency-cancel-${this.account.keyName}` },
+        );
+      } catch (err: any) {
+        log.error('emergency cancel-all failed', { account: label, err: err?.message });
+      }
+      // Market-close each position reduce-only via the verified closer.
+      for (const symbol of symbols) {
+        try {
+          const r = await closeAndVerify(this.account, symbol, { reason: 'emergency-daily-dd-flatten', cancelOrders: true });
+          log.info('emergency flatten close', { account: label, symbol, status: r.status });
+        } catch (err: any) {
+          log.error('emergency flatten close failed', { account: label, symbol, err: err?.message });
+        }
+      }
+      // Halt new entries on this account for the rest of the UTC day.
+      writeEmergencyHalt(this.account.bucket, this.account.keyName, { ...status, symbols });
+    } finally {
+      this.ddFlattenInflight = false;
+    }
   }
 
   private async toBybitPos(symbol: string, raw: {
@@ -209,11 +297,11 @@ export class AccountMonitor {
 
       const r = await promotePendingToTrade(pending, { size, avgPrice });
       if (r?.created) {
-        await notifyEntryConfirmed({
+        coalesceEntryConfirmed({
           symbol, side, size, avgPrice,
           sl: pending.sl, tp: pending.tp1,
-          account: `${this.account.bucket}/${this.account.keyName}`,
-        }).catch((err: any) => log.warn('notifyEntryConfirmed failed', { symbol, err: err?.message }));
+          accountLabel: `${this.account.bucket}/${this.account.keyName}`,
+        });
       }
     } catch (err: any) {
       log.warn('daemon pending promotion failed', {
@@ -234,6 +322,11 @@ export class AccountMonitor {
 
     const prev = this.state.get(symbol);
     if (prev && prev.lastSeq >= p.seq) return;
+
+    // Feed the daily-DD guard: track this symbol's floating PnL (cleared on close).
+    if (size > 0) this.posUpl.set(symbol, parseFloat(p.unrealisedPnl || '0'));
+    else this.posUpl.delete(symbol);
+    this.evaluateDailyDd();
 
     const prevSize = prev?.lastSize ?? 0;
     const prevSL = prev?.lastSL ?? 0;
@@ -330,7 +423,7 @@ export class AccountMonitor {
       const tpRecoveryLast = state?.lastTpRecoveryTs ?? 0;
       if (Date.now() - tpRecoveryLast > 5 * 60_000) {
         try {
-          const recovered = await nakedTpRecovery.check(pos, getRest(this.account));
+          const recovered = await nakedTpRecovery.check(pos, getRest(this.account), { notify: false });
           if (recovered) {
             log.info('daemon naked-TP recovery', {
               symbol: recovered.symbol,
@@ -338,6 +431,15 @@ export class AccountMonitor {
               action: recovered.action,
               reason: recovered.reason,
             });
+            if (pos.dbTP1 != null && pos.dbTP2 != null) {
+              coalesceNakedTpAlert({
+                symbol: pos.symbol,
+                side: pos.side,
+                accountLabel: `${this.account.bucket}/${this.account.keyName}`,
+                tp1: pos.dbTP1,
+                tp2: pos.dbTP2,
+              });
+            }
             if (state) {
               state.lastTpRecoveryTs = Date.now();
               this.state.set(symbol, state);
@@ -380,7 +482,22 @@ export class AccountMonitor {
         symbol: pos.symbol, account: this.account.keyName, err: e?.message,
       });
     }
-    await flushTp1Groups(tp1Groups);
+    for (const grp of tp1Groups.values()) {
+      for (const f of grp.fills) {
+        coalesceClose({
+          symbol: grp.symbol,
+          side: grp.side,
+          exitReason: 'tp1',
+          entryPrice: grp.entryPrice,
+          exitPrice: grp.exitPrice,
+          qty: f.qty,
+          pnlUsd: f.pnlUsd,
+          pnlR: f.pnlR,
+          accountLabel: f.label,
+          comment: 'TP1 отработал. SL переведён в безубыток (BE). Остаток позиции 50% едет к TP2 без риска.',
+        });
+      }
+    }
   }
 
   /**
@@ -403,7 +520,17 @@ export class AccountMonitor {
         });
         return false;
       }
-      await notifyConsolidatedCloses([evt]);
+      coalesceClose({
+        symbol: evt.trade.symbol,
+        side: evt.trade.side.toLowerCase() === 'buy' ? 'Buy' : 'Sell',
+        exitReason: evt.exitReason,
+        entryPrice: evt.entryPrice,
+        exitPrice: evt.exitPrice,
+        qty: evt.qty,
+        pnlUsd: evt.pnlUsd,
+        pnlR: evt.pnlR,
+        accountLabel: `${evt.trade.account_bucket}/${evt.trade.account_key}`,
+      });
       log.info('daemon full-close finalized', {
         symbol, account: this.account.keyName, dbId: t.id, pnlR: evt.pnlR?.toFixed(2),
       });
@@ -460,6 +587,14 @@ export class AccountMonitor {
         const size = parseFloat(p.size ?? '0');
         if (size <= 0) continue;
         seenSymbols.add(p.symbol);
+        // Refresh floating PnL for the daily-DD guard on EVERY poll — even when size/SL
+        // are unchanged. Bybit's position WS doesn't push on price moves alone, and the
+        // size/SL dedup below skips dispatch → without this the flatten's equity used STALE
+        // floating and couldn't react to MTM drawdown (the guard's whole purpose). Found
+        // 2026-06-04: a static BTC short's ddGuard.currentEquity stayed frozen at open while
+        // the real floating swung −$1,815. (The dedup below still gates fill-PROCESSING.)
+        this.posUpl.set(p.symbol, parseFloat(p.unrealisedPnl ?? '0'));
+        this.evaluateDailyDd();
         const prev = this.state.get(p.symbol);
         const prevSize = prev?.lastSize ?? 0;
         const prevSL = prev?.lastSL ?? 0;

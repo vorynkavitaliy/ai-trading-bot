@@ -6,7 +6,9 @@
       "testnet": true,
       "demoTrading": true,
       "label": "200k account"
-    }
+    },
+
+
 
     "key2": {
       "apiKey": "your_api_key_here",

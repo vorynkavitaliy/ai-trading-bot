@@ -3,7 +3,13 @@ import { log } from '../core/logger';
 import { fetchKlines, fetchFunding, TF_MS, delay, BybitKline } from './bybit-public';
 import { tier1Pairs } from '../runtime/pair-strategies';
 
-export const SYMBOLS = tier1Pairs();
+// Ingestion universe = traded pairs PLUS BTCUSDT. BTC is NOT traded (excluded
+// 2026-05-24, 0R) but IS the macro-trend reference for useBtcTrend strategies
+// (8/10 live pairs, via scan-decide btcBars4h → cg-fade trendFiltersAllow). It must
+// be refreshed every cycle even though it's not in tier1Pairs(), otherwise its 240m
+// bars freeze and the macro filter silently gates live entries on stale data
+// (regression 2026-05-25 → 2026-06-02: BTC frozen 8 days, short-biased 8 pairs).
+export const SYMBOLS = [...new Set([...tier1Pairs(), 'BTCUSDT'])];
 const TFS = ['1m', '5m', '15m', '60m', '240m'];
 
 // TFs needed for live cycles AND backtest replay:

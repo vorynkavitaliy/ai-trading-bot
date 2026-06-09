@@ -91,13 +91,14 @@ export interface ClosedTrade {
   exitTs: number;
   qty: number;
   sl: number;
+  initialSl: number;          // SL at open (pre-TP1-BE-move); used for honest intraday DD clamp
   tp1: number;
   tp2?: number;
   pnlUsd: number;
   feesUsd: number;
   fundingUsd: number;
   pnlR: number;               // (pnl - fees - funding) / risked_usd
-  exitReason: 'sl' | 'tp1' | 'tp2' | 'tp1_then_sl_be' | 'time_stop' | 'strategy_exit';
+  exitReason: 'sl' | 'tp1' | 'tp2' | 'tp1_then_sl_be' | 'time_stop' | 'strategy_exit' | 'dd_flatten';
   rationale: string;
   // MAE/MFE — Max Adverse / Favorable Excursion in R units, computed bar-by-bar
   // during the position's lifetime. Enables honest MTM (mark-to-market) intraday
@@ -131,6 +132,11 @@ export interface BacktestSettings {
   decisionTf?: '60m' | '240m';  // default '60m' (1H decisions); set '240m' for 4H
   // Time stop: close position if held longer than this many ms after entry
   maxHoldMs?: number;
+  // Live-cron-realistic mode (2026-05-29): когда true, entry откладывается до
+  // следующего HH:00 (cron-tick) после закрытия decision-бара, пропуская funding
+  // window. Воспроизводит реальную задержку live-execution. По умолчанию false —
+  // существующие бэктесты остаются неизменными.
+  cronRealistic?: boolean;
 }
 
 export interface BacktestResult {

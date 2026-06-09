@@ -4,7 +4,7 @@ import { notifyHeartbeat } from '../../core/tg-templates';
 import { close as closePg } from '../../core/db';
 import { log } from '../../core/logger';
 import { loadAccounts } from '../../core/accounts';
-import { getRest, withRetry } from '../../core/bybit';
+import { getRest, withRetry, getLiveTickers } from '../../core/bybit';
 import { RISK } from '../../runtime/risk-guard';
 
 // Pipeline-staleness thresholds. Cron should hit cycle.log every 5min, scan-decide
@@ -88,9 +88,14 @@ async function main() {
 
   const snap = await scanAll();
 
-  // Aggregate regime distribution across 10-pair v3 universe.
+  // Aggregate regime distribution across all traded pairs (2026-06-03: 3-pair standalone
+  // portfolio BTC+SOL+ADA). BTC is now a TRADED pair, so it's counted like the rest — the
+  // tally reflects the real portfolio (→ "N из 3"). The regime read still fits the strategy:
+  // it's a fade (funding/ls_pos counter-trend), so range = good, trend = bad, as before.
   const regimeCount: Record<string, number> = { range: 0, trend_bull: 0, trend_bear: 0, transition: 0 };
-  for (const p of snap.pairs) regimeCount[p.regime] = (regimeCount[p.regime] ?? 0) + 1;
+  for (const p of snap.pairs) {
+    regimeCount[p.regime] = (regimeCount[p.regime] ?? 0) + 1;
+  }
   const dominant = Object.entries(regimeCount).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'transition';
 
   // Per-account equity + uPnL (Bybit live)
@@ -114,9 +119,19 @@ async function main() {
     accountSummaries.push({ name: acc.keyName, equity, uPnl });
   }
 
-  // Look up BTC price (for market context line)
+  // BTC price for the market-context line. Use the LIVE ticker, NOT scan-summary's
+  // price (= last CLOSED 1h candle close), which can be ~1h stale and gap badly at a
+  // bar boundary — operator saw $63,242 (03:00 close) while the live price was ~$64,300.
+  // Falls back to the 1h close if the ticker call fails.
   const btcPair = snap.pairs.find((p) => p.symbol === 'BTCUSDT');
-  const btcPrice = btcPair?.price;
+  let btcPrice = btcPair?.price;
+  if (accounts.length > 0) {
+    try {
+      const live = await getLiveTickers(accounts[0], ['BTCUSDT']);
+      const px = live.get('BTCUSDT');
+      if (px && px > 0) btcPrice = px;
+    } catch (e: any) { log.warn('hb btc live price fail', { err: e?.message }); }
+  }
 
   // Total equity + uPnL (sums across accounts)
   const totalEquity = accountSummaries.reduce((s, a) => s + a.equity, 0);

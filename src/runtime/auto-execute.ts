@@ -114,7 +114,14 @@ async function main() {
     const args = [
       '--symbol', d.symbol,
       '--side', sideForExecute,
-      '--order-type', 'limit',
+      // MARKET entry for ALL orders (2026-06-04). This line previously hardcoded
+      // `scaledIn ? 'market' : 'limit'` — which IGNORED cg-fade's orderType and left
+      // single-entry as a resting LIMIT that often never filled → db_without_bybit
+      // phantom 'open' rows + missed moves (BTC @66097 / @64318 incidents 2026-06-03/04).
+      // Scaled-in slot-1 was already market (slots 2/3 stay Limit via execute.ts
+      // placeScaledIn). Market = immediate fill, matches the cron-realistic backtest's
+      // fill-at-signal semantics.
+      '--order-type', 'market',
       '--entry-price', String(d.entryPrice),
       '--sl', String(d.sl),
       '--risk-pct', String(d.sizePct ?? 0.375),

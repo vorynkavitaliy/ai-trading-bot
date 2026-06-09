@@ -58,7 +58,6 @@ const MAX_CONCURRENT_POSITIONS = CAP_OVERRIDE != null ? Math.round(CAP_OVERRIDE)
 const COMMON = {
   ...BACKTEST_COMMON,
   startEquity: 200_000,
-  slippagePct: 0.05,
   riskPctBase: EFFECTIVE_RISK_PCT,
   leverage: 10,
   decisionTf: '240m' as const,

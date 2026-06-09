@@ -33,6 +33,7 @@ export const config = {
   telegram: {
     botToken: opt('TELEGRAM_BOT_TOKEN', ''),
     chatId: opt('TELEGRAM_CHAT_ID', ''),
+    operatorChatId: opt('TELEGRAM_OPERATOR_CHAT_ID', ''),
   },
   log: {
     level: opt('LOG_LEVEL', 'info') as 'debug' | 'info' | 'warn' | 'error',
@@ -40,10 +41,15 @@ export const config = {
   env: opt('NODE_ENV', 'development'),
 };
 
-export function requireTelegram(): { botToken: string; chatId: string } {
+export function requireTelegram(): { botToken: string; chatId: string; operatorChatId: string } {
   if (!config.telegram.botToken || !config.telegram.chatId) {
     console.error('[config] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is empty');
     process.exit(1);
   }
-  return { botToken: config.telegram.botToken, chatId: config.telegram.chatId };
+  const operatorChatId = config.telegram.operatorChatId || config.telegram.chatId;
+  return {
+    botToken: config.telegram.botToken,
+    chatId: config.telegram.chatId,
+    operatorChatId,
+  };
 }

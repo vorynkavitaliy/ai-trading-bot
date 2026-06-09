@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "generated_at": "2026-05-24T09:05:00Z",
+  "generated_at": "2026-05-30T15:51:16Z",
   "counters": {
-    "next_task": 8,
+    "next_task": 12,
     "next_epic": 2
   },
   "tasks": {
@@ -109,6 +109,62 @@
       "created": "2026-05-27",
       "updated": "2026-05-27T09:30:00Z",
       "verdict": "PASSED — 7 commits (bd29e7c..eeb6eed). iter1 1 Important (reconcile guard) → iter2 fix eeb6eed approved 0 Important. Typecheck clean, smoke 7/7, reconcile no-crash. Honest fill + pending-promoter (idempotent FOR-UPDATE) + truthful Telegram + risk-guard pending-aware + orphan-on-cancel. XRP incident fully resolved: limits filled→positions materialized→restored #240/241/242 to open (init_qty set)→reconcile aligned 6/6. OPERATOR: monitor:restart нужен чтобы daemon promotion code стал live."
+    },
+    "TASK-008": {
+      "status": "pending",
+      "archived": false,
+      "assignee": "architect",
+      "reviewer": "",
+      "epic": "",
+      "sprint": "",
+      "title": "TRUE multi-symbol portfolio backtest engine (unified 1m timeline + shared risk state)",
+      "live_sensitive": false,
+      "iteration": 0,
+      "blocked_by": [],
+      "created": "2026-05-28",
+      "updated": "2026-05-28T00:00:00Z"
+    },
+    "TASK-009": {
+      "status": "review",
+      "archived": false,
+      "assignee": "claude",
+      "reviewer": "",
+      "epic": "",
+      "sprint": "",
+      "title": "Fix WS watchdog false reconnect on quiet/empty book (bybit-ws 90s flap)",
+      "live_sensitive": true,
+      "iteration": 1,
+      "blocked_by": [],
+      "created": "2026-05-30",
+      "updated": "2026-06-02T11:48:00Z"
+    },
+    "TASK-010": {
+      "status": "review",
+      "archived": false,
+      "assignee": "claude",
+      "reviewer": "",
+      "epic": "",
+      "sprint": "",
+      "title": "BTC candles froze 8 days → useBtcTrend macro filter ran on stale data (8/10 pairs)",
+      "live_sensitive": true,
+      "iteration": 1,
+      "blocked_by": [],
+      "created": "2026-06-02",
+      "updated": "2026-06-02T11:35:00Z"
+    },
+    "TASK-011": {
+      "status": "review",
+      "archived": false,
+      "assignee": "claude",
+      "reviewer": "",
+      "epic": "",
+      "sprint": "",
+      "title": "Backtest engine faithfulness: kill look-ahead + mirror live caps; honest config is +6.93%/yr not +88%",
+      "live_sensitive": false,
+      "iteration": 1,
+      "blocked_by": [],
+      "created": "2026-06-02",
+      "updated": "2026-06-02T13:00:00Z"
     }
   },
   "epics": {

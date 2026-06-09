@@ -19,15 +19,16 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 ## Targets and Constraints
 
 - **Goal:** +60–80% / year on starting balance (validated 2026-05-23 walk-forward — backtest +88%/year on $200k, MaxDD 6.73%, PF 1.53). Realistic OOS expectation 50–70% with degradation.
-- **Strategy (v4, 2026-05-23):** CG-fade portfolio — per-pair strategy assigned via `src/runtime/pair-strategies.ts`. Decision cadence 4H (240m). Uses Coinglass percentile signals (L/S Top Position, funding rate, L/S Top Account) faded against pair-trend + BTC macro trend. SL = 1.5 × ATR(14), TP = 2.0 × ATR. Max hold 12 × 4H bars (48h).
-- **Universe (Tier-1, 7 pairs):** BTCUSDT, INJUSDT, TAOUSDT, ATOMUSDT, LTCUSDT, ARBUSDT, XRPUSDT. All passed walk-forward (50/50 train/test, both halves positive). Per-pair strategy mapping:
-  - **BTCUSDT** → `lsTopPositionFade` + pair trend (S1) — WR 61.5%, sumR +38.16/yr, PF 2.03
-  - **INJUSDT** → `lsTopPositionFade` + BTC macro (S2) — WR 55.3%, sumR +19.59/yr
-  - **TAOUSDT, ATOMUSDT, LTCUSDT, ARBUSDT** → `fundingFade` pct 0.75 + both trends (S3)
-  - **XRPUSDT** → `fundingTaConfluence` pct 0.70 + both trends (S4) — WR 67.7%, PF 2.50 (highest quality)
-- **Tier-2 (3/4 quarters, paused):** ETHUSDT, SOLUSDT, DOGEUSDT, BNBUSDT — passed walk-forward but per-quarter consistency lower (3/4 vs 4/4). Consider after Tier-1 stable in live.
+- **Strategy (v5, ребаланс 2026-05-27):** CG-fade portfolio — per-pair strategy assigned via `src/runtime/pair-strategies.ts`. Decision cadence 4H (240m). Все 10 пар используют scaled-in FIXED (3 ATR-spaced limit-slot с dca_boost decay 0.5, TP locked at signal+2·ATR). Coinglass percentile signals (L/S Top Position, funding rate, L/S Top Account) faded against pair-trend + BTC macro trend. SL = 1.5 × ATR(14), TP = 2.0 × ATR. Max hold 12 × 4H bars (48h).
+- **Universe (Tier-1, 10 pairs, ребаланс 2026-05-27):** SOLUSDT, INJUSDT, ATOMUSDT, ARBUSDT, XRPUSDT, LTCUSDT, HYPEUSDT, ETHUSDT, BNBUSDT, TAOUSDT. BTCUSDT исключён 2026-05-24 (honest engine после fix funding-window bias дал 0R). Истинный источник универсума — `src/runtime/pair-strategies.ts:TIER1_PORTFOLIO`. Маппинг ниже сохранён исторически и подлежит обновлению в следующей правке:
+  - **S1** `lsTopPositionFade` + pair trend → ETHUSDT, TAOUSDT
+  - **S2** `lsTopPositionFade` + BTC trend → INJUSDT, LTCUSDT
+  - **S3** `fundingFade` (default pctHi 0.75 / pctLo 0.25) + both trends → ATOMUSDT, ARBUSDT, BNBUSDT
+  - **S4** `fundingTaConfluence` (pctHi 0.70 / pctLo 0.30, funding+L/S Top Account confluence) → SOLUSDT, XRPUSDT, HYPEUSDT
+  - WR/PF per pair — смотри `memory/portfolio_v5_final.md` или прогон `npx tsx src/backtest/cli/portfolio-live.ts 365`.
+- **Tier-2 (paused):** DOGEUSDT — passed walk-forward, per-quarter consistency 3/4. ETH/SOL/BNB переведены в Tier-1 на ребалансе 2026-05-27.
 - **Excluded (failed walk-forward 2026-05-23):** APTUSDT, TONUSDT — OOS sumR negative. Keep out of universe.
-- **Accounts:** 200k + 50k HyroTrader prop accounts (currently `demoTrading: true`). Trades are broadcast to **every** sub-key inside `accounts.json` via `Promise.all`.
+- **Accounts (2026-05-28):** 4 HyroTrader prop subkeys — 1 × 50k (Ivan) + 3 × 200k (Vitalii, Vera, Andrey). Total equity ~$668k, all `demoTrading: true`. Trades are broadcast to **every** sub-key inside `accounts.json` via `Promise.all`.
 - **History:** v3 (VP-SMC) retired 2026-05-23 — backtest engine fixes (intra-bar resolution, D/W bar look-ahead, slip semantics, limit-entry) revealed VP-SMC edge was largely a data-bug artifact. CG-fade portfolio replaced it. See git log around 2026-05-23 for details.
 
 ## HyroTrader prop firm rules (non-negotiable)
@@ -43,9 +44,8 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 
 | Parameter | Value |
 |---|---|
-| Risk per trade (live trial) | **0.25% of equity** (7 pairs × 0.25% = 1.75% max heat) |
-| Risk per trade (post-trial) | 0.5% if live metrics match backtest (WR ~55%, PF ~1.5, MaxDD < 5%) |
-| Max parallel positions | 7 (one per Tier-1 pair max — natural cap = universe size) |
+| Risk per trade | **0.5% of equity** (`LIVE_RISK_PCT` в `src/runtime/pair-strategies.ts:31`). Full-DCA (3 slot dca_boost decay 0.5) = 0.875% эффективного риска на пару при полном заполнении. |
+| Max parallel positions | 6 (operator-set, validated cap-6 sweep 2026-05-25 — `risk-guard.ts:20`, `engine.ts:38`). Универсум 10 пар → ~40% сигналов потенциально блокируются капом, ожидается. |
 | Total heat cap | 3.75% of equity (legacy, room for Tier-2 expansion) |
 | Soft kill (daily) | −2.5% → flat until next UTC day |
 | Hard kill (daily) | −4% → halt + manual review |
