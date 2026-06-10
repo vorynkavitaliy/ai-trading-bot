@@ -30,8 +30,13 @@ export function isInFundingWindow(ts: number): boolean {
 
 // Live risk-guard constants — mirrored here so backtest doesn't over-trade vs prod.
 // Sources of truth: src/runtime/risk-guard.ts RISK object.
-const COOLDOWN_AFTER_SL_MS = 12 * 3600_000;
-const COOLDOWN_AFTER_ANY_CLOSE_MS = 4 * 3600_000;
+// Research toggles (backtest-only, default = live values): COOLDOWN_ANYCLOSE_HOURS /
+// COOLDOWN_SL_HOURS override the any-close / SL cooldown for cooldown-sensitivity sweeps.
+// LIVE risk-guard is unaffected (it has its own constants). When unset, exactly = live.
+const COOLDOWN_AFTER_SL_MS =
+  (process.env.COOLDOWN_SL_HOURS ? parseFloat(process.env.COOLDOWN_SL_HOURS) : 12) * 3600_000;
+const COOLDOWN_AFTER_ANY_CLOSE_MS =
+  (process.env.COOLDOWN_ANYCLOSE_HOURS ? parseFloat(process.env.COOLDOWN_ANYCLOSE_HOURS) : 4) * 3600_000;
 const MAX_SL_PER_PAIR_PER_DAY = 2;
 export const MIN_RR_TP2 = 0.3;
 const DAILY_SOFT_KILL_PCT = -2.5;
@@ -858,7 +863,13 @@ export async function runBacktest(
       // первый HH:00 который НЕ в funding window. Шагаем по 1 часу до ОК.
       const MS_HOUR = 3_600_000;
       entryTs = Math.ceil(nowTs / MS_HOUR) * MS_HOUR;
-      if (entryTs <= nowTs) entryTs += MS_HOUR;
+      // CRON_FAST_ENTRY=1 models the POST-cycle.sh-fix live: cg-incremental now runs
+      // BEFORE scan-decide, so a 4H close at a NON-funding hour (04/12/20 UTC) is acted
+      // on the SAME-hour cron (~+2-3min), not +1h. Funding-boundary closes (00/08/16)
+      // still defer via the funding-window skip below. Default (unset) keeps the legacy
+      // +1h deferral that models the OLD buggy live (stale-CG read → caught next hour).
+      // Research toggle only — live execution path is unaffected.
+      if (!(process.env.CRON_FAST_ENTRY === '1') && entryTs <= nowTs) entryTs += MS_HOUR;
       // Защитный лимит: 12 часов вперёд. Если ничего не нашли — пропускаем сигнал.
       let attempts = 0;
       while (isInFundingWindow(entryTs) && attempts < 12) {

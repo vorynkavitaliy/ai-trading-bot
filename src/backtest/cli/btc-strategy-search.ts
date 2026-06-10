@@ -44,6 +44,13 @@ const VARIANTS: V[] = [
   { label: 'H2 ls_pos tp1.5 (tighter target)', strat: lsTopPositionFade({ pctHi: .85, pctLo: .15, usePairTrend: false, useBtcTrend: true, slAtrMult: 1.5, tpAtrMult: 1.5, maxHoldBars: 12, riskPct: .5 }) },
   { label: 'H3 ls_pos tp2.5 hold18 (run)    ', strat: lsTopPositionFade({ pctHi: .85, pctLo: .15, usePairTrend: false, useBtcTrend: true, slAtrMult: 1.5, tpAtrMult: 2.5, maxHoldBars: 18, riskPct: .5 }) },
   { label: 'H4 ls_pos sl2.0 (wider stop)    ', strat: lsTopPositionFade({ pctHi: .85, pctLo: .15, usePairTrend: false, useBtcTrend: true, slAtrMult: 2.0, tpAtrMult: 2.0, maxHoldBars: 12, riskPct: .5 }) },
+  // ── Funding-fade variants — scan says funding_oi is BTC's STRONGEST stable signal (OOS IC −0.17),
+  //    stronger than ls_top_position (OOS −0.11). BTC currently trades the weaker ls_pos. ──
+  { label: 'F1 funding .70/.30 btcTrend     ', strat: fundingFade({ pctHi: .70, pctLo: .30, usePairTrend: false, useBtcTrend: true, slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12, riskPct: .5 }) },
+  { label: 'F2 funding .75/.25 btcTrend     ', strat: fundingFade({ pctHi: .75, pctLo: .25, usePairTrend: false, useBtcTrend: true, slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12, riskPct: .5 }) },
+  { label: 'F3 funding .70/.30 NO trend     ', strat: fundingFade({ pctHi: .70, pctLo: .30, usePairTrend: false, useBtcTrend: false, slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12, riskPct: .5 }) },
+  { label: 'F4 funding .80/.20 btcTrend     ', strat: fundingFade({ pctHi: .80, pctLo: .20, usePairTrend: false, useBtcTrend: true, slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12, riskPct: .5 }) },
+  { label: 'F5 funding .70/.30 btcTrend sl2 ', strat: fundingFade({ pctHi: .70, pctLo: .30, usePairTrend: false, useBtcTrend: true, slAtrMult: 2.0, tpAtrMult: 2.0, maxHoldBars: 12, riskPct: .5 }) },
 ];
 
 async function runHalf(strat: Strategy, skipDays: number) {
