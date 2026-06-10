@@ -20,22 +20,26 @@ export const CG = {
   taker: 'taker',
 } as const;
 
-export function loadBtcDataset(cgInterval: '1h' | '4h' = '1h'): BtcDataset {
-  const minutes = readNdjson<Candle>('bybit_BTCUSDT_1m');
+export function loadDataset(coin: string, pair: string, cgInterval: '1h' | '4h'): BtcDataset {
+  const minutes = readNdjson<Candle>(`bybit_${pair}_1m`);
   const intervalMs = cgInterval === '4h' ? 4 * HOUR_MS : HOUR_MS;
-  const fundingPoints = readNdjson<SeriesPoint>(`cg_funding_oi_weighted_BTC_${cgInterval}`);
+  const fundingPoints = readNdjson<SeriesPoint>(`cg_funding_oi_weighted_${coin}_${cgInterval}`);
 
   const cgInputs: CgSeriesInput[] = [
-    { name: CG.oi, intervalMs, points: readNdjson<SeriesPoint>(`cg_oi_aggregated_BTC_${cgInterval}`) },
+    { name: CG.oi, intervalMs, points: readNdjson<SeriesPoint>(`cg_oi_aggregated_${coin}_${cgInterval}`) },
     { name: CG.funding, intervalMs, points: fundingPoints },
-    { name: CG.lsGlobal, intervalMs, points: readNdjson<SeriesPoint>(`cg_ls_global_account_BTCUSDT_${cgInterval}`) },
-    { name: CG.lsTopAccount, intervalMs, points: readNdjson<SeriesPoint>(`cg_ls_top_account_BTCUSDT_${cgInterval}`) },
-    { name: CG.lsTopPosition, intervalMs, points: readNdjson<SeriesPoint>(`cg_ls_top_position_BTCUSDT_${cgInterval}`) },
-    { name: CG.liq, intervalMs, points: readNdjson<SeriesPoint>(`cg_liquidation_BTCUSDT_${cgInterval}`) },
-    { name: CG.taker, intervalMs, points: readNdjson<SeriesPoint>(`cg_taker_BTCUSDT_${cgInterval}`) },
+    { name: CG.lsGlobal, intervalMs, points: readNdjson<SeriesPoint>(`cg_ls_global_account_${pair}_${cgInterval}`) },
+    { name: CG.lsTopAccount, intervalMs, points: readNdjson<SeriesPoint>(`cg_ls_top_account_${pair}_${cgInterval}`) },
+    { name: CG.lsTopPosition, intervalMs, points: readNdjson<SeriesPoint>(`cg_ls_top_position_${pair}_${cgInterval}`) },
+    { name: CG.liq, intervalMs, points: readNdjson<SeriesPoint>(`cg_liquidation_${pair}_${cgInterval}`) },
+    { name: CG.taker, intervalMs, points: readNdjson<SeriesPoint>(`cg_taker_${pair}_${cgInterval}`) },
   ];
 
   return { minutes, cgInputs, fundingPoints };
+}
+
+export function loadBtcDataset(cgInterval: '1h' | '4h' = '1h'): BtcDataset {
+  return loadDataset('BTC', 'BTCUSDT', cgInterval);
 }
 
 export function clampMinutesToCgWindow(dataset: BtcDataset, publishLagMs: number): Candle[] {

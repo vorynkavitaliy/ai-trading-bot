@@ -34,14 +34,15 @@ export class BybitPublicClient {
     this.http = new HttpClient({
       baseUrl: 'https://api.bybit.com',
       timeoutMs: 15_000,
-      rateLimiter: RateLimiter.perMinute(550),
+      rateLimiter: RateLimiter.perMinute(150),
       retryPolicy: new ExponentialBackoff({
         label: 'bybit-public',
-        maxAttempts: 4,
-        baseDelayMs: 800,
+        maxAttempts: 10,
+        baseDelayMs: 20_000,
+        maxDelayMs: 120_000,
         isRetryable: error => {
           const message = (error as Error)?.message ?? '';
-          return /429|timeout|ECONNRESET|ETIMEDOUT|fetch failed/i.test(message);
+          return /429|10006|rate|timeout|ECONNRESET|ETIMEDOUT|fetch failed/i.test(message);
         },
       }),
       logger: options.logger,
