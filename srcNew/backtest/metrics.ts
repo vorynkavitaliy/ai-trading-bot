@@ -80,3 +80,46 @@ export function splitTradesByTs(trades: readonly Trade[], splitTs: number): { is
     oos: trades.filter(t => t.placedTs >= splitTs),
   };
 }
+
+export interface PctMetrics {
+  riskPctPerTrade: number;
+  returnPct: number;
+  annualizedPct: number;
+  maxDrawdownPct: number;
+}
+
+export function computePctMetrics(
+  trades: readonly Trade[],
+  riskPctPerTrade: number,
+  fromTs: number,
+  toTs: number,
+): PctMetrics {
+  const sorted = [...trades].sort((a, b) => a.exitTs - b.exitTs);
+  const riskFraction = riskPctPerTrade / 100;
+
+  let equity = 1;
+  let peak = 1;
+  let maxDDFraction = 0;
+  for (const trade of sorted) {
+    equity *= 1 + trade.netR * riskFraction;
+    peak = Math.max(peak, equity);
+    maxDDFraction = Math.max(maxDDFraction, 1 - equity / peak);
+  }
+
+  const periodDays = Math.max((toTs - fromTs) / 86_400_000, 1);
+  const annualized = (Math.pow(equity, 365 / periodDays) - 1) * 100;
+
+  return {
+    riskPctPerTrade,
+    returnPct: (equity - 1) * 100,
+    annualizedPct: annualized,
+    maxDrawdownPct: maxDDFraction * 100,
+  };
+}
+
+export function formatPctMetrics(m: PctMetrics): string {
+  return (
+    `risk ${m.riskPctPerTrade}%/trade: return ${m.returnPct >= 0 ? '+' : ''}${m.returnPct.toFixed(1)}% ` +
+    `(annualized ${m.annualizedPct >= 0 ? '+' : ''}${m.annualizedPct.toFixed(1)}%), maxDD -${m.maxDrawdownPct.toFixed(2)}%`
+  );
+}

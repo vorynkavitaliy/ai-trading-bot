@@ -2,7 +2,7 @@ import { createLogger } from '../../core/logger';
 import { cgSlowFade } from '../../strategies/cg-slow-fade';
 import { buildCgView, buildFundingProvider, clampMinutesToCgWindow, loadBtcDataset } from '../dataset';
 import { runBacktest } from '../engine';
-import { computeMetrics, formatMetrics, splitTradesByTs } from '../metrics';
+import { computeMetrics, computePctMetrics, formatMetrics, formatPctMetrics, splitTradesByTs } from '../metrics';
 import { BacktestConfig, DEFAULT_CONFIG, Strategy, Trade } from '../types';
 
 const HOUR_MS = 3_600_000;
@@ -87,6 +87,9 @@ function main(): void {
 
     console.log(`\n===== ${combo.label} =====`);
     console.log(formatMetrics(combo.strategy.id, metrics));
+    for (const riskPct of [0.5, 1.0]) {
+      console.log(`  ${formatPctMetrics(computePctMetrics(result.trades, riskPct, fromTs, toTs))}`);
+    }
     const { is, oos } = splitTradesByTs(result.trades, splitTs);
     console.log(`  IS : ${brief(is)} | OOS: ${brief(oos)}`);
     console.log(`  L: ${brief(result.trades.filter(t => t.side === 'long'))} | S: ${brief(result.trades.filter(t => t.side === 'short'))}`);
