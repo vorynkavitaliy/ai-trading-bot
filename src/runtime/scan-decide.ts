@@ -613,10 +613,12 @@ export async function scanDecide(): Promise<ScanDecideResult> {
     // enter-blocked), with two retry-next-hour exceptions that mirror operational
     // reality rather than signal logic: (a) CG data missing at the boundary — the
     // signal never evaluated, and the +1h evaluation reads the SAME anchor-ts CG row,
-    // so it computes exactly what hour 0 would have; (b) funding-window block — the
-    // cron tick at 00/08/16 lands inside the ±10min window, so consuming the anchor
-    // there would silently drop ~half of all validated entries (3 of 6 daily
-    // boundaries). One bounded +1h retry instead; see commit message for the trade-off.
+    // so it computes exactly what hour 0 would have; (b) funding-window block —
+    // DEFENSIVE-ONLY since the window went asymmetric (2026-06-10, pre-settlement
+    // 10 min only): cron boundary scans at HH:00-04 can no longer collide with it,
+    // so boundary entries proceed immediately (validated 'take' policy). If the
+    // block ever fires anyway (ad-hoc run at xx:50-59), one bounded +1h retry
+    // instead of silently dropping the signal.
     // SCAN_LATCH_RECORD=0 → read-only probe: decide and report but do NOT consume the
     // anchor. For ad-hoc operator/Claude runs of scan-decide outside cycle.sh — a manual
     // run that surfaced an approved enter would otherwise swallow the signal (auto-execute
@@ -679,7 +681,8 @@ export async function scanDecide(): Promise<ScanDecideResult> {
       }
     }
 
-    // Funding-window block is the ONLY non-consuming block (bounded +1h retry);
+    // Funding-window block is the ONLY non-consuming block (bounded +1h retry;
+    // defensive-only with the asymmetric pre-settlement window — see above);
     // every other outcome (approved, cooldown, cap, heat, rrTp2, same-side) consumes
     // the anchor exactly like the validated engine consumes a decision bar. An
     // approved entry consumes even if downstream execution is paused (PAUSE.md) or

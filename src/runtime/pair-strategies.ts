@@ -34,8 +34,9 @@ import { cgSlowFadeV5 } from '../strategies/cg-slow-fade';
 // Per-trade risk: BTC carries 1.0% (the most validated leg: permutation p=0.000,
 // full stress battery); alts 0.5%. Heat 1.0+0.5×3 = 2.5% < 3.75% cap.
 // Headline (limit entries): +64.1%/yr, MTM maxDD -8.17%, worst day -2.36%.
-// Measured LIVE config (market entry, CG lag-1, funding +1h defer): +40.3%/yr,
-// PF 1.41, maxDD -9.27%, worst day -2.93% — live-policy-experiments.ts 2026-06-10.
+// Measured LIVE config (market entry, CG lag-1, asymmetric funding window =
+// boundary entries taken): +52.5%/yr, PF 1.50, maxDD -6.92%, worst day -2.96%
+// — live-policy-experiments.ts 'market-lag120' 2026-06-10.
 export const LIVE_RISK_PCT = 0.5;          // alt per-trade risk (ETH/SOL/XRP)
 export const LIVE_RISK_PCT_BTC = 1.0;      // BTC per-trade risk
 

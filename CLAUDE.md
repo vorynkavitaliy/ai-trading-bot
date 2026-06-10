@@ -18,7 +18,7 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 
 ## Targets and Constraints
 
-- **Goal:** +60–80% / year on starting balance. Живая конфигурация v5 валидирована 2026-06-10: ожидаемый конверт ≈ +40%/год, PF 1.41, MTM maxDD −9.3%, обе WF-половины положительные (`srcNew/backtest/cli/live-policy-experiments.ts`, вариант `market-lag120-defer`). Headline-вариант с лимитными входами +64.1%/год (permutation p=0.000) — кандидат Phase 2 (нужен TTL-canceller лимиток).
+- **Goal:** +60–80% / year on starting balance. Живая конфигурация v5 валидирована 2026-06-10: ожидаемый конверт ≈ +52%/год, PF 1.50, MTM maxDD −6.9%, worst day −2.96%, обе WF-половины положительные (`srcNew/backtest/cli/live-policy-experiments.ts`, вариант `market-lag120` = market-вход + CG lag-1 + асимметричное funding-окно). Headline-вариант с лимитными входами +64.1%/год (permutation p=0.000) — кандидат Phase 2 (нужен TTL-canceller лимиток).
 - **Strategy (v5 cgSlowFade, миграция 2026-06-10):** портфель `cgSlowFadeV5` (`src/strategies/cg-slow-fade.ts`), per-pair конфиг в `src/runtime/pair-strategies.ts` — **истина = код, не этот файл**. Одно решение на закрытый 4H-бар (латч `decided_anchors`; funding-window блок → один ретрай +1h). Сигналы: перцентили Coinglass за 180×4H — L/S Top Position ≥0.95 → SHORT / ≤0.05 → LONG (fade), funding ≥0.95 → SHORT (fade), liq-каскад ≥0.97 → momentum SHORT. CG читается с лагом 1 бакет (`cgReadLagBars=1`). Вход market по закрытию анкера; SL = 2.0 × ATR(14), TP = 3.5 × ATR (один тейк, tp1=tp2). Max hold 12 × 4H (48h) — живое исполнение `src/runtime/max-hold.ts` (5-мин cron).
 - **Universe (Tier-1, 4 pairs, 2026-06-10):** BTCUSDT (свои сигналы, риск 1.0%), ETHUSDT (btc-trend гейт, только SHORT, 0.5%), SOLUSDT (btc-signal — fade от позиционирования BTC, 0.5%), XRPUSDT (btc-signal, только SHORT, 0.5%). Истинный источник — `src/runtime/pair-strategies.ts:TIER1_PORTFOLIO`.
 - **Archived (enabled:false, быстрый откат):** ADAUSDT, LINKUSDT (standalone-портфель 2026-06-03). Их валидация шла на до-ремонтных CG-данных (frozen-at-open, см. fix 2026-06-10) — перед ре-активацией обязателен повторный прогон на починенных данных.
@@ -48,7 +48,7 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 | Cooldown after any close | 4h on the same pair (prevents immediate re-entry on TP/manual) |
 | Decision latch | одно решение на (пара, закрытый 4H-бар) — `decided_anchors`; в strategy-кулдаунах v5 не нуждается |
 | Max hold | 48h (12 × 4H) → market-close, `exit_reason='time_stop'` (`src/runtime/max-hold.ts`) |
-| Funding window | ±10 мин вокруг 00/08/16 UTC → вход блокируется, латч даёт один ретрай +1h. Эмпирика 2026-06-10: defer стоит ~12pp/год против входа сразу после settlement (+52.5%/maxDD −6.9% у `take` vs +40.3%/−9.3% у `defer`) — смягчение окна = решение оператора. |
+| Funding window | **Асимметричное (решение оператора 2026-06-10):** блок только 10 мин ДО settlement 00/08/16 UTC; вход сразу после settlement разрешён — валидированная политика `take` (+52.5%/maxDD −6.9% против +40.3%/−9.3% у defer +1h и +23.0% у drop). |
 
 ## Inviolable execution rules
 
@@ -128,7 +128,7 @@ If the daemon misbehaves: `npm run monitor:stop` halts it. Cron `position-watche
 
 - **Sub-second** = position-monitor daemon (WS push). TP1, naked-SL, full-close, dust, DCA. NO decision-making.
 - **5m fire** = reconcile + position-watcher catch-net + max-hold time-stop. NOT decision-making.
-- **1H close** = scan-decide runs (HH:00-04 cron). Латч `decided_anchors` даёт ровно одно решение на закрытый 4H-бар → фактические решения на границах 00/04/08/12/16/20 UTC; funding-window блок → один ретрай +1h (01/09/17).
+- **1H close** = scan-decide runs (HH:00-04 cron). Латч `decided_anchors` даёт ровно одно решение на закрытый 4H-бар → фактические решения на границах 00/04/08/12/16/20 UTC; входы на funding-границах идут сразу после settlement (асимметричное окно).
 - **Do not cancel pending limit orders younger than 15 minutes** except for catastrophic events (kill switch, FOMC surprise, exchange outage).
 
 ## Forbidden shell patterns (enforced by hooks)
@@ -197,7 +197,7 @@ When any fires: send Telegram alert, trigger `/pause` (writes `vault/Watchlist/P
 
 **Policy-решения (эмпирика, `srcNew/backtest/cli/live-policy-experiments.ts`):**
 - `cgReadLagBars=1` — CG читается с лагом 1 бакет (валидированный информационный сет; свежий бакет ревизится CG задним числом и удваивает maxDD: −12.25% vs −6.92%).
-- Funding-window: defer +1h (charter-safe). Альтернатива `take` (вход в 00:01-04, сразу после settlement) даёт +12pp/год и лучший DD — ждёт решения оператора.
-- Ожидаемый живой конверт (market, lag-1, defer): **+40.3%/год, PF 1.41, maxDD −9.27%, worst day −2.93%**, обе половины положительные.
+- Funding-window: оператор утвердил `take` 2026-06-10 — окно асимметричное (блок только 10 мин ДО settlement), входы на границах 00/08/16 идут сразу (00:01-04). Альтернативы измерены: defer +1h −12pp/год, drop −30pp/год.
+- Ожидаемый живой конверт (market, lag-1, take): **+52.5%/год, PF 1.50, maxDD −6.92%, worst day −2.96%**, обе половины положительные.
 
 **Атрибуция сделок:** `trades.strategy` (миграция 014) — пишется из execute.ts; max-hold и отчётность ключуются по ней.

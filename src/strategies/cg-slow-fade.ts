@@ -27,20 +27,19 @@
  *
  * Live-policy decisions (2026-06-10, srcNew/backtest/cli/live-policy-experiments.ts):
  *   - decideOncePerAnchor: scan-decide latches one decision per closed 4H bar
- *     (srcNew consumes a decision bar even when blocked; hourly retries forbidden),
- *     EXCEPT a funding-window block at 00/08/16 UTC → one +1h retry. Dropping those
- *     signals instead would halve the edge (+54.7% → +23.0% at lag0). The +1h defer
- *     at the live lag-1 config costs ~12pp/yr vs entering right after settlement
- *     (take +52.47%/maxDD −6.92% vs defer +40.32%/−9.27%) — narrowing the funding
- *     window to pre-settlement-only is an OPERATOR decision, see CLAUDE.md risk table.
+ *     (srcNew consumes a decision bar even when blocked; hourly retries forbidden).
+ *   - Funding window is ASYMMETRIC (operator decision 2026-06-10): blocked only the
+ *     10 min BEFORE settlement at 00/08/16 UTC, so boundary entries at HH:01-04
+ *     proceed immediately — the validated 'take' policy. The alternatives measured:
+ *     defer +1h = +40.3%/maxDD −9.27% (−12pp/yr), drop = +23.0% (halves the edge).
  *   - cgReadLagBars=1: CG read lags the anchor one bucket — the validated info set
  *     (srcNew publishLag 120s > gap 60s) and revision-settled (CG retro-revises
  *     fresh liq buckets). Reading the just-closed bucket doubled MTM maxDD
  *     (−12.25% vs −6.92%) at equal return.
- *   - Measured live envelope (market entry, lag-1, defer — the EXACT live config):
- *     +40.3% (ann +41.0%), PF 1.41, maxDD −9.27%, worst day −2.93%, both WF halves
- *     positive (older +30.2%/PF 1.31 ann, recent +60.6%/PF 1.68 ann). The +64.1%
- *     headline is the limit-entry variant (Phase 2 candidate).
+ *   - Measured live envelope (market entry, lag-1, take — the EXACT live config,
+ *     'market-lag120'): +52.5% (ann +53.4%), PF 1.50, WR 54.7%, maxDD −6.92%,
+ *     worst day −2.96%, both WF halves positive (older ann +32.1%/PF 1.35, recent
+ *     ann +76.6%/PF 1.78). The +64.1% headline is the limit-entry variant (Phase 2).
  */
 import { Action, Strategy, StrategyContext, Side, Bar } from '../backtest/types';
 import { CoinglassFeatures } from '../data/coinglass-features';

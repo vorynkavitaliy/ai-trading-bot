@@ -83,12 +83,17 @@ export interface RiskState {
   totalKillTriggered: boolean;
 }
 
-function isFundingWindow(d: Date): boolean {
+// Asymmetric since 2026-06-10 (operator decision): block ONLY the 10 min BEFORE
+// funding settlement at 00/08/16 UTC — an entry there pays funding within minutes.
+// Entries right AFTER settlement are allowed: the next funding is 8h away, and the
+// validated backtest takes exactly those entries (boundary + ~1 min). The old
+// symmetric ±10 min window collided with the top-of-hour cron (HH:00-04) and
+// deferred ~half of all boundary signals by 1h: live-policy-experiments 2026-06-10
+// measured take +52.5%/yr / maxDD −6.9% vs defer +40.3% / −9.3% (~12pp/yr cost).
+export function isFundingWindow(d: Date): boolean {
   const h = d.getUTCHours();
   const m = d.getUTCMinutes();
   for (const fundingHour of RISK.fundingWindows) {
-    if (h === fundingHour && m < RISK.fundingWindowMinutes) return true;
-    // Cover the 10 minutes BEFORE funding too — cross hour boundary
     if (h === (fundingHour + 23) % 24 && m >= 60 - RISK.fundingWindowMinutes) return true;
   }
   return false;
