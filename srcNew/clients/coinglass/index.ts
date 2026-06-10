@@ -1,3 +1,14 @@
 export { CoinglassClient } from './client';
 export type { CoinglassClientOptions } from './client';
+export type { CgTransport } from './transport';
 export * from './types';
+export * from './params';
+export * from './responses';
+export { MarketEndpoints } from './endpoints/market';
+export type { CoinsMarketsParams } from './endpoints/market';
+export { OpenInterestEndpoints } from './endpoints/open-interest';
+export { FundingEndpoints } from './endpoints/funding';
+export { PositioningEndpoints } from './endpoints/positioning';
+export { LiquidationEndpoints } from './endpoints/liquidation';
+export { OrderbookEndpoints } from './endpoints/orderbook';
+export type { OrderbookPairParams, OrderbookAggregatedParams } from './endpoints/orderbook';

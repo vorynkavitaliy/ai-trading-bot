@@ -4,6 +4,13 @@ import { HttpClient, QueryValue } from '../../core/http';
 import { Logger } from '../../core/logger';
 import { RateLimiter } from '../../core/rate-limiter';
 import { ExponentialBackoff, RetryPolicy } from '../../core/retry';
+import { FundingEndpoints } from './endpoints/funding';
+import { LiquidationEndpoints } from './endpoints/liquidation';
+import { MarketEndpoints } from './endpoints/market';
+import { OpenInterestEndpoints } from './endpoints/open-interest';
+import { OrderbookEndpoints } from './endpoints/orderbook';
+import { PositioningEndpoints } from './endpoints/positioning';
+import { CgTransport } from './transport';
 import { CgEnvelope } from './types';
 
 const SUCCESS_CODES = new Set<string | number>(['0', 0, '00000']);
@@ -28,12 +35,17 @@ function coinglassRetryPolicy(): RetryPolicy {
   });
 }
 
-export class CoinglassClient {
+export class CoinglassClient implements CgTransport {
+  readonly market: MarketEndpoints;
+  readonly openInterest: OpenInterestEndpoints;
+  readonly funding: FundingEndpoints;
+  readonly positioning: PositioningEndpoints;
+  readonly liquidation: LiquidationEndpoints;
+  readonly orderbook: OrderbookEndpoints;
+
   private readonly http: HttpClient;
-  private readonly logger?: Logger;
 
   constructor(config: CoinglassConfig, options: CoinglassClientOptions = {}) {
-    this.logger = options.logger;
     this.http = new HttpClient({
       baseUrl: config.baseUrl,
       defaultHeaders: { 'CG-API-KEY': config.apiKey },
@@ -42,6 +54,13 @@ export class CoinglassClient {
       rateLimiter: RateLimiter.perMinute(config.requestsPerMinute),
       logger: options.logger,
     });
+
+    this.market = new MarketEndpoints(this);
+    this.openInterest = new OpenInterestEndpoints(this);
+    this.funding = new FundingEndpoints(this);
+    this.positioning = new PositioningEndpoints(this);
+    this.liquidation = new LiquidationEndpoints(this);
+    this.orderbook = new OrderbookEndpoints(this);
   }
 
   async request<T>(path: string, params: Record<string, QueryValue> = {}): Promise<T> {
