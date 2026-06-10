@@ -71,7 +71,7 @@ function main(): void {
 
   const dataset = loadBtcDataset();
   const minutes = clampMinutesToCgWindow(dataset, config.cgPublishLagMs);
-  const fundingProvider = buildFundingProvider(dataset.fundingPoints, config.cgPublishLagMs);
+  const fundingProvider = buildFundingProvider(dataset.fundingPoints, config.cgPublishLagMs, 3_600_000);
 
   const fromTs = minutes[0].ts;
   const toTs = minutes[minutes.length - 1].ts;

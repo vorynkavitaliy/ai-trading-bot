@@ -6,7 +6,6 @@ import {
   BacktestResult,
   ExitReason,
   OrderIntent,
-  Side,
   Strategy,
   Trade,
 } from './types';
@@ -26,6 +25,7 @@ interface OpenPosition {
   placedTs: number;
   entryTs: number;
   entryPrice: number;
+  entryIsTaker: boolean;
   maxHoldUntilTs: number;
   fundingR: number;
 }
@@ -52,12 +52,15 @@ export function runBacktest(input: EngineInput): BacktestResult {
   let decisions = 0;
 
   let nextDecisionIdx = strategy.warmupBars;
-  let minuteIdx = 0;
 
   const closedBarsView: Candle[] = decisionBars.slice(0, 0);
 
-  for (minuteIdx = 0; minuteIdx < minuteCandles.length; minuteIdx++) {
+  for (let minuteIdx = 0; minuteIdx < minuteCandles.length; minuteIdx++) {
     const minute = minuteCandles[minuteIdx];
+
+    if (pending !== null && minute.ts >= pending.expiresTs) {
+      pending = null;
+    }
 
     while (
       nextDecisionIdx < decisionBars.length &&
@@ -95,34 +98,31 @@ export function runBacktest(input: EngineInput): BacktestResult {
     }
 
     if (pending !== null && minute.ts >= pending.activeFromTs) {
-      if (minute.ts >= pending.expiresTs) {
+      const fill = tryFillLimit(pending, minute, config.strictTouch);
+      if (fill !== null) {
+        filledOrders++;
+        position = {
+          intent: pending.intent,
+          placedTs: pending.placedTs,
+          entryTs: minute.ts,
+          entryPrice: fill.price,
+          entryIsTaker: fill.isTaker,
+          maxHoldUntilTs: pending.placedTs + config.maxHoldDecisionBars * bucketMs,
+          fundingR: 0,
+        };
         pending = null;
-      } else {
-        const fillPrice = tryFillLimit(pending.intent, minute, config.strictTouch);
-        if (fillPrice !== null) {
-          filledOrders++;
-          position = {
-            intent: pending.intent,
-            placedTs: pending.placedTs,
-            entryTs: minute.ts,
-            entryPrice: fillPrice,
-            maxHoldUntilTs: pending.placedTs + config.maxHoldDecisionBars * bucketMs,
-            fundingR: 0,
-          };
-          pending = null;
 
-          const exit = checkExit(position, minute, config, true);
-          if (exit !== null) {
-            trades.push(buildTrade(position, exit.price, exit.reason, minute.ts, config));
-            position = null;
-          }
+        const exit = checkExit(position, minute, config, true);
+        if (exit !== null) {
+          trades.push(buildTrade(position, exit.price, exit.reason, minute.ts, config));
+          position = null;
         }
       }
     } else if (position !== null) {
       if (config.applyFunding && input.fundingRateProvider && minute.ts % FUNDING_INTERVAL_MS === 0) {
         const rate = input.fundingRateProvider(minute.ts);
         if (rate !== null) {
-          const riskPerUnit = Math.abs(position.entryPrice - position.intent.slPrice);
+          const riskPerUnit = riskPerUnitOf(position);
           const sign = position.intent.side === 'long' ? -1 : 1;
           position.fundingR += (sign * rate * position.entryPrice) / riskPerUnit;
         }
@@ -169,15 +169,35 @@ function isValidIntent(intent: OrderIntent): boolean {
   return intent.tpPrice < intent.limitPrice && intent.limitPrice < intent.slPrice;
 }
 
-function tryFillLimit(intent: OrderIntent, minute: Candle, strictTouch: boolean): number | null {
+interface FillEvent {
+  price: number;
+  isTaker: boolean;
+}
+
+// A resting limit never fills better than its own price. The only marketable case is
+// the activation minute: the market may have crossed the limit during the 60s gap,
+// then the order executes immediately near the open as a taker.
+function tryFillLimit(pending: PendingOrder, minute: Candle, strictTouch: boolean): FillEvent | null {
+  const { intent, activeFromTs } = pending;
+  const isActivationBar = minute.ts === activeFromTs;
+
   if (intent.side === 'long') {
-    if (minute.open <= intent.limitPrice) return minute.open;
+    if (minute.open <= intent.limitPrice) {
+      return isActivationBar
+        ? { price: minute.open, isTaker: true }
+        : { price: intent.limitPrice, isTaker: false };
+    }
     const touched = strictTouch ? minute.low < intent.limitPrice : minute.low <= intent.limitPrice;
-    return touched ? intent.limitPrice : null;
+    return touched ? { price: intent.limitPrice, isTaker: false } : null;
   }
-  if (minute.open >= intent.limitPrice) return minute.open;
+
+  if (minute.open >= intent.limitPrice) {
+    return isActivationBar
+      ? { price: minute.open, isTaker: true }
+      : { price: intent.limitPrice, isTaker: false };
+  }
   const touched = strictTouch ? minute.high > intent.limitPrice : minute.high >= intent.limitPrice;
-  return touched ? intent.limitPrice : null;
+  return touched ? { price: intent.limitPrice, isTaker: false } : null;
 }
 
 interface ExitEvent {
@@ -186,6 +206,8 @@ interface ExitEvent {
 }
 
 // Worst-case ordering: when both SL and TP are inside one minute bar, SL wins.
+// A fill already at/through the SL (gap during the entry gap window) exits as a
+// scratch from the actual entry price — never as a phantom profit from slPrice.
 function checkExit(
   position: OpenPosition,
   minute: Candle,
@@ -196,18 +218,29 @@ function checkExit(
   const slip = config.slSlippageBps / 10_000;
 
   if (side === 'long') {
-    if (minute.low <= slPrice) return { price: slPrice * (1 - slip), reason: 'sl' };
+    if (minute.low <= slPrice) {
+      const stopBase = isFillBar ? Math.min(slPrice, position.entryPrice) : slPrice;
+      return { price: stopBase * (1 - slip), reason: 'sl' };
+    }
     const tpTouched = config.strictTouch ? minute.high > tpPrice : minute.high >= tpPrice;
     if (tpTouched && !isFillBar) return { price: tpPrice, reason: 'tp' };
-    if (tpTouched && isFillBar && minute.close >= tpPrice) return { price: tpPrice, reason: 'tp' };
+    if (tpTouched && isFillBar && minute.close > tpPrice) return { price: tpPrice, reason: 'tp' };
     return null;
   }
 
-  if (minute.high >= slPrice) return { price: slPrice * (1 + slip), reason: 'sl' };
+  if (minute.high >= slPrice) {
+    const stopBase = isFillBar ? Math.max(slPrice, position.entryPrice) : slPrice;
+    return { price: stopBase * (1 + slip), reason: 'sl' };
+  }
   const tpTouched = config.strictTouch ? minute.low < tpPrice : minute.low <= tpPrice;
   if (tpTouched && !isFillBar) return { price: tpPrice, reason: 'tp' };
-  if (tpTouched && isFillBar && minute.close <= tpPrice) return { price: tpPrice, reason: 'tp' };
+  if (tpTouched && isFillBar && minute.close < tpPrice) return { price: tpPrice, reason: 'tp' };
   return null;
+}
+
+// Sizing happens at order placement, off the limit price — R is anchored there too.
+function riskPerUnitOf(position: OpenPosition): number {
+  return Math.abs(position.intent.limitPrice - position.intent.slPrice);
 }
 
 function buildTrade(
@@ -217,13 +250,14 @@ function buildTrade(
   exitTs: number,
   config: BacktestConfig,
 ): Trade {
-  const { intent, entryPrice, entryTs, placedTs, fundingR } = position;
-  const riskPerUnit = Math.abs(entryPrice - intent.slPrice);
+  const { intent, entryPrice, entryTs, placedTs, fundingR, entryIsTaker } = position;
+  const riskPerUnit = riskPerUnitOf(position);
 
   const direction = intent.side === 'long' ? 1 : -1;
   const grossR = (direction * (exitPrice - entryPrice)) / riskPerUnit;
 
-  const entryFee = config.makerFee * entryPrice;
+  const entryFeeRate = entryIsTaker ? config.takerFee : config.makerFee;
+  const entryFee = entryFeeRate * entryPrice;
   const exitFeeRate = reason === 'tp' ? config.makerFee : config.takerFee;
   const exitFee = exitFeeRate * exitPrice;
   const feesR = (entryFee + exitFee) / riskPerUnit;

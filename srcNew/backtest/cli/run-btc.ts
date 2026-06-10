@@ -30,7 +30,7 @@ function main(): void {
 
   const dataset = loadBtcDataset();
   const minutes = clampMinutesToCgWindow(dataset, config.cgPublishLagMs);
-  const fundingProvider = buildFundingProvider(dataset.fundingPoints, config.cgPublishLagMs);
+  const fundingProvider = buildFundingProvider(dataset.fundingPoints, config.cgPublishLagMs, 3_600_000);
 
   logger.info('dataset ready', {
     minuteBars: minutes.length,

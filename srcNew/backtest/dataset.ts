@@ -58,7 +58,7 @@ const CG_FUNDING_PERCENT_TO_FRACTION = 1 / 100;
 export function buildFundingProvider(
   fundingPoints: readonly SeriesPoint[],
   publishLagMs: number,
-  intervalMs: number = HOUR_MS,
+  intervalMs: number,
 ): (ts: number) => number | null {
   const sorted = [...fundingPoints].sort((a, b) => a.ts - b.ts);
   const availableAt = sorted.map(p => p.ts + intervalMs + publishLagMs);

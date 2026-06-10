@@ -24,7 +24,7 @@ function summarize(label: string, trades: readonly Trade[]): string {
 function run(label: string, config: BacktestConfig): void {
   const dataset = loadBtcDataset();
   const minutes = clampMinutesToCgWindow(dataset, config.cgPublishLagMs);
-  const fundingProvider = buildFundingProvider(dataset.fundingPoints, config.cgPublishLagMs);
+  const fundingProvider = buildFundingProvider(dataset.fundingPoints, config.cgPublishLagMs, 3_600_000);
   const strategy = fundingFade({ windowBars: 360, pctHi: 0.9, pctLo: 0.1, slAtrMult: 1.5, tpAtrMult: 3.0 });
 
   const cg = buildCgView(dataset, config.cgPublishLagMs);
