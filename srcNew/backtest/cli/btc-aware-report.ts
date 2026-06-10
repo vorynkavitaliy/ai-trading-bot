@@ -11,11 +11,18 @@ import { DEFAULT_CONFIG, Strategy, Trade } from '../types';
 
 const HOUR_MS = 3_600_000;
 
-const ALTS: Array<[string, string]> = [
-  ['ETH', 'ETHUSDT'],
-  ['SOL', 'SOLUSDT'],
-  ['XRP', 'XRPUSDT'],
-];
+const ALTS: Array<[string, string]> =
+  process.argv[2] === 'candidates'
+    ? [
+        ['BNB', 'BNBUSDT'],
+        ['DOGE', 'DOGEUSDT'],
+        ['LTC', 'LTCUSDT'],
+      ]
+    : [
+        ['ETH', 'ETHUSDT'],
+        ['SOL', 'SOLUSDT'],
+        ['XRP', 'XRPUSDT'],
+      ];
 
 function agg(trades: readonly Trade[]): { n: number; sumR: number; expR: number; pf: number } {
   let sumR = 0;

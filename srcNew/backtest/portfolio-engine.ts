@@ -13,6 +13,7 @@ export interface PortfolioLegInput {
   cg: CgView;
   fundingRateProvider?: (ts: number) => number | null;
   auxMinutes?: readonly Candle[];
+  riskPctPerTrade?: number;
 }
 
 export interface PortfolioConfig extends BacktestConfig {
@@ -64,6 +65,7 @@ interface OpenPosition {
 
 interface LegState {
   input: PortfolioLegInput;
+  riskFraction: number;
   decisionBars: Candle[];
   auxBars: Candle[] | null;
   closedView: Candle[];
@@ -187,6 +189,7 @@ function unrealizedR(position: OpenPosition, price: number): number {
 export function runPortfolio(legs: readonly PortfolioLegInput[], config: PortfolioConfig): PortfolioResult {
   const states: LegState[] = legs.map(input => ({
     input,
+    riskFraction: (input.riskPctPerTrade ?? config.riskPctPerTrade) / 100,
     decisionBars: aggregateCandles(input.minutes, input.strategy.decisionIntervalMs),
     auxBars: input.auxMinutes ? aggregateCandles(input.auxMinutes, input.strategy.decisionIntervalMs) : null,
     closedView: [],
@@ -210,7 +213,6 @@ export function runPortfolio(legs: readonly PortfolioLegInput[], config: Portfol
   }
 
   const trades: PortfolioTrade[] = [];
-  const riskFraction = config.riskPctPerTrade / 100;
 
   let realizedEquity = 1;
   let peakEquity = 1;
@@ -229,7 +231,7 @@ export function runPortfolio(legs: readonly PortfolioLegInput[], config: Portfol
   const closeTrade = (state: LegState, exitPrice: number, reason: ExitReason, exitTs: number): void => {
     const trade = buildTrade(state.input.pair, state.position!, exitPrice, reason, exitTs, config);
     trades.push(trade);
-    realizedEquity *= 1 + trade.netR * riskFraction;
+    realizedEquity *= 1 + trade.netR * state.riskFraction;
     const cooldown = reason === 'sl' ? config.cooldownAfterSlMs : config.cooldownAfterTpMs;
     state.cooldownUntilTs = exitTs + cooldown;
     state.position = null;
@@ -343,7 +345,7 @@ export function runPortfolio(legs: readonly PortfolioLegInput[], config: Portfol
     let unrealized = 0;
     for (const state of states) {
       if (state.position !== null && state.lastMinute !== null) {
-        unrealized += unrealizedR(state.position, state.lastMinute.close) * riskFraction;
+        unrealized += unrealizedR(state.position, state.lastMinute.close) * state.riskFraction;
       }
     }
     const mtmEquity = realizedEquity * (1 + unrealized);
