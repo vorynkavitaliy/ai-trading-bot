@@ -16,9 +16,13 @@ const LEVEL_WEIGHT: Record<LogLevel, number> = {
   error: 40,
 };
 
+function isLogLevel(value: string): value is LogLevel {
+  return value in LEVEL_WEIGHT;
+}
+
 function resolveThreshold(): number {
-  const configured = optionalEnv('LOG_LEVEL', 'info') as LogLevel;
-  return LEVEL_WEIGHT[configured] ?? LEVEL_WEIGHT.info;
+  const configured = optionalEnv('LOG_LEVEL', 'info');
+  return isLogLevel(configured) ? LEVEL_WEIGHT[configured] : LEVEL_WEIGHT.info;
 }
 
 export function createLogger(scope?: string): Logger {

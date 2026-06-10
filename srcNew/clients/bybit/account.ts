@@ -1,7 +1,7 @@
-import { RestClientV5 } from 'bybit-api';
+import { GetTickersParamsV5, RestClientV5 } from 'bybit-api';
 
 import { BybitAccountConfig } from '../../config/accounts';
-import { ApiError } from '../../core/errors';
+import { ApiError, errorMessage } from '../../core/errors';
 import { Logger } from '../../core/logger';
 import { ExponentialBackoff, RetryPolicy, withRetry } from '../../core/retry';
 import {
@@ -30,20 +30,17 @@ export interface BybitAccountOptions {
   recvWindowMs?: number;
 }
 
+const RETRYABLE_RET_CODES = new Set<string | number>([10006, 10016]);
+
 function defaultBybitRetryPolicy(): RetryPolicy {
   return new ExponentialBackoff({
     label: 'bybit',
     maxAttempts: 3,
     baseDelayMs: 500,
     isRetryable: error => {
-      const candidate = error as { retCode?: number; code?: string | number };
-      const retCode = candidate?.retCode ?? candidate?.code;
-      return (
-        retCode === 10006 ||
-        retCode === 10016 ||
-        candidate?.code === 'ECONNRESET' ||
-        candidate?.code === 'ETIMEDOUT'
-      );
+      if (error instanceof ApiError) return RETRYABLE_RET_CODES.has(error.code);
+      const code = (error as { code?: string })?.code;
+      return code === 'ECONNRESET' || code === 'ETIMEDOUT';
     },
   });
 }
@@ -78,7 +75,19 @@ export class BybitAccount {
     const result = await this.invoke('getWalletBalance', () =>
       this.rest.getWalletBalance({ accountType })
     );
-    return Number.parseFloat(result?.list?.[0]?.totalEquity ?? '0');
+
+    const totalEquity = result?.list?.[0]?.totalEquity;
+    const equity = Number.parseFloat(totalEquity ?? '');
+    if (!Number.isFinite(equity)) {
+      throw new ApiError(
+        'bybit',
+        'getWalletBalance',
+        'malformed',
+        `${this.id} totalEquity missing or non-numeric: ${JSON.stringify(totalEquity)}`
+      );
+    }
+
+    return equity;
   }
 
   async getWalletBalance(accountType: 'UNIFIED' | 'CONTRACT' = 'UNIFIED') {
@@ -94,7 +103,10 @@ export class BybitAccount {
   }
 
   async getTickers(params: GetTickersParams) {
-    return this.invoke('getTickers', () => this.rest.getTickers(params));
+    // SDK declares per-category overloads; the cast selects one — the wire call is identical.
+    return this.invoke('getTickers', () =>
+      this.rest.getTickers(params as GetTickersParamsV5<'linear' | 'inverse'>)
+    );
   }
 
   async getInstrumentInfo(params: GetInstrumentsInfoParams) {
@@ -130,20 +142,24 @@ export class BybitAccount {
       const equity = await this.getEquity();
       return { ok: true, equity };
     } catch (error) {
-      return { ok: false, error: (error as Error)?.message ?? String(error) };
+      return { ok: false, error: errorMessage(error) };
     }
   }
 
   private async invoke<R>(label: string, call: () => Promise<BybitApiResponse<R>>): Promise<R> {
-    const response = await withRetry(call, this.retryPolicy, {
+    // retCode check lives inside the retried closure: the SDK resolves (not throws)
+    // on non-zero retCode, so retryable codes (10006/10016) must become throws here.
+    const execute = async (): Promise<R> => {
+      const response = await call();
+      if (response.retCode !== 0) {
+        throw new ApiError('bybit', label, response.retCode, response.retMsg);
+      }
+      return response.result;
+    };
+
+    return withRetry(execute, this.retryPolicy, {
       callLabel: `${this.id}:${label}`,
       logger: this.logger,
     });
-
-    if (response.retCode !== 0) {
-      throw new ApiError('bybit', label, response.retCode, response.retMsg);
-    }
-
-    return response.result;
   }
 }

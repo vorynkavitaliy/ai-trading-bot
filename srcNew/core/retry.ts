@@ -1,3 +1,4 @@
+import { RateLimitError } from './errors';
 import { Logger } from './logger';
 
 export interface RetryPolicy {
@@ -53,6 +54,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function resolveDelayMs(policy: RetryPolicy, attempt: number, error: unknown): number {
+  const base = policy.delayMs(attempt);
+  if (error instanceof RateLimitError && error.retryAfterMs !== null) {
+    return Math.max(base, error.retryAfterMs);
+  }
+  return base;
+}
+
 export async function withRetry<T>(
   fn: () => Promise<T>,
   policy: RetryPolicy,
@@ -69,7 +78,7 @@ export async function withRetry<T>(
       const isLastAttempt = attempt === policy.maxAttempts - 1;
       if (!policy.isRetryable(error) || isLastAttempt) break;
 
-      const delay = policy.delayMs(attempt);
+      const delay = resolveDelayMs(policy, attempt, error);
       options.logger?.warn(`${policy.label} retry`, {
         call: options.callLabel ?? 'unknown',
         attempt: attempt + 1,

@@ -8,7 +8,6 @@ export interface PairSeriesParams {
   limit?: number;
   startTime?: number;
   endTime?: number;
-  unit?: string;
 }
 
 export interface CoinSeriesParams {
@@ -17,7 +16,6 @@ export interface CoinSeriesParams {
   limit?: number;
   startTime?: number;
   endTime?: number;
-  unit?: string;
 }
 
 export interface AggregatedSeriesParams {
@@ -37,7 +35,6 @@ export function pairSeriesQuery(params: PairSeriesParams): Record<string, QueryV
     limit: params.limit,
     start_time: params.startTime,
     end_time: params.endTime,
-    unit: params.unit,
   };
 }
 
@@ -48,7 +45,6 @@ export function coinSeriesQuery(params: CoinSeriesParams): Record<string, QueryV
     limit: params.limit,
     start_time: params.startTime,
     end_time: params.endTime,
-    unit: params.unit,
   };
 }
 

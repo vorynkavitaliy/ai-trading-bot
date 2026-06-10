@@ -65,16 +65,17 @@ export class BybitMultiClient {
     return this.broadcast(account => account.getEquity());
   }
 
+  // Each account gets its own copy: the SDK mutates the params object in place.
   async placeOrderAll(params: SubmitOrderParams): Promise<BroadcastResult<unknown>> {
-    return this.broadcast(account => account.placeOrder(params));
+    return this.broadcast(account => account.placeOrder({ ...params }));
   }
 
   async cancelAllOrdersAll(params: CancelAllOrdersParams): Promise<BroadcastResult<unknown>> {
-    return this.broadcast(account => account.cancelAllOrders(params));
+    return this.broadcast(account => account.cancelAllOrders({ ...params }));
   }
 
   async setLeverageAll(params: SetLeverageParams): Promise<BroadcastResult<unknown>> {
-    return this.broadcast(account => account.setLeverage(params));
+    return this.broadcast(account => account.setLeverage({ ...params }));
   }
 
   private async runForAccount<T>(

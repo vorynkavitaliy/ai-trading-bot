@@ -1,7 +1,7 @@
 import { Telegraf } from 'telegraf';
 
 import { TelegramConfig } from '../../config/clients';
-import { ConfigError } from '../../core/errors';
+import { ConfigError, errorMessage } from '../../core/errors';
 import { Logger } from '../../core/logger';
 import { BroadcastOutcome, SendOptions, SendOutcome } from './types';
 
@@ -59,7 +59,7 @@ export class TelegramClient {
       });
       return { chatId, ok: true };
     } catch (error) {
-      const message = (error as Error)?.message ?? String(error);
+      const message = errorMessage(error);
       this.logger?.error('telegram send failed', { chatId, error: message });
       return { chatId, ok: false, error: message };
     }

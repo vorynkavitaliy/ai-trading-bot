@@ -67,12 +67,14 @@ export class HttpClient {
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     let response: Response;
+    let text: string;
     try {
       response = await fetch(url, {
         method: 'GET',
         headers: { Accept: 'application/json', ...headers },
         signal: controller.signal,
       });
+      text = await response.text();
     } catch (error) {
       if ((error as { name?: string })?.name === 'AbortError') {
         throw new TimeoutError(url, this.timeoutMs);
@@ -81,8 +83,6 @@ export class HttpClient {
     } finally {
       clearTimeout(timer);
     }
-
-    const text = await response.text();
 
     if (response.status === 429) {
       throw new RateLimitError(url, text.slice(0, 300), parseRetryAfter(response));

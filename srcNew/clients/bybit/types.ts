@@ -1,4 +1,4 @@
-import { RestClientV5 } from 'bybit-api';
+import { CategoryV5, GetTickersParamsV5, RestClientV5 } from 'bybit-api';
 
 export type SubmitOrderParams = Parameters<RestClientV5['submitOrder']>[0];
 export type AmendOrderParams = Parameters<RestClientV5['amendOrder']>[0];
@@ -8,7 +8,7 @@ export type SetLeverageParams = Parameters<RestClientV5['setLeverage']>[0];
 export type SetTradingStopParams = Parameters<RestClientV5['setTradingStop']>[0];
 export type GetPositionsParams = Parameters<RestClientV5['getPositionInfo']>[0];
 export type GetActiveOrdersParams = Parameters<RestClientV5['getActiveOrders']>[0];
-export type GetTickersParams = Parameters<RestClientV5['getTickers']>[0];
+export type GetTickersParams = GetTickersParamsV5<CategoryV5>;
 export type GetInstrumentsInfoParams = Parameters<RestClientV5['getInstrumentsInfo']>[0];
 
 export interface AccountResult<T> {

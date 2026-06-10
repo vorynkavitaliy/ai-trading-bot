@@ -2,18 +2,31 @@ import { CoinSeriesParams, PairSeriesParams, coinSeriesQuery, pairSeriesQuery } 
 import { CgOhlcBar, CgOpenInterestExchange } from '../responses';
 import { CgTransport } from '../transport';
 
+export type CgOiUnit = 'usd' | 'coin';
+
+export interface OiPairSeriesParams extends PairSeriesParams {
+  unit?: CgOiUnit;
+}
+
+export interface OiCoinSeriesParams extends CoinSeriesParams {
+  unit?: CgOiUnit;
+}
+
 export class OpenInterestEndpoints {
   constructor(private readonly transport: CgTransport) {}
 
-  getHistory(params: PairSeriesParams): Promise<CgOhlcBar[]> {
-    return this.transport.request<CgOhlcBar[]>('/futures/open-interest/history', pairSeriesQuery(params));
+  getHistory(params: OiPairSeriesParams): Promise<CgOhlcBar[]> {
+    return this.transport.request<CgOhlcBar[]>('/futures/open-interest/history', {
+      ...pairSeriesQuery(params),
+      unit: params.unit,
+    });
   }
 
-  getAggregatedHistory(params: CoinSeriesParams): Promise<CgOhlcBar[]> {
-    return this.transport.request<CgOhlcBar[]>(
-      '/futures/open-interest/aggregated-history',
-      coinSeriesQuery(params),
-    );
+  getAggregatedHistory(params: OiCoinSeriesParams): Promise<CgOhlcBar[]> {
+    return this.transport.request<CgOhlcBar[]>('/futures/open-interest/aggregated-history', {
+      ...coinSeriesQuery(params),
+      unit: params.unit,
+    });
   }
 
   getExchangeList(symbol: string): Promise<CgOpenInterestExchange[]> {

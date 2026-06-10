@@ -6,7 +6,7 @@ import {
   CgTopPositionRatioPoint,
 } from '../responses';
 import { CgTransport } from '../transport';
-import { CgRange } from '../types';
+import { CgTakerRange } from '../types';
 
 export class PositioningEndpoints {
   constructor(private readonly transport: CgTransport) {}
@@ -32,7 +32,7 @@ export class PositioningEndpoints {
     );
   }
 
-  getTakerVolumeExchangeList(symbol: string, range: CgRange): Promise<CgTakerVolumeSnapshot> {
+  getTakerVolumeExchangeList(symbol: string, range: CgTakerRange): Promise<CgTakerVolumeSnapshot> {
     return this.transport.request<CgTakerVolumeSnapshot>(
       '/futures/taker-buy-sell-volume/exchange-list',
       { symbol, range },
