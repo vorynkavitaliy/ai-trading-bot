@@ -50,6 +50,30 @@ npx tsx srcNew/examples/tg-smoke.ts
 npx tsc --noEmit -p srcNew/tsconfig.json
 ```
 
+## Paper-контур (форвард-тест стратегии)
+
+Стратегия v5 (`cgSlowFade` + BTC-aware альты) валидирована бэктестами и готовится к лайву через
+paper-форвард. Один тик контура:
+
+```bash
+npx tsx srcNew/live/cycle.ts                 # с Telegram-отчётами
+npx tsx srcNew/live/cycle.ts --no-telegram   # тихий режим
+```
+
+- Решения принимаются на закрытии 4h-бара (+60с гэп), вход виртуальной лимиткой; исполнение
+  эмулируется на закрытых минутках Bybit **тем же кодом** (`backtest/execution-sim.ts`), что и
+  в бэктесте.
+- Состав/риски — зеркало валидированного портфеля: BTC 1% (обе ноги) + ETH btc-trend-S 0.5% +
+  SOL btc-signal 0.5% + XRP btc-signal-S 0.5%; cap-4; CD 12h после стопа / 4h после тейка
+  (`live/config.ts`).
+- Состояние: `srcNew/live/state/paper-state.json` (gitignored). Сброс = удалить файл.
+- Расписание: оператор ставит cron на каждые 5 минут (контур сам определяет 4h-границы,
+  внеплановые тики дешёвые: только мониторинг открытых ордеров).
+
+**Миграция в лайв (следующий этап):** заменить paper-исполнение на `BybitExecutionBroker`
+поверх `BybitMultiClient` (бродкаст на изолированные ключи), серверный SL при входе,
+edit-never-cancel; стратегии и market-data не меняются.
+
 ## Переменные окружения
 
 | Переменная | Назначение | Дефолт |

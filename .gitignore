@@ -18,3 +18,4 @@ vault/
 
 # srcNew backtest data cache (large, re-downloadable)
 srcNew/data/cache/
+srcNew/live/state/

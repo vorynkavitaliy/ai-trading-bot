@@ -1,6 +1,7 @@
 import { Candle } from '../data/types';
 import { aggregateCandles } from './aggregate';
 import { CgView } from './cg-view';
+import { isValidIntent, simulateExit, simulateLimitFill } from './execution-sim';
 import { BacktestConfig, ExitReason, OrderIntent, Strategy, Trade } from './types';
 
 const MINUTE_MS = 60_000;
@@ -79,13 +80,6 @@ interface LegState {
   lastMinute: Candle | null;
 }
 
-function isValidIntent(intent: OrderIntent): boolean {
-  if (intent.side === 'long') {
-    return intent.slPrice < intent.limitPrice && intent.limitPrice < intent.tpPrice;
-  }
-  return intent.tpPrice < intent.limitPrice && intent.limitPrice < intent.slPrice;
-}
-
 function riskPerUnitOf(position: OpenPosition): number {
   return Math.abs(position.intent.limitPrice - position.intent.slPrice);
 }
@@ -95,22 +89,7 @@ function tryFillLimit(
   minute: Candle,
   strictTouch: boolean,
 ): { price: number; isTaker: boolean } | null {
-  const { intent, activeFromTs } = pending;
-  const isActivationBar = minute.ts === activeFromTs;
-
-  if (intent.side === 'long') {
-    if (minute.open <= intent.limitPrice) {
-      return isActivationBar ? { price: minute.open, isTaker: true } : { price: intent.limitPrice, isTaker: false };
-    }
-    const touched = strictTouch ? minute.low < intent.limitPrice : minute.low <= intent.limitPrice;
-    return touched ? { price: intent.limitPrice, isTaker: false } : null;
-  }
-
-  if (minute.open >= intent.limitPrice) {
-    return isActivationBar ? { price: minute.open, isTaker: true } : { price: intent.limitPrice, isTaker: false };
-  }
-  const touched = strictTouch ? minute.high > intent.limitPrice : minute.high >= intent.limitPrice;
-  return touched ? { price: intent.limitPrice, isTaker: false } : null;
+  return simulateLimitFill(pending.intent, minute, minute.ts === pending.activeFromTs, strictTouch);
 }
 
 function checkExit(
@@ -119,28 +98,18 @@ function checkExit(
   config: BacktestConfig,
   isFillBar: boolean,
 ): { price: number; reason: ExitReason } | null {
-  const { side, slPrice, tpPrice } = position.intent;
-  const slip = config.slSlippageBps / 10_000;
-
-  if (side === 'long') {
-    if (minute.low <= slPrice) {
-      const stopBase = isFillBar ? Math.min(slPrice, position.entryPrice) : slPrice;
-      return { price: stopBase * (1 - slip), reason: 'sl' };
-    }
-    const tpTouched = config.strictTouch ? minute.high > tpPrice : minute.high >= tpPrice;
-    if (tpTouched && !isFillBar) return { price: tpPrice, reason: 'tp' };
-    if (tpTouched && isFillBar && minute.close > tpPrice) return { price: tpPrice, reason: 'tp' };
-    return null;
-  }
-
-  if (minute.high >= slPrice) {
-    const stopBase = isFillBar ? Math.max(slPrice, position.entryPrice) : slPrice;
-    return { price: stopBase * (1 + slip), reason: 'sl' };
-  }
-  const tpTouched = config.strictTouch ? minute.low < tpPrice : minute.low <= tpPrice;
-  if (tpTouched && !isFillBar) return { price: tpPrice, reason: 'tp' };
-  if (tpTouched && isFillBar && minute.close < tpPrice) return { price: tpPrice, reason: 'tp' };
-  return null;
+  return simulateExit(
+    {
+      side: position.intent.side,
+      slPrice: position.intent.slPrice,
+      tpPrice: position.intent.tpPrice,
+      entryPrice: position.entryPrice,
+    },
+    minute,
+    config.slSlippageBps,
+    config.strictTouch,
+    isFillBar,
+  );
 }
 
 function buildTrade(
