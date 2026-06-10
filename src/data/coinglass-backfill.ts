@@ -48,12 +48,37 @@ function delay(ms: number) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// History series MUST upsert (ON CONFLICT DO UPDATE), never DO NOTHING.
+// 2026-06-10 discovery (v5 migration audit): DO NOTHING froze every 4H bucket at
+// its FIRST insert — the hourly incremental fetches the still-forming bucket
+// minutes after open, so the stored value was a bar-open snapshot, never the
+// close. Liquidation sums were the worst case: frozen at ~$0 (accumulator just
+// reset), which killed the liq-cascade signal and was drifting toward a
+// permanent false-fire once the percentile window filled with zeros. Same class
+// of bug as the candles ON CONFLICT DO NOTHING look-ahead saga (2026-05-23),
+// opposite direction. The Coinglass API is the source of truth: closed buckets
+// re-fetch as final values, the open bucket keeps refreshing until the first
+// fetch after its close finalizes it.
+//
+// `conflictKeys` = the table's PK columns. Omit ONLY for append-only snapshot
+// tables (cg_liq_coin_snapshot, cg_liq_exchange_snapshot) where ts is capture
+// time and rows are immutable by construction.
 async function bulkInsert(
   table: string,
   cols: string[],
-  rows: any[][]
+  rows: any[][],
+  conflictKeys?: string[]
 ): Promise<number> {
   if (rows.length === 0) return 0;
+  if (conflictKeys && conflictKeys.length > 0) {
+    // ON CONFLICT DO UPDATE throws "cannot affect row a second time" if one INSERT
+    // carries duplicate keys (CG API occasionally repeats a timestamp). Keep the LAST
+    // occurrence — the freshest value for that bucket.
+    const keyIdx = conflictKeys.map((k) => cols.indexOf(k));
+    const byKey = new Map<string, any[]>();
+    for (const row of rows) byKey.set(keyIdx.map((i) => String(row[i])).join('|'), row);
+    rows = Array.from(byKey.values());
+  }
   const CHUNK = 500;
   let inserted = 0;
   for (let i = 0; i < rows.length; i += CHUNK) {
@@ -65,9 +90,16 @@ async function bulkInsert(
       vals.push('(' + cols.map((_, k) => `$${base + k + 1}`).join(', ') + ')');
       params.push(...row);
     });
+    let conflictClause = 'ON CONFLICT DO NOTHING';
+    if (conflictKeys && conflictKeys.length > 0) {
+      const updates = cols
+        .filter((c) => !conflictKeys.includes(c))
+        .map((c) => `${c} = EXCLUDED.${c}`);
+      conflictClause = `ON CONFLICT (${conflictKeys.join(', ')}) DO UPDATE SET ${updates.join(', ')}`;
+    }
     const sql = `INSERT INTO ${table} (${cols.join(', ')})
                  VALUES ${vals.join(', ')}
-                 ON CONFLICT DO NOTHING`;
+                 ${conflictClause}`;
     const r = await query(sql, params);
     inserted += r.rowCount;
   }
@@ -83,7 +115,8 @@ async function backfillOiAggregated() {
       sym, d.time, d.open, d.high, d.low, d.close,
     ]);
     const n = await bulkInsert('cg_oi_aggregated',
-      ['symbol', 'ts', 'oi_open', 'oi_high', 'oi_low', 'oi_close'], rows);
+      ['symbol', 'ts', 'oi_open', 'oi_high', 'oi_low', 'oi_close'], rows,
+      ['symbol', 'ts']);
     log.info('cg oi-aggregated backfilled', { symbol: sym, fetched: rows.length, inserted: n });
     await delay(PACE_MS);
   }
@@ -96,7 +129,8 @@ async function backfillFundingWeighted() {
     });
     await bulkInsert('cg_funding_oi_weighted',
       ['symbol', 'ts', 'fr_open', 'fr_high', 'fr_low', 'fr_close'],
-      (oiR.data ?? []).map((d: any) => [sym, d.time, d.open, d.high, d.low, d.close]));
+      (oiR.data ?? []).map((d: any) => [sym, d.time, d.open, d.high, d.low, d.close]),
+      ['symbol', 'ts']);
     log.info('cg funding-oi-weight backfilled', { symbol: sym, n: (oiR.data ?? []).length });
     await delay(PACE_MS);
 
@@ -105,7 +139,8 @@ async function backfillFundingWeighted() {
     });
     await bulkInsert('cg_funding_vol_weighted',
       ['symbol', 'ts', 'fr_open', 'fr_high', 'fr_low', 'fr_close'],
-      (volR.data ?? []).map((d: any) => [sym, d.time, d.open, d.high, d.low, d.close]));
+      (volR.data ?? []).map((d: any) => [sym, d.time, d.open, d.high, d.low, d.close]),
+      ['symbol', 'ts']);
     log.info('cg funding-vol-weight backfilled', { symbol: sym, n: (volR.data ?? []).length });
     await delay(PACE_MS);
   }
@@ -123,7 +158,8 @@ async function backfillLongShort() {
         REF_EXCHANGE, pair, d.time,
         d.global_account_long_percent, d.global_account_short_percent,
         d.global_account_long_short_ratio,
-      ]));
+      ]),
+      ['exchange', 'pair', 'ts']);
     log.info('cg ls-global-account backfilled', { pair, n: (ga.data ?? []).length });
     await delay(PACE_MS);
 
@@ -137,7 +173,8 @@ async function backfillLongShort() {
         REF_EXCHANGE, pair, d.time,
         d.top_account_long_percent, d.top_account_short_percent,
         d.top_account_long_short_ratio,
-      ]));
+      ]),
+      ['exchange', 'pair', 'ts']);
     log.info('cg ls-top-account backfilled', { pair, n: (ta.data ?? []).length });
     await delay(PACE_MS);
 
@@ -151,7 +188,8 @@ async function backfillLongShort() {
         REF_EXCHANGE, pair, d.time,
         d.top_position_long_percent, d.top_position_short_percent,
         d.top_position_long_short_ratio,
-      ]));
+      ]),
+      ['exchange', 'pair', 'ts']);
     log.info('cg ls-top-position backfilled', { pair, n: (tp.data ?? []).length });
     await delay(PACE_MS);
   }
@@ -167,7 +205,8 @@ async function backfillTaker() {
       (r.data ?? []).map((d: any) => [
         REF_EXCHANGE, pair, d.time,
         d.taker_buy_volume_usd, d.taker_sell_volume_usd,
-      ]));
+      ]),
+      ['exchange', 'pair', 'ts']);
     log.info('cg taker backfilled', { pair, n: (r.data ?? []).length });
     await delay(PACE_MS);
   }
@@ -183,7 +222,8 @@ async function backfillLiqPair() {
       (r.data ?? []).map((d: any) => [
         REF_EXCHANGE, pair, d.time,
         d.long_liquidation_usd, d.short_liquidation_usd,
-      ]));
+      ]),
+      ['exchange', 'pair', 'ts']);
     log.info('cg liq-pair backfilled', { pair, n: (r.data ?? []).length });
     await delay(PACE_MS);
   }
@@ -201,7 +241,8 @@ async function backfillOrderbook() {
       (r.data ?? []).map((d: any) => [
         REF_EXCHANGE, pair, d.time,
         d.bids_usd, d.asks_usd, d.bids_quantity, d.asks_quantity,
-      ]));
+      ]),
+      ['exchange', 'pair', 'ts']);
     log.info('cg orderbook backfilled', { pair, n: (r.data ?? []).length });
     await delay(PACE_MS);
   }
@@ -277,8 +318,9 @@ export async function runCgBackfill(): Promise<void> {
 }
 
 export async function runCgIncremental(): Promise<void> {
-  // For history endpoints, simply re-fetch most recent N=5 bars (covers latest 4h close)
-  // and rely on ON CONFLICT DO NOTHING. For snapshot endpoints, capture fresh.
+  // For history endpoints, re-fetch most recent N=5 bars (covers latest 4h close)
+  // and UPSERT — the open bucket keeps refreshing every hour and finalizes on the
+  // first fetch after its close (see bulkInsert header). Snapshot endpoints capture fresh.
   log.info('=== coinglass incremental start ===');
   const SMALL = 5;
 
@@ -287,21 +329,24 @@ export async function runCgIncremental(): Promise<void> {
       { symbol: sym, interval: TF, limit: SMALL });
     await bulkInsert('cg_oi_aggregated',
       ['symbol', 'ts', 'oi_open', 'oi_high', 'oi_low', 'oi_close'],
-      (r.data ?? []).map((d: any) => [sym, d.time, d.open, d.high, d.low, d.close]));
+      (r.data ?? []).map((d: any) => [sym, d.time, d.open, d.high, d.low, d.close]),
+      ['symbol', 'ts']);
     await delay(PACE_MS);
 
     const f1 = await cgGet<any[]>('/futures/funding-rate/oi-weight-history',
       { symbol: sym, interval: TF, limit: SMALL });
     await bulkInsert('cg_funding_oi_weighted',
       ['symbol', 'ts', 'fr_open', 'fr_high', 'fr_low', 'fr_close'],
-      (f1.data ?? []).map((d: any) => [sym, d.time, d.open, d.high, d.low, d.close]));
+      (f1.data ?? []).map((d: any) => [sym, d.time, d.open, d.high, d.low, d.close]),
+      ['symbol', 'ts']);
     await delay(PACE_MS);
 
     const f2 = await cgGet<any[]>('/futures/funding-rate/vol-weight-history',
       { symbol: sym, interval: TF, limit: SMALL });
     await bulkInsert('cg_funding_vol_weighted',
       ['symbol', 'ts', 'fr_open', 'fr_high', 'fr_low', 'fr_close'],
-      (f2.data ?? []).map((d: any) => [sym, d.time, d.open, d.high, d.low, d.close]));
+      (f2.data ?? []).map((d: any) => [sym, d.time, d.open, d.high, d.low, d.close]),
+      ['symbol', 'ts']);
     await delay(PACE_MS);
   }
 
@@ -313,7 +358,8 @@ export async function runCgIncremental(): Promise<void> {
       (ga.data ?? []).map((d: any) => [
         REF_EXCHANGE, pair, d.time,
         d.global_account_long_percent, d.global_account_short_percent, d.global_account_long_short_ratio,
-      ]));
+      ]),
+      ['exchange', 'pair', 'ts']);
     await delay(PACE_MS);
 
     const ta = await cgGet<any[]>('/futures/top-long-short-account-ratio/history',
@@ -323,7 +369,8 @@ export async function runCgIncremental(): Promise<void> {
       (ta.data ?? []).map((d: any) => [
         REF_EXCHANGE, pair, d.time,
         d.top_account_long_percent, d.top_account_short_percent, d.top_account_long_short_ratio,
-      ]));
+      ]),
+      ['exchange', 'pair', 'ts']);
     await delay(PACE_MS);
 
     const tp = await cgGet<any[]>('/futures/top-long-short-position-ratio/history',
@@ -333,7 +380,8 @@ export async function runCgIncremental(): Promise<void> {
       (tp.data ?? []).map((d: any) => [
         REF_EXCHANGE, pair, d.time,
         d.top_position_long_percent, d.top_position_short_percent, d.top_position_long_short_ratio,
-      ]));
+      ]),
+      ['exchange', 'pair', 'ts']);
     await delay(PACE_MS);
 
     const tk = await cgGet<any[]>('/futures/taker-buy-sell-volume/history',
@@ -342,7 +390,8 @@ export async function runCgIncremental(): Promise<void> {
       ['exchange', 'pair', 'ts', 'buy_usd', 'sell_usd'],
       (tk.data ?? []).map((d: any) => [
         REF_EXCHANGE, pair, d.time, d.taker_buy_volume_usd, d.taker_sell_volume_usd,
-      ]));
+      ]),
+      ['exchange', 'pair', 'ts']);
     await delay(PACE_MS);
 
     const lq = await cgGet<any[]>('/futures/liquidation/history',
@@ -351,7 +400,8 @@ export async function runCgIncremental(): Promise<void> {
       ['exchange', 'pair', 'ts', 'long_liq_usd', 'short_liq_usd'],
       (lq.data ?? []).map((d: any) => [
         REF_EXCHANGE, pair, d.time, d.long_liquidation_usd, d.short_liquidation_usd,
-      ]));
+      ]),
+      ['exchange', 'pair', 'ts']);
     await delay(PACE_MS);
   }
 

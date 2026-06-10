@@ -76,6 +76,16 @@ if [ "$RC" -ne 0 ]; then
   persist_out /tmp/cycle-history-errors.log /tmp/cycle-watcher.out "$RC" "position-watcher"
 fi
 
+# 2.5) max-hold: 48h time-stop for v5 strategy positions (validated backtest 'time'
+#      exits had NO live counterpart until 2026-06-10). Always runs — a position can
+#      cross its hold horizon any minute, and exits must fire even while PAUSE.md exists.
+npx tsx src/runtime/max-hold.ts > /tmp/cycle-maxhold.out 2>&1
+RC=$?
+if [ "$RC" -ne 0 ]; then
+  log "max-hold failed (exit=$RC) — see /tmp/cycle-maxhold.out"
+  persist_out /tmp/cycle-history-errors.log /tmp/cycle-maxhold.out "$RC" "max-hold"
+fi
+
 # 3) heartbeat: self-throttles to 1/hour. Always called.
 npx tsx src/tools/ops/heartbeat.ts > /tmp/cycle-hb.out 2>&1
 RC=$?

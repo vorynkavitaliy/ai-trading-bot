@@ -42,6 +42,7 @@ interface CliArgs {
   skipRiskCheck?: boolean;                  // operator-authorized manual override (bypass cooldowns/heat/kill)
   scaledIn?: ScaledInArgs;                  // S5 multi-entry config
   onlyAccount?: string;                     // operator override: restrict to a single keyName (default: all)
+  strategy?: string;                        // strategy.name for trades.strategy attribution (max-hold enforcer keys off this)
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -69,6 +70,7 @@ function parseArgs(argv: string[]): CliArgs {
       case '--skip-risk-check': args.skipRiskCheck = true; break;
       case '--only-account': args.onlyAccount = next(); break;
       case '--scaled-in': args.scaledIn = JSON.parse(next()); break;
+      case '--strategy': args.strategy = next(); break;
       default: throw new Error(`unknown flag: ${a}`);
     }
   }
@@ -562,15 +564,15 @@ async function persistTrade(args: CliArgs, results: AccountResult[]): Promise<vo
       `INSERT INTO trades (
         account_bucket, account_key, symbol, side, order_type, qty, initial_qty,
         entry_price, sl, tp1, tp2, status, rationale,
-        bybit_order_id, vault_trade_file, signal_price, opened_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, NOW())
+        bybit_order_id, vault_trade_file, signal_price, strategy, opened_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, NOW())
       RETURNING id`,
       [
         r.bucket, r.keyName, args.symbol, args.side === 'buy' ? 'Buy' : 'Sell',
         args.orderType === 'market' ? 'Market' : 'Limit', r.qty, r.qty,
         args.entryPrice ?? null, args.sl, args.tp1 ?? null, args.tp2 ?? null,
         'open', args.rationale.slice(0, 4000),
-        r.bybitOrderId ?? null, tradeFile, args.entryPrice ?? null,
+        r.bybitOrderId ?? null, tradeFile, args.entryPrice ?? null, args.strategy ?? null,
       ]
     );
     if (r.orderLinkId) {

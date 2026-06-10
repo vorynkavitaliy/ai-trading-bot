@@ -28,7 +28,7 @@ export interface ClosedFill {
 
 export interface CloseEvent {
   trade: OpenTrade;
-  exitReason: 'sl' | 'tp1' | 'tp2' | 'manual';
+  exitReason: 'sl' | 'tp1' | 'tp2' | 'manual' | 'time_stop';
   exitPrice: number;
   entryPrice: number;
   pnlUsd: number;
@@ -104,7 +104,11 @@ export async function autoCloseTrade(t: OpenTrade, fills: ClosedFill[]): Promise
   const wAvgEntry = matched.reduce((s, f) => s + f.avgEntryPrice * f.closedSize, 0) / totalClosedSize;
   const lastTs = matched[matched.length - 1].closedTime;
 
-  const exitReason = inferExitReason(t, wAvgExit);
+  // max-hold pre-tags exit_reason='time_stop' on the open row BEFORE closing the
+  // Bybit position, so whichever close-handler wins (WS daemon / reconcile catch-net)
+  // reports the true reason instead of inferring 'manual' from price distance.
+  const exitReason: CloseEvent['exitReason'] =
+    t.exit_reason === 'time_stop' ? 'time_stop' : inferExitReason(t, wAvgExit);
   const pnlR = Position.fromOpenTrade(t).riskUnits(totalPnl);
 
   const res = await query(

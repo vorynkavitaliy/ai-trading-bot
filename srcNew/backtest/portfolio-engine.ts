@@ -22,6 +22,12 @@ export interface PortfolioConfig extends BacktestConfig {
   cooldownAfterSlMs: number;
   cooldownAfterTpMs: number;
   riskPctPerTrade: number;
+  // Policy-experiment hooks (live-policy-experiments.ts). Both undefined in every
+  // validated run — behavior is byte-identical when unset.
+  // Models the live funding-window collision: a signal accepted at decisionTs but
+  // activated entryDelayMs later (latch retry at +1h), or dropped entirely.
+  entryDelayMs?: (decisionTs: number) => number;
+  skipEntryAt?: (decisionTs: number) => boolean;
 }
 
 export interface PortfolioTrade extends Trade {
@@ -258,14 +264,19 @@ export function runPortfolio(legs: readonly PortfolioLegInput[], config: Portfol
             });
 
             if (intent !== null && isValidIntent(intent)) {
-              state.pending = {
-                intent,
-                placedTs: decisionTs,
-                activeFromTs: decisionTs,
-                expiresTs: decisionTs + intent.ttlMinutes * MINUTE_MS,
-              };
-              placedOrders++;
-              slotsLeft--;
+              if (config.skipEntryAt !== undefined && config.skipEntryAt(decisionTs)) {
+                // policy experiment: signal dropped, decision bar still consumed
+              } else {
+                const activationDelay = config.entryDelayMs !== undefined ? config.entryDelayMs(decisionTs) : 0;
+                state.pending = {
+                  intent,
+                  placedTs: decisionTs,
+                  activeFromTs: decisionTs + activationDelay,
+                  expiresTs: decisionTs + activationDelay + intent.ttlMinutes * MINUTE_MS,
+                };
+                placedOrders++;
+                slotsLeft--;
+              }
             }
           }
         }

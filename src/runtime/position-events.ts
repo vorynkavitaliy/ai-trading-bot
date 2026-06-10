@@ -98,6 +98,8 @@ export function isTp1PartialFromPosition(
     tp2: null,
     opened_at: new Date().toISOString(),
     tp1_filled: tp1Already,
+    exit_reason: null,
+    strategy: null,
   });
   p.attachBybitSize(nextSize);
   return p.isTp1Filled();

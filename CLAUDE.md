@@ -18,16 +18,10 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 
 ## Targets and Constraints
 
-- **Goal:** +60–80% / year on starting balance (validated 2026-05-23 walk-forward — backtest +88%/year on $200k, MaxDD 6.73%, PF 1.53). Realistic OOS expectation 50–70% with degradation.
-- **Strategy (v5, ребаланс 2026-05-27):** CG-fade portfolio — per-pair strategy assigned via `src/runtime/pair-strategies.ts`. Decision cadence 4H (240m). Все 10 пар используют scaled-in FIXED (3 ATR-spaced limit-slot с dca_boost decay 0.5, TP locked at signal+2·ATR). Coinglass percentile signals (L/S Top Position, funding rate, L/S Top Account) faded against pair-trend + BTC macro trend. SL = 1.5 × ATR(14), TP = 2.0 × ATR. Max hold 12 × 4H bars (48h).
-- **Universe (Tier-1, 10 pairs, ребаланс 2026-05-27):** SOLUSDT, INJUSDT, ATOMUSDT, ARBUSDT, XRPUSDT, LTCUSDT, HYPEUSDT, ETHUSDT, BNBUSDT, TAOUSDT. BTCUSDT исключён 2026-05-24 (honest engine после fix funding-window bias дал 0R). Истинный источник универсума — `src/runtime/pair-strategies.ts:TIER1_PORTFOLIO`. Маппинг ниже сохранён исторически и подлежит обновлению в следующей правке:
-  - **S1** `lsTopPositionFade` + pair trend → ETHUSDT, TAOUSDT
-  - **S2** `lsTopPositionFade` + BTC trend → INJUSDT, LTCUSDT
-  - **S3** `fundingFade` (default pctHi 0.75 / pctLo 0.25) + both trends → ATOMUSDT, ARBUSDT, BNBUSDT
-  - **S4** `fundingTaConfluence` (pctHi 0.70 / pctLo 0.30, funding+L/S Top Account confluence) → SOLUSDT, XRPUSDT, HYPEUSDT
-  - WR/PF per pair — смотри `memory/portfolio_v5_final.md` или прогон `npx tsx src/backtest/cli/portfolio-live.ts 365`.
-- **Tier-2 (paused):** DOGEUSDT — passed walk-forward, per-quarter consistency 3/4. ETH/SOL/BNB переведены в Tier-1 на ребалансе 2026-05-27.
-- **Excluded (failed walk-forward 2026-05-23):** APTUSDT, TONUSDT — OOS sumR negative. Keep out of universe.
+- **Goal:** +60–80% / year on starting balance. Живая конфигурация v5 валидирована 2026-06-10: ожидаемый конверт ≈ +40%/год, PF 1.41, MTM maxDD −9.3%, обе WF-половины положительные (`srcNew/backtest/cli/live-policy-experiments.ts`, вариант `market-lag120-defer`). Headline-вариант с лимитными входами +64.1%/год (permutation p=0.000) — кандидат Phase 2 (нужен TTL-canceller лимиток).
+- **Strategy (v5 cgSlowFade, миграция 2026-06-10):** портфель `cgSlowFadeV5` (`src/strategies/cg-slow-fade.ts`), per-pair конфиг в `src/runtime/pair-strategies.ts` — **истина = код, не этот файл**. Одно решение на закрытый 4H-бар (латч `decided_anchors`; funding-window блок → один ретрай +1h). Сигналы: перцентили Coinglass за 180×4H — L/S Top Position ≥0.95 → SHORT / ≤0.05 → LONG (fade), funding ≥0.95 → SHORT (fade), liq-каскад ≥0.97 → momentum SHORT. CG читается с лагом 1 бакет (`cgReadLagBars=1`). Вход market по закрытию анкера; SL = 2.0 × ATR(14), TP = 3.5 × ATR (один тейк, tp1=tp2). Max hold 12 × 4H (48h) — живое исполнение `src/runtime/max-hold.ts` (5-мин cron).
+- **Universe (Tier-1, 4 pairs, 2026-06-10):** BTCUSDT (свои сигналы, риск 1.0%), ETHUSDT (btc-trend гейт, только SHORT, 0.5%), SOLUSDT (btc-signal — fade от позиционирования BTC, 0.5%), XRPUSDT (btc-signal, только SHORT, 0.5%). Истинный источник — `src/runtime/pair-strategies.ts:TIER1_PORTFOLIO`.
+- **Archived (enabled:false, быстрый откат):** ADAUSDT, LINKUSDT (standalone-портфель 2026-06-03). Их валидация шла на до-ремонтных CG-данных (frozen-at-open, см. fix 2026-06-10) — перед ре-активацией обязателен повторный прогон на починенных данных.
 - **Accounts (2026-05-28):** 4 HyroTrader prop subkeys — 1 × 50k (Ivan) + 3 × 200k (Vitalii, Vera, Andrey). Total equity ~$668k, all `demoTrading: true`. Trades are broadcast to **every** sub-key inside `accounts.json` via `Promise.all`.
 - **History:** v3 (VP-SMC) retired 2026-05-23 — backtest engine fixes (intra-bar resolution, D/W bar look-ahead, slip semantics, limit-entry) revealed VP-SMC edge was largely a data-bug artifact. CG-fade portfolio replaced it. See git log around 2026-05-23 for details.
 
@@ -40,21 +34,21 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 | Min leverage | ≥ 10× | Margin requirement |
 | Server-side SL | within 5 min of position open | Compliance |
 
-## Risk budget v4 (our internal limits, tighter than HyroTrader)
+## Risk budget v5 (our internal limits, tighter than HyroTrader)
 
 | Parameter | Value |
 |---|---|
-| Risk per trade | **0.5% of equity** (`LIVE_RISK_PCT` в `src/runtime/pair-strategies.ts:31`). Full-DCA (3 slot dca_boost decay 0.5) = 0.875% эффективного риска на пару при полном заполнении. |
-| Max parallel positions | 6 (operator-set, validated cap-6 sweep 2026-05-25 — `risk-guard.ts:20`, `engine.ts:38`). Универсум 10 пар → ~40% сигналов потенциально блокируются капом, ожидается. |
-| Total heat cap | 3.75% of equity (legacy, room for Tier-2 expansion) |
-| Soft kill (daily) | −2.5% → flat until next UTC day |
-| Hard kill (daily) | −4% → halt + manual review |
+| Risk per trade | **BTC 1.0% / альты 0.5%** от стартового баланса аккаунта (`LIVE_RISK_PCT_BTC` / `LIVE_RISK_PCT` в `src/runtime/pair-strategies.ts`). Single entry, без DCA. |
+| Max parallel positions | 4 (`risk-guard.ts:20`) = один слот на пару при 4-парном универсуме. |
+| Total heat cap | 3.75% of equity (full-deploy v5 = 1.0+3×0.5 = 2.5%) |
+| Daily-DD защита | entry-block kill switches ОТКЛЮЧЕНЫ (`dailyKillSwitchesEnabled=false`, 2026-06-03); активная защита — DD-flatten daemon −4.3% от дневного пика (position-monitor). |
 | Total kill | −8% → halt + manual review |
 | Max SL/pair/day | 2 → pair disabled until next UTC day |
 | Cooldown after SL | 12h on the same pair (survives UTC day boundary) |
-| Cooldown after any close | 4h on the same pair (prevents immediate re-entry on TP1/TP2/manual) |
-| Strategy cooldown | 6h same-direction (in cg-fade.ts; prevents bouncing on same percentile extreme) |
-| Funding window | ±10 min around 00/08/16 UTC → skip new entries |
+| Cooldown after any close | 4h on the same pair (prevents immediate re-entry on TP/manual) |
+| Decision latch | одно решение на (пара, закрытый 4H-бар) — `decided_anchors`; в strategy-кулдаунах v5 не нуждается |
+| Max hold | 48h (12 × 4H) → market-close, `exit_reason='time_stop'` (`src/runtime/max-hold.ts`) |
+| Funding window | ±10 мин вокруг 00/08/16 UTC → вход блокируется, латч даёт один ретрай +1h. Эмпирика 2026-06-10: defer стоит ~12pp/год против входа сразу после settlement (+52.5%/maxDD −6.9% у `take` vs +40.3%/−9.3% у `defer`) — смягчение окна = решение оператора. |
 
 ## Inviolable execution rules
 
@@ -81,14 +75,16 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
   → /tmp/position-monitor-heartbeat.json every 30s (consumed by heartbeat.ts)
 
 [cron */5min]  scripts/cycle.sh:
+  → db-migrate       (idempotent — applies pending migrations/NNN_*.sql)
   → reconcile.ts     (5-min catch-net audit: auto-close db_without_bybit, Telegram exits)
   → position-watcher.ts (legacy cron path — kept during TASK-006 overlap; daemon owns these events sub-second)
+  → max-hold.ts      (48h time-stop для v5-позиций; работает и под PAUSE.md — пауза останавливает входы, не выходы)
   → heartbeat.ts     (self-throttles to 1/hour; surfaces daemon-staleness via /tmp/position-monitor-heartbeat.json)
   → if top-of-hour (HH:00-04):
-       → scan-decide.ts   (refresh + enrichment + risk-check, writes /tmp/scan-decide-latest.json)
+       → cg-incremental (Coinglass refresh ДО scan-decide — upsert, открытый бакет финализируется первым фетчем после закрытия)
+       → scan-decide.ts   (refresh + латч decided_anchors + enrichment + risk-check, writes /tmp/scan-decide-latest.json)
        → if enterCount > 0:
             → auto-execute.ts (spawns execute.ts per actionable signal)
-       → cg-incremental (Coinglass refresh)
 ```
 
 Why no `/loop /trade-watch` execution: 365d walk-decide proved trade-level filtering on enrichment data is approximately neutral (≈+1.7% lift, mostly variance — algo edge already strong). Cron-direct execute closes a 5–30 min latency gap that previously caused 70%+ of intraday setups to slip past their entry windows.
@@ -111,31 +107,28 @@ If the daemon misbehaves: `npm run monitor:stop` halts it. Cron `position-watche
 **Claude's role (manual invocation only, no live execution path):**
 - News halt — `/pause` via Telegram bot creates `vault/Watchlist/PAUSE.md` (auto-execute halts while it exists; `/resume` removes it).
 - Strategy iteration — backtest re-runs, parameter tuning, universe changes.
+- **Ad-hoc scan probe: ВСЕГДА `SCAN_LATCH_RECORD=0 npx tsx src/runtime/scan-decide.ts`** — без этого env ручной прогон потребляет якорь латча `decided_anchors`, и сигнал этого 4H-окна будет молча пропущен кроном (auto-execute запускается только из cycle.sh).
+- **После изменения кода, который импортирует демон** (`src/runtime/{position-monitor,account-monitor,position-events,trade-closer}.ts`, `src/data/trade-repo.ts`, `src/core/*`): `npm run monitor:stop && npm run monitor:start` — long-running процесс держит старый код в памяти до рестарта.
 - Reconcile escalation — manual investigation when auto-close fails repeatedly.
 - Cron pipeline debugging — staleness on `/tmp/scan-decide-latest.json`, `/tmp/auto-execute-latest.json`, `/tmp/cycle.log` (heartbeat surfaces this).
 - DOWNSIZE-grade signals (rrTp2 0.20–0.30) — auto-execute leaves them unsized; operator can review and execute manually if desired.
 
-## Strategy mechanics (v4 — CG-fade, 2026-05-23)
+## Strategy mechanics (v5 — cgSlowFade, 2026-06-10)
 
-Strategies live in `src/strategies/cg-fade.ts` (4 factories: `lsTopPositionFade`, `fundingFade`, `fundingTaConfluence`, plus base class). Per-pair assignment in `src/runtime/pair-strategies.ts`.
+Стратегия: `src/strategies/cg-slow-fade.ts` (`cgSlowFadeV5` factory, класс `CgSlowFade`). Per-pair assignment в `src/runtime/pair-strategies.ts`. Legacy v4 `cg-fade.ts` остаётся для архивных пар (ADA/LINK, enabled:false).
 
-**Common setup logic:**
-1. Compute percentile of CG signal over last 180 × 4H bars (30 days rolling).
-2. If percentile ≥ pctHi → **SHORT** (fade extreme crowd long). If ≤ pctLo → **LONG**.
-3. Apply trend filter: pair 4H EMA20 vs EMA50 (and/or BTC same).
-4. SL = `entry ± slAtrMult × ATR(14)`. TP = `entry ± tpAtrMult × ATR`. Decision is at 4H bar close.
-5. 6h in-strategy cooldown (same direction). Risk-guard `cooldownAfterSlHours=12` + `cooldownAfterAnyCloseHours=4` still active.
-
-**Signal sources & pct thresholds per strategy:**
-- S1/S2 use `cg.ls_top_position_history` (whale positioning)
-- S3 uses `cg.funding_oi_weighted_history` (funding extreme)
-- S4 requires BOTH funding + L/S Top Account confluent in same direction (high conviction)
+**Setup logic (один проход на закрытый 4H-бар):**
+1. CG-чтение с лагом 1 бакет от анкера (`cgReadLagBars=1`): перцентиль текущего значения против 180×4H окна, исключая само значение.
+2. Fade: L/S Top Position ≥0.95 → SHORT, ≤0.05 → LONG; funding (OI-weighted) ≥0.95 → SHORT. `btcMode`: `none` (BTC — свои сигналы), `trend` (свои сигналы + гейт по BTC EMA20/50, ETH), `signal` (fade от перцентилей BTC, SOL/XRP). `shortsOnly` режет LONG-ногу (ETH/XRP).
+3. Если fade не сработал — liq-каскад: long-ликвидации пары ≥0.97 перцентиля → momentum SHORT (по направлению каскада, НЕ реверсия).
+4. SL = `entry ± 2.0 × ATR(14)`, TP = `entry ± 3.5 × ATR` (один тейк, tp1=tp2). Цена входа = close анкера, ордер market.
+5. Кулдауны только в risk-guard (12h после SL / 4h после любого закрытия). In-strategy кулдауна нет — его заменяет латч `decided_anchors`.
 
 ## Cadence discipline
 
 - **Sub-second** = position-monitor daemon (WS push). TP1, naked-SL, full-close, dust, DCA. NO decision-making.
-- **5m fire** = reconcile + (during TASK-006 overlap) position-watcher catch-net. NOT decision-making.
-- **1H close** = scan-decide runs (HH:00-04 cron). Strategy.decide() polls CG/bars; for 4H-based CG strategies, returns 'hold' unless 4H boundary has just closed → effectively triggers at 00/04/08/12/16/20 UTC.
+- **5m fire** = reconcile + position-watcher catch-net + max-hold time-stop. NOT decision-making.
+- **1H close** = scan-decide runs (HH:00-04 cron). Латч `decided_anchors` даёт ровно одно решение на закрытый 4H-бар → фактические решения на границах 00/04/08/12/16/20 UTC; funding-window блок → один ретрай +1h (01/09/17).
 - **Do not cancel pending limit orders younger than 15 minutes** except for catastrophic events (kill switch, FOMC surprise, exchange outage).
 
 ## Forbidden shell patterns (enforced by hooks)
@@ -190,4 +183,21 @@ When any fires: send Telegram alert, trigger `/pause` (writes `vault/Watchlist/P
 - `src/data/coinglass-features.ts` — extended with `*_history` arrays for percentile
 
 **Known outstanding issues (to fix):**
-- `cg-fade.ts` returns `tp1 = tp2` (single target) but `execute.ts` places 2 separate limit orders. Need true partial split (TP1 = 1× ATR partial, TP2 = 2.5× ATR runner) + re-backtest.
+- ~~`cg-fade.ts` returns `tp1 = tp2` (single target) but `execute.ts` places 2 separate limit orders~~ — RESOLVED: `tp-planner.ts` SingleLimit mode ставит ОДИН reduce-only LIMIT на полный размер при tp1≈tp2 (проверено аудитом 2026-06-10).
+
+## What changed 2026-06-10 (v5 cgSlowFade migration)
+
+**Strategy:** srcNew-research (изолированный честный минутный движок) → live `src/`. Портфель BTC+ETH+SOL+XRP, BTC 1.0% / альты 0.5%, single market entry, SL 2.0 / TP 3.5 ATR, hold 48h. Валидация srcNew: permutation p=0.000, bootstrap P(loss)=0.19%, параметрический куб 27/27, двунаправленный WF OOS +18%/половина.
+
+**Миграционный аудит нашёл и закрыл 4 блокера:**
+1. **CG-инжест был заморожен на bar-open снимках** — `coinglass-backfill.ts` использовал `ON CONFLICT DO NOTHING`: каждый 4H-бакет фиксировался первым (частичным) фетчем. Liq-серии стояли на ~0 с мая (мёртвый сигнал + бомба ложных SHORT при заполнении окна нулями). Fix: upsert по PK + полный ре-бэкфилл 360d. Та же болезнь, что убила VP-SMC в 2026-05-23, в зеркальном виде.
+2. **Не было латча «одно решение на 4H-бар»** — cron сканирует ежечасно с идентичным анкером; заблокированный сигнал ре-файрился на stale-якоре. Fix: `decided_anchors` (DB) + флаг `Strategy.decideOncePerAnchor`; funding-window блок — единственное исключение (один ретрай +1h; полный дроп этих сигналов режет эдж вдвое: +54.7% → +23.0%).
+3. **48h time-stop не существовал в живом рантайме** — бэктест закрывал по времени, лайв держал до SL/TP. Fix: `max-hold.ts` в 5-мин cron, пре-тег `exit_reason='time_stop'` + market-close, скоуп только strategy-trades (ручные позиции оператора не трогаются).
+4. **Формирующийся 4H-бар попадал в ATR/EMA** (`b.ts < nowTs` вместо `b.ts+4h <= nowTs`) — стопы систематически на ~5-7% уже валидированных. Fix: только закрытые бары.
+
+**Policy-решения (эмпирика, `srcNew/backtest/cli/live-policy-experiments.ts`):**
+- `cgReadLagBars=1` — CG читается с лагом 1 бакет (валидированный информационный сет; свежий бакет ревизится CG задним числом и удваивает maxDD: −12.25% vs −6.92%).
+- Funding-window: defer +1h (charter-safe). Альтернатива `take` (вход в 00:01-04, сразу после settlement) даёт +12pp/год и лучший DD — ждёт решения оператора.
+- Ожидаемый живой конверт (market, lag-1, defer): **+40.3%/год, PF 1.41, maxDD −9.27%, worst day −2.93%**, обе половины положительные.
+
+**Атрибуция сделок:** `trades.strategy` (миграция 014) — пишется из execute.ts; max-hold и отчётность ключуются по ней.

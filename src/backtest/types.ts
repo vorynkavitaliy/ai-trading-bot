@@ -191,6 +191,9 @@ export interface StrategyContext {
   // BTC 4H bars for cross-pair macro filters (CG fade strategies use this on altcoins).
   // Always loaded for non-BTC symbols when strategy.needsBtcContext = true.
   btcBars4hRecent?: Bar[];
+  // BTC Coinglass features for cross-pair sentiment signals (v5 cgSlowFade btc-signal
+  // mode trades alts off BTC positioning extremes). For BTCUSDT this equals coinglass.
+  btcCoinglass?: any;
   // Last closed trade on THIS symbol (any reason: tp/sl/strategy_exit). Set by
   // engine after each close. Strategies use this to implement cooldown-after-TP
   // (prevent re-entry into a freshly-resolved cycle).
@@ -211,5 +214,18 @@ export interface Strategy {
   // True if strategy needs BTC 4H bars for cross-pair macro filter (CG-fade altcoin strategies).
   // Engine loads BTCUSDT 4H bars and populates ctx.btcBars4hRecent. For BTC backtests this is a no-op.
   needsBtcContext?: boolean;
+  // True if live scan-decide must call decide() at most ONCE per closed 4H anchor bar
+  // (v5 cgSlowFade contract — the validated srcNew engine consumes a decision bar even
+  // when the signal is blocked, so hourly cron retries on the same anchor are forbidden).
+  // Enforced by scan-decide via src/core/decided-anchors.ts; legacy strategies without
+  // this flag keep their validated hourly re-evaluation semantics.
+  decideOncePerAnchor?: boolean;
+  // How many 4H buckets to LAG the live Coinglass read behind the anchor bar (default 0).
+  // v5 cgSlowFade sets 1: the validating srcNew engine ran with cgPublishLagMs(120s) >
+  // gapMs(60s), so its "current" CG point at decision D was the bucket closed at D−4h,
+  // already revision-settled. Reading the just-closed bucket instead (lag 0) doubled
+  // MTM maxDD (−12.25% vs −6.92%) at equal return in the 2026-06-10 policy experiments
+  // (srcNew/backtest/cli/live-policy-experiments.ts) — fresher crowd data is NOT better.
+  cgReadLagBars?: number;
   decide(ctx: StrategyContext): Action;
 }

@@ -8,7 +8,7 @@ import { Position } from '../core/position';
 import { tier1Pairs } from './pair-strategies';
 
 /**
- * Risk constants — must match CLAUDE.md § Risk budget v4.
+ * Risk constants — must match CLAUDE.md § Risk budget v5.
  *
  * Object.freeze prevents accidental mutation. Was a plain `const RISK = {...}`
  * whose fields were technically writable; anything in the process could have

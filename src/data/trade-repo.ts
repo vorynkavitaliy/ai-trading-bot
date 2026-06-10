@@ -28,6 +28,12 @@ export interface OpenTrade {
   opened_at: string;
   /** True if tp1_filled_at IS NOT NULL — partial TP1 fill already processed. */
   tp1_filled: boolean;
+  /** Pre-tagged exit reason while still open (max-hold sets 'time_stop' BEFORE the
+   *  Bybit close so the daemon's autoCloseTrade preserves it instead of inferring
+   *  'manual'). Null for normal trades. */
+  exit_reason: string | null;
+  /** strategy.name that opened the trade (trades.strategy); null for manual/legacy. */
+  strategy: string | null;
 }
 
 export interface ClosedTrade {
@@ -74,7 +80,8 @@ export class TradeRepo implements ITradeRepository {
               COALESCE(initial_qty, qty)::text AS initial_qty,
               entry_price::text, sl::text, tp1::text, tp2::text,
               opened_at::text,
-              tp1_filled_at IS NOT NULL AS tp1_filled
+              tp1_filled_at IS NOT NULL AS tp1_filled,
+              exit_reason, strategy
        FROM trades WHERE status = 'open'`
     );
     return r.rows.map(toOpenTrade);
@@ -87,7 +94,8 @@ export class TradeRepo implements ITradeRepository {
               COALESCE(initial_qty, qty)::text AS initial_qty,
               entry_price::text, sl::text, tp1::text, tp2::text,
               opened_at::text,
-              tp1_filled_at IS NOT NULL AS tp1_filled
+              tp1_filled_at IS NOT NULL AS tp1_filled,
+              exit_reason, strategy
        FROM trades WHERE status = 'open' AND account_key = $1`,
       [accountKey]
     );
@@ -101,7 +109,8 @@ export class TradeRepo implements ITradeRepository {
               COALESCE(initial_qty, qty)::text AS initial_qty,
               entry_price::text, sl::text, tp1::text, tp2::text,
               opened_at::text,
-              tp1_filled_at IS NOT NULL AS tp1_filled
+              tp1_filled_at IS NOT NULL AS tp1_filled,
+              exit_reason, strategy
        FROM trades WHERE status = 'open' AND symbol = $1`,
       [symbol]
     );
@@ -220,6 +229,8 @@ function toOpenTrade(row: any): OpenTrade {
     tp2: row.tp2 ? parseFloat(row.tp2) : null,
     opened_at: row.opened_at,
     tp1_filled: row.tp1_filled === true,
+    exit_reason: row.exit_reason ?? null,
+    strategy: row.strategy ?? null,
   };
 }
 

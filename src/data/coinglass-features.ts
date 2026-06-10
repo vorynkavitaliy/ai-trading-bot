@@ -22,6 +22,9 @@ export interface CoinglassFeatures {
   ls_top_position_history: number[];
   ls_top_account_history: number[];
   funding_oi_weighted_history: number[];
+  // Per-4H-bar liquidation history (v5 cgSlowFade liq-cascade momentum signal).
+  liq_long_history: number[];
+  liq_short_history: number[];
 }
 
 export const EMPTY_CG_FEATURES: CoinglassFeatures = {
@@ -33,6 +36,8 @@ export const EMPTY_CG_FEATURES: CoinglassFeatures = {
   ls_top_position_history: [],
   ls_top_account_history: [],
   funding_oi_weighted_history: [],
+  liq_long_history: [],
+  liq_short_history: [],
 };
 
 const MS_24H = 24 * 3600_000;
@@ -111,6 +116,12 @@ export async function loadCoinglassAt(coin: string, pair: string, atTs: number):
      ORDER BY ts DESC LIMIT $3`,
     [coin, atTs, HIST_LIMIT]
   );
+  const liqHist = await query<{ long_liq_usd: string; short_liq_usd: string }>(
+    `SELECT long_liq_usd::text, short_liq_usd::text FROM cg_liq_pair
+     WHERE pair = $1 AND exchange = 'Binance' AND ts <= $2
+     ORDER BY ts DESC LIMIT $3`,
+    [pair, atTs, HIST_LIMIT]
+  );
 
   return {
     oi_close: oiClose,
@@ -130,5 +141,7 @@ export async function loadCoinglassAt(coin: string, pair: string, atTs: number):
     ls_top_position_history: lsTopPosHist.rows.map(r => parseFloat(r.ratio)).reverse(),
     ls_top_account_history: lsTopAccHist.rows.map(r => parseFloat(r.ratio)).reverse(),
     funding_oi_weighted_history: fundingHist.rows.map(r => parseFloat(r.fr_close)).reverse(),
+    liq_long_history: liqHist.rows.map(r => parseFloat(r.long_liq_usd)).reverse(),
+    liq_short_history: liqHist.rows.map(r => parseFloat(r.short_liq_usd)).reverse(),
   };
 }

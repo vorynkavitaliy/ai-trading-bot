@@ -1,6 +1,6 @@
-// Live decision scanner — what the /loop calls every cycle.
+// Live decision scanner — runs from cycle.sh at every top-of-hour tick.
 //
-// For each of the 10 pairs:
+// For each pair in TIER1_PORTFOLIO (enabled):
 //   1. Loads OHLCV at 1H/4H/1D/1W from DB (warmup-padded)
 //   2. Computes features at all TFs
 //   3. Loads Coinglass features (if available — null otherwise, strategy permissive)
@@ -29,6 +29,7 @@ import { loadAccounts } from '../core/accounts';
 import { refreshForScan } from '../data/backfill';
 import { log } from '../core/logger';
 import { loadAll as loadCooldowns, CooldownState } from '../core/strategy-cooldowns';
+import { loadDecidedAnchors, recordDecidedAnchor } from '../core/decided-anchors';
 
 // 2026-05-23: pivot from VP-SMC to Tier-1 CG-fade portfolio.
 // Universe = 7 pairs validated via walk-forward (cg-fade.ts strategies).
@@ -47,6 +48,9 @@ async function loadBars(symbol: string, tf: string, lookbackBars: number): Promi
 interface ContextResult {
   ctx: StrategyContext | null;
   reason?: string;          // why ctx is null (data freshness, missing live price, etc.)
+  // ts of the anchor 4H bar the decision is pinned to (LEVER 1). Used by the
+  // once-per-anchor latch for strategies with decideOncePerAnchor.
+  anchorTs?: number;
   // Extra TFs for enrichment (not used by strategy.decide; for trader's discretionary analysis)
   features5m?: any;
   features15m?: any;
@@ -68,6 +72,7 @@ export async function buildContext(
   livePrice: number | null,
   btcBars4h?: Bar[],
   cooldownState?: CooldownState,
+  cgReadLagBars: number = 0,
 ): Promise<ContextResult> {
   if (livePrice == null) {
     return { ctx: null, reason: 'live-price-unavailable' };
@@ -114,6 +119,11 @@ export async function buildContext(
   const FOUR_H_MS = 4 * 60 * 60_000;
   const closed4h = bars4h.filter((b) => b.ts + FOUR_H_MS <= nowTs);
   const anchorBar = closed4h.length > 0 ? closed4h[closed4h.length - 1] : decisionBar;
+  // The decisionBar fallback carries a 1H-grid ts — recording it would poison the
+  // once-per-anchor latch (a 1H ts is always newer than the real 4H anchor, so the
+  // monotonic guard in decided_anchors would then block legitimate consumption).
+  // Latch only on a REAL closed 4H bar; otherwise fail open to hourly re-evaluation.
+  const anchorIs4h = closed4h.length > 0;
 
   // Build feature snapshots
   const slice1h = closed1h.slice(-300).map<CandleRow>((b) => ({
@@ -152,12 +162,19 @@ export async function buildContext(
   // Coinglass — load if available; null fields are permissive in the strategy, BUT
   // we now track when the load throws OR when the core gate field (funding_oi_weighted)
   // is null, so the operator knows the funding-extreme filter is silently off.
+  //
+  // cgReadLagBars (v5 = 1): read the series as of anchor − N×4H so the "current" CG
+  // point is the bucket closed one step BEFORE the anchor closed — the exact
+  // information set the srcNew validation used (publishLag 120s > gap 60s), and
+  // revision-settled (CG retro-revises fresh liquidation buckets). Policy experiment
+  // 2026-06-10: reading the just-closed bucket doubled MTM maxDD at equal return.
+  const cgAtTs = anchorBar.ts - cgReadLagBars * FOUR_H_MS;
   let coinglass: CoinglassFeatures | undefined;
   let cgMissing = false;
   let cgReason: string | undefined;
   try {
     const coin = symbol.replace(/USDT$/, '');
-    coinglass = await loadCoinglassAt(coin, symbol, anchorBar.ts);
+    coinglass = await loadCoinglassAt(coin, symbol, cgAtTs);
     if (coinglass.funding_oi_weighted == null) {
       cgMissing = true;
       cgReason = 'no funding_oi_weighted row at anchorBar.ts (last closed 4H)';
@@ -166,6 +183,26 @@ export async function buildContext(
     coinglass = undefined;
     cgMissing = true;
     cgReason = `load threw: ${e?.message ?? String(e)}`;
+  }
+
+  // v5 cgSlowFade: BTC sentiment context for alt pairs (btc-signal / btc-trend modes).
+  // A failed load degrades btc-signal pairs to hold (fadeSignal needs both BTC
+  // percentiles) — fail-safe, but surface it via cgMissing so the operator sees
+  // the pair is running blind instead of it silently never trading.
+  let btcCoinglass: CoinglassFeatures | undefined;
+  if (symbol === 'BTCUSDT') {
+    btcCoinglass = coinglass;
+  } else {
+    try {
+      btcCoinglass = await loadCoinglassAt('BTC', 'BTCUSDT', cgAtTs);
+    } catch (e: any) {
+      btcCoinglass = undefined;
+      cgMissing = true;
+      cgReason = cgReason ?? `btcCoinglass load threw: ${e?.message ?? String(e)}`;
+      log.error('btcCoinglass load failed — btc-signal/btc-trend pairs degrade this cycle', {
+        symbol, err: e?.message ?? String(e),
+      });
+    }
   }
 
   // CTX price = last closed 1H bar's close (matches backtest engine semantics:
@@ -180,7 +217,11 @@ export async function buildContext(
 
   // recentBars at decisionTf — for CG-fade strategies decisionTf=4H, so use 4H bars.
   // For 1H strategies (legacy VP-SMC) keep 1H. We slice 200 bars for EMA50 support.
-  const recentBars4h = bars4h.filter((b) => b.ts < nowTs).slice(-200);
+  // CLOSED bars only (b.ts + 4h <= now): the previous `b.ts < nowTs` filter let the
+  // FORMING 4H bar into ATR(14) — a minutes-old near-zero-TR bar shrank ATR ~5-7%
+  // → SL/TP systematically tighter than both backtest engines (which never see a
+  // forming bar). Found in the 2026-06-10 v5 migration audit.
+  const recentBars4h = closed4h.slice(-200);
 
   const ctx: StrategyContext = {
     symbol,
@@ -198,10 +239,11 @@ export async function buildContext(
     bars1hRecent: closed1h.slice(-200),
     bars1dRecent: closedD.slice(-60),
     bars1wRecent: closedW.slice(-12),
-    btcBars4hRecent: btcBars4h ? btcBars4h.filter((b) => b.ts < nowTs).slice(-200) : undefined,
+    btcBars4hRecent: btcBars4h ? btcBars4h.filter((b) => b.ts + FOUR_H_MS <= nowTs).slice(-200) : undefined,
+    btcCoinglass,
     cooldownState,
   };
-  return { ctx, features5m, features15m, features4h, cgMissing, cgReason };
+  return { ctx, anchorTs: anchorIs4h ? anchorBar.ts : undefined, features5m, features15m, features4h, cgMissing, cgReason };
 }
 
 // Confluence summary across 5m/15m/60m/240m/1D — for discretionary check
@@ -272,6 +314,9 @@ interface PairDecision {
   symbol: string;
   price: number;
   action: 'hold' | 'enter';
+  // strategy.name — flows through auto-execute → execute → trades.strategy so the
+  // max-hold enforcer (and reporting) can attribute trades to their strategy.
+  strategy?: string;
   side?: 'long' | 'short';
   entryPrice?: number;
   sl?: number;
@@ -505,6 +550,13 @@ export async function scanDecide(): Promise<ScanDecideResult> {
   // gate a no-op in production. See src/core/strategy-cooldowns.ts.
   const cooldownState = await loadCooldowns();
 
+  // STEP 2.6: once-per-4H-anchor latch for decideOncePerAnchor strategies (v5).
+  // The validated srcNew engine decides exactly once per (pair, closed 4H bar) and
+  // consumes the bar even when the signal is blocked. Hourly cron scans inside the
+  // same 4H window see an IDENTICAL anchor + CG read, so without this latch a
+  // blocked signal re-fires at +1/+2/+3h and enters on a stale anchor.
+  const decidedAnchors = await loadDecidedAnchors();
+
   // STEP 3a: BTC global context — fetched first so all alts can reference it.
   let btcContext: BtcContext | null = null;
   const btcLive = livePrices.get('BTCUSDT');
@@ -541,16 +593,46 @@ export async function scanDecide(): Promise<ScanDecideResult> {
       continue;
     }
     const live = livePrices.get(symbol) ?? null;
-    const r = await buildContext(symbol, nowTs, live, btcBars4h, cooldownState);
+    const r = await buildContext(symbol, nowTs, live, btcBars4h, cooldownState, strategy.cgReadLagBars ?? 0);
     if (r.cgMissing) cgMissingSymbols.push(symbol);
     if (!r.ctx) {
+      // No anchor consumed: stale/missing data retries next hour once refresh recovers.
       decisions.push({ symbol, price: live ?? 0, action: 'hold', reason: r.reason });
       continue;
     }
+
+    const latched = strategy.decideOncePerAnchor === true && r.anchorTs != null;
+    if (latched && decidedAnchors.get(symbol) === r.anchorTs) {
+      decisions.push({
+        symbol, price: r.ctx.price, action: 'hold', strategy: strategy.name,
+        reason: 'anchor-already-decided (once-per-4H latch)',
+      });
+      continue;
+    }
+    // Consume the anchor for every terminal outcome below (hold / enter-approved /
+    // enter-blocked), with two retry-next-hour exceptions that mirror operational
+    // reality rather than signal logic: (a) CG data missing at the boundary — the
+    // signal never evaluated, and the +1h evaluation reads the SAME anchor-ts CG row,
+    // so it computes exactly what hour 0 would have; (b) funding-window block — the
+    // cron tick at 00/08/16 lands inside the ±10min window, so consuming the anchor
+    // there would silently drop ~half of all validated entries (3 of 6 daily
+    // boundaries). One bounded +1h retry instead; see commit message for the trade-off.
+    // SCAN_LATCH_RECORD=0 → read-only probe: decide and report but do NOT consume the
+    // anchor. For ad-hoc operator/Claude runs of scan-decide outside cycle.sh — a manual
+    // run that surfaced an approved enter would otherwise swallow the signal (auto-execute
+    // only runs from cron). Default (unset) = record, which is what cycle.sh needs.
+    const latchReadOnly = process.env.SCAN_LATCH_RECORD === '0';
+    const consumeAnchor = async (blockedByFundingWindow: boolean) => {
+      if (!latched || latchReadOnly) return;
+      if (r.cgMissing || blockedByFundingWindow) return;
+      await recordDecidedAnchor(symbol, r.anchorTs!);
+    };
+
     const action: Action = strategy.decide(r.ctx);
 
     if (action.kind !== 'enter') {
-      decisions.push({ symbol, price: r.ctx.price, action: 'hold' });
+      await consumeAnchor(false);
+      decisions.push({ symbol, price: r.ctx.price, action: 'hold', strategy: strategy.name });
       continue;
     }
 
@@ -597,10 +679,19 @@ export async function scanDecide(): Promise<ScanDecideResult> {
       }
     }
 
+    // Funding-window block is the ONLY non-consuming block (bounded +1h retry);
+    // every other outcome (approved, cooldown, cap, heat, rrTp2, same-side) consumes
+    // the anchor exactly like the validated engine consumes a decision bar. An
+    // approved entry consumes even if downstream execution is paused (PAUSE.md) or
+    // fails — a late entry on a stale anchor is exactly what the latch forbids.
+    const fundingBlocked = !finalRiskCheck.allowed && risk.inFundingWindow;
+    await consumeAnchor(fundingBlocked);
+
     decisions.push({
       symbol,
       price: r.ctx.price,
       action: 'enter',
+      strategy: strategy.name,
       side: action.side,
       entryPrice: action.entryPrice,
       sl: action.sl,

@@ -28,13 +28,19 @@
  */
 import { Strategy } from '../backtest/types';
 import { lsTopPositionFade, fundingFade, fundingTaConfluence } from '../strategies/cg-fade';
+import { cgSlowFadeV5 } from '../strategies/cg-slow-fade';
 
-// Per-trade risk. SINGLE-ENTRY now, so this IS the per-trade risk (not per-slot).
-// Mixed: BTC carries more (cleanest two-sided edge, lowest DD); SOL/ADA less (correlated
-// to BTC, dialed back so a joint bad day stays under Hyro −5%). Validated mix.
-export const LIVE_RISK_PCT = 0.875;       // SOL / ADA per-trade risk
-export const LIVE_RISK_PCT_BTC = 1.25;    // BTC per-trade risk (more weight)
-export const LIVE_RISK_PCT_LINK = 0.6;    // LINK per-trade risk (thin edge n~30/yr, heat-fit: 1.25+0.875+0.875+0.6=3.6<3.75 cap)
+// ── v5 cgSlowFade portfolio (2026-06-10 migration from srcNew research) ────────
+// Per-trade risk: BTC carries 1.0% (the most validated leg: permutation p=0.000,
+// full stress battery); alts 0.5%. Heat 1.0+0.5×3 = 2.5% < 3.75% cap.
+// Headline (limit entries): +64.1%/yr, MTM maxDD -8.17%, worst day -2.36%.
+// Measured LIVE config (market entry, CG lag-1, funding +1h defer): +40.3%/yr,
+// PF 1.41, maxDD -9.27%, worst day -2.93% — live-policy-experiments.ts 2026-06-10.
+export const LIVE_RISK_PCT = 0.5;          // alt per-trade risk (ETH/SOL/XRP)
+export const LIVE_RISK_PCT_BTC = 1.0;      // BTC per-trade risk
+
+// Archived risk constants (standalone portfolio 2026-06-03, retired 2026-06-10).
+export const LIVE_RISK_PCT_LINK = 0.6;
 
 // Scaled-in FIXED config — ARCHIVED. Only the disabled v5 pairs below reference it.
 // The active 3-pair portfolio is single-entry (drop-DCA was a universal win).
@@ -54,32 +60,30 @@ export interface PairStrategyCfg {
 }
 
 export const TIER1_PORTFOLIO: PairStrategyCfg[] = [
-  // ═══ ACTIVE — standalone two-sided portfolio (2026-06-03), SINGLE ENTRY, mixed risk ═══
-  // BTC — ls_top_position fade (BTC's stable signal; funding flips on it) + BTC trend +
-  // wide stop (2.0×ATR survives the ~48h reversion). WF both halves +, PF 1.47/1.90.
+  // ═══ ACTIVE — v5 cgSlowFade portfolio (2026-06-10), SINGLE ENTRY MARKET, mixed risk ═══
+  // Validated end-to-end on the srcNew honest engine (see src/strategies/cg-slow-fade.ts
+  // header): permutation p=0.000, WF both directions OOS +18%/half, 11/13 months green.
+  // BTC — own signals (L/S top position + funding fade + liq-cascade momentum short).
   { pair: 'BTCUSDT', enabled: true,
-    strategy: lsTopPositionFade({ pctHi: 0.85, pctLo: 0.15,
-      usePairTrend: false, useBtcTrend: true,
-      slAtrMult: 2.0, tpAtrMult: 2.0, maxHoldBars: 12,
-      riskPct: LIVE_RISK_PCT_BTC }) },
-  // SOL — funding fade, wider thresholds .70/.30 + wide stop. Strongest standalone,
-  // two-sided (long +$26.5k / short +$30.8k over the year). WF both halves +, PF 1.58/1.78.
+    strategy: cgSlowFadeV5({ btcMode: 'none', riskPct: LIVE_RISK_PCT_BTC }) },
+  // ETH — own signals gated by BTC trend, shorts only (long leg dead on alts).
+  { pair: 'ETHUSDT', enabled: true,
+    strategy: cgSlowFadeV5({ btcMode: 'trend', shortsOnly: true, riskPct: LIVE_RISK_PCT }) },
+  // SOL — trades off BTC's positioning extremes (btc-signal): BTC's crowd predicts
+  // SOL better than SOL's own (srcNew btc-aware research, OOS PF 1.40).
   { pair: 'SOLUSDT', enabled: true,
-    strategy: fundingFade({ pctHi: 0.70, pctLo: 0.30,
-      slAtrMult: 2.0, tpAtrMult: 2.0, maxHoldBars: 12,
-      riskPct: LIVE_RISK_PCT }) },
-  // ADA — funding fade .75/.25, tight stop. Two-sided but short-tilted (long works,
-  // smaller). WATCH-PAIR: weakest OOS (flat in reverse WF). Ready to drop if it lags live.
-  { pair: 'ADAUSDT', enabled: true,
+    strategy: cgSlowFadeV5({ btcMode: 'signal', riskPct: LIVE_RISK_PCT }) },
+  // XRP — btc-signal, shorts only (own signals are noise: PF 1.06 -> 1.49 with BTC's).
+  { pair: 'XRPUSDT', enabled: true,
+    strategy: cgSlowFadeV5({ btcMode: 'signal', shortsOnly: true, riskPct: LIVE_RISK_PCT }) },
+
+  // ═══ ARCHIVED 2026-06-10 — standalone two-sided portfolio (2026-06-03). Retired for
+  //     the v5 cgSlowFade portfolio above. enabled:false (kept for fast rollback). ═══
+  { pair: 'ADAUSDT', enabled: false,
     strategy: fundingFade({ pctHi: 0.75, pctLo: 0.25,
       slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12,
-      riskPct: LIVE_RISK_PCT }) },
-  // LINK — funding + L/S Top Account confluence (S4), .70/.30, tight stop. Added 2026-06-04
-  // (see memory/project_link_addition_flatten_2026_06_04): only ROBUST of 14 candidates in
-  // the two-sided WF screen (long+short both dirs +, same S4 config picked on both halves);
-  // 4-pair combined A/B +39pp/yr with MaxDD↓, and it fixes the 3-pair flatten-concentration
-  // pathology. Risk 0.6% (thin edge, heat-fit). 4-pair WF OOS +107%/+38%/yr both dirs.
-  { pair: 'LINKUSDT', enabled: true,
+      riskPct: 0.875 }) },
+  { pair: 'LINKUSDT', enabled: false,
     strategy: fundingTaConfluence({ pctHi: 0.70, pctLo: 0.30,
       slAtrMult: 1.5, tpAtrMult: 2.0, maxHoldBars: 12,
       riskPct: LIVE_RISK_PCT_LINK }) },
