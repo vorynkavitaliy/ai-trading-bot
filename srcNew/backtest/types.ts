@@ -17,6 +17,7 @@ export interface StrategyContext {
   bars: readonly Candle[];
   lastPrice: number;
   cg: CgView;
+  auxBars?: readonly Candle[];
 }
 
 export interface Strategy {

@@ -36,6 +36,7 @@ export interface EngineInput {
   cg: CgView;
   config: BacktestConfig;
   fundingRateProvider?: (ts: number) => number | null;
+  auxMinutes?: readonly Candle[];
 }
 
 export function runBacktest(input: EngineInput): BacktestResult {
@@ -43,6 +44,7 @@ export function runBacktest(input: EngineInput): BacktestResult {
   const bucketMs = strategy.decisionIntervalMs;
 
   const decisionBars = aggregateCandles(minuteCandles, bucketMs);
+  const auxBarsAll = input.auxMinutes ? aggregateCandles(input.auxMinutes, bucketMs) : null;
   const trades: Trade[] = [];
 
   let pending: PendingOrder | null = null;
@@ -54,6 +56,8 @@ export function runBacktest(input: EngineInput): BacktestResult {
   let nextDecisionIdx = strategy.warmupBars;
 
   const closedBarsView: Candle[] = decisionBars.slice(0, 0);
+  const auxClosedView: Candle[] = [];
+  let auxIdx = 0;
 
   for (let minuteIdx = 0; minuteIdx < minuteCandles.length; minuteIdx++) {
     const minute = minuteCandles[minuteIdx];
@@ -74,12 +78,20 @@ export function runBacktest(input: EngineInput): BacktestResult {
         }
         cg.setCursor(decisionTs);
 
+        if (auxBarsAll !== null) {
+          while (auxIdx < auxBarsAll.length && auxBarsAll[auxIdx].ts + bucketMs <= decisionTs) {
+            auxClosedView.push(auxBarsAll[auxIdx]);
+            auxIdx++;
+          }
+        }
+
         const lastClosedMinute = lastMinuteCloseAt(minuteCandles, minuteIdx, decisionTs);
         const intent = strategy.decide({
           decisionTs,
           bars: closedBarsView,
           lastPrice: lastClosedMinute,
           cg,
+          auxBars: auxBarsAll !== null ? auxClosedView : undefined,
         });
         decisions++;
 
