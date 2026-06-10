@@ -1,6 +1,6 @@
-import { coinglassConfigFromEnv } from '../config/clients';
 import { CoinglassClient } from '../clients/coinglass';
 import { createLogger } from '../core/logger';
+import { coinglassConfigFromEnv } from '../config/clients';
 
 async function main(): Promise<void> {
   const logger = createLogger('cg-smoke');
@@ -13,7 +13,7 @@ async function main(): Promise<void> {
   logger.info('supported exchanges fetched', { count: exchanges.length });
 }
 
-main().catch((error) => {
+main().catch(error => {
   console.error(error);
   process.exit(1);
 });

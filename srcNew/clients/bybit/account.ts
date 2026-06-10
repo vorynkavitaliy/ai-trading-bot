@@ -35,7 +35,7 @@ function defaultBybitRetryPolicy(): RetryPolicy {
     label: 'bybit',
     maxAttempts: 3,
     baseDelayMs: 500,
-    isRetryable: (error) => {
+    isRetryable: error => {
       const candidate = error as { retCode?: number; code?: string | number };
       const retCode = candidate?.retCode ?? candidate?.code;
       return (
@@ -76,7 +76,7 @@ export class BybitAccount {
 
   async getEquity(accountType: 'UNIFIED' | 'CONTRACT' = 'UNIFIED'): Promise<number> {
     const result = await this.invoke('getWalletBalance', () =>
-      this.rest.getWalletBalance({ accountType }),
+      this.rest.getWalletBalance({ accountType })
     );
     return Number.parseFloat(result?.list?.[0]?.totalEquity ?? '0');
   }

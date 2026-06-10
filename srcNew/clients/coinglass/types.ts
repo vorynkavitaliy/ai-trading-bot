@@ -11,7 +11,6 @@ export type CgInterval =
   | '15m'
   | '30m'
   | '1h'
-  | '2h'
   | '4h'
   | '6h'
   | '8h'
@@ -19,10 +18,4 @@ export type CgInterval =
   | '1d'
   | '1w';
 
-export interface CgOhlc {
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-}
+export type CgRange = '1h' | '4h' | '12h' | '24h';

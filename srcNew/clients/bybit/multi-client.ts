@@ -24,8 +24,8 @@ export class BybitMultiClient {
       throw new ConfigError('BybitMultiClient requires at least one account config');
     }
 
-    this.accounts = configs.map((config) => new BybitAccount(config, options));
-    this.byId = new Map(this.accounts.map((account) => [account.id, account]));
+    this.accounts = configs.map(config => new BybitAccount(config, options));
+    this.byId = new Map(this.accounts.map(account => [account.id, account]));
   }
 
   static fromFile(filePath?: string, options?: BybitMultiClientOptions): BybitMultiClient {
@@ -33,7 +33,7 @@ export class BybitMultiClient {
   }
 
   get accountIds(): string[] {
-    return this.accounts.map((account) => account.id);
+    return this.accounts.map(account => account.id);
   }
 
   get size(): number {
@@ -46,38 +46,40 @@ export class BybitMultiClient {
     return account;
   }
 
-  async broadcast<T>(operation: (account: BybitAccount) => Promise<T>): Promise<BroadcastResult<T>> {
+  async broadcast<T>(
+    operation: (account: BybitAccount) => Promise<T>
+  ): Promise<BroadcastResult<T>> {
     const results = await Promise.all(
-      this.accounts.map((account) => this.runForAccount(account, operation)),
+      this.accounts.map(account => this.runForAccount(account, operation))
     );
 
-    const okCount = results.filter((result) => result.ok).length;
+    const okCount = results.filter(result => result.ok).length;
     return { results, okCount, failCount: results.length - okCount };
   }
 
   async pingAll(): Promise<BroadcastResult<PingResult>> {
-    return this.broadcast((account) => account.ping());
+    return this.broadcast(account => account.ping());
   }
 
   async equities(): Promise<BroadcastResult<number>> {
-    return this.broadcast((account) => account.getEquity());
+    return this.broadcast(account => account.getEquity());
   }
 
   async placeOrderAll(params: SubmitOrderParams): Promise<BroadcastResult<unknown>> {
-    return this.broadcast((account) => account.placeOrder(params));
+    return this.broadcast(account => account.placeOrder(params));
   }
 
   async cancelAllOrdersAll(params: CancelAllOrdersParams): Promise<BroadcastResult<unknown>> {
-    return this.broadcast((account) => account.cancelAllOrders(params));
+    return this.broadcast(account => account.cancelAllOrders(params));
   }
 
   async setLeverageAll(params: SetLeverageParams): Promise<BroadcastResult<unknown>> {
-    return this.broadcast((account) => account.setLeverage(params));
+    return this.broadcast(account => account.setLeverage(params));
   }
 
   private async runForAccount<T>(
     account: BybitAccount,
-    operation: (account: BybitAccount) => Promise<T>,
+    operation: (account: BybitAccount) => Promise<T>
   ): Promise<AccountResult<T>> {
     try {
       const value = await operation(account);

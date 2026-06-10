@@ -1,6 +1,6 @@
-import { telegramConfigFromEnv } from '../config/clients';
 import { TelegramClient } from '../clients/telegram';
 import { createLogger } from '../core/logger';
+import { telegramConfigFromEnv } from '../config/clients';
 
 async function main(): Promise<void> {
   const logger = createLogger('tg-smoke');
@@ -10,7 +10,7 @@ async function main(): Promise<void> {
   logger.info('broadcast result', { ok: outcome.okCount, fail: outcome.failCount });
 }
 
-main().catch((error) => {
+main().catch(error => {
   console.error(error);
   process.exit(1);
 });

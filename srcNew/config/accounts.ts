@@ -31,7 +31,7 @@ export function loadAccounts(filePath: string = DEFAULT_ACCOUNTS_PATH): BybitAcc
     throw new ConfigError(
       `srcNew accounts file not found at ${filePath}. ` +
         `Copy srcNew/config/accounts.example.json to srcNew/config/accounts.json and fill in keys. ` +
-        `This loader never reads the live root accounts.json.`,
+        `This loader never reads the live root accounts.json.`
     );
   }
 
@@ -68,7 +68,8 @@ export function loadAccounts(filePath: string = DEFAULT_ACCOUNTS_PATH): BybitAcc
 
 export function summarizeAccounts(accounts: readonly BybitAccountConfig[]): string {
   const lines = accounts.map(
-    (account) => `  ${account.id} → ${account.label} (testnet=${account.testnet}, demo=${account.demoTrading})`,
+    account =>
+      `  ${account.id} → ${account.label} (testnet=${account.testnet}, demo=${account.demoTrading})`
   );
   return `srcNew accounts: ${accounts.length} key(s)\n${lines.join('\n')}`;
 }

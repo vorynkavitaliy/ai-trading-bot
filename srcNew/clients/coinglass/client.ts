@@ -17,7 +17,7 @@ function coinglassRetryPolicy(): RetryPolicy {
     label: 'coinglass',
     maxAttempts: 4,
     baseDelayMs: 1_500,
-    isRetryable: (error) => {
+    isRetryable: error => {
       if (error instanceof RateLimitError) return true;
       if (error instanceof TimeoutError) return true;
       const code = (error as { code?: string })?.code;

@@ -35,10 +35,10 @@ export class TelegramClient {
 
     const body = options.raw ? text : escapeHtml(text);
     const outcomes = await Promise.all(
-      this.chatIds.map((chatId) => this.deliver(chatId, body, options)),
+      this.chatIds.map(chatId => this.deliver(chatId, body, options))
     );
 
-    const okCount = outcomes.filter((outcome) => outcome.ok).length;
+    const okCount = outcomes.filter(outcome => outcome.ok).length;
     return { outcomes, okCount, failCount: outcomes.length - okCount };
   }
 

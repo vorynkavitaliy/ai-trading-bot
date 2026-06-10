@@ -1,6 +1,6 @@
-import { loadAccounts, summarizeAccounts } from '../config/accounts';
 import { BybitMultiClient } from '../clients/bybit';
 import { createLogger } from '../core/logger';
+import { loadAccounts, summarizeAccounts } from '../config/accounts';
 
 async function main(): Promise<void> {
   const logger = createLogger('bybit-smoke');
@@ -23,7 +23,7 @@ async function main(): Promise<void> {
   logger.info('ping summary', { ok: pings.okCount, fail: pings.failCount });
 }
 
-main().catch((error) => {
+main().catch(error => {
   console.error(error);
   process.exit(1);
 });
