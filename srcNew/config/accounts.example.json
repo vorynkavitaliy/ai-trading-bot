@@ -1,0 +1,20 @@
+{
+  "200000": {
+    "key1": {
+      "apiKey": "your_isolated_demo_api_key_here",
+      "apiSecret": "your_isolated_demo_api_secret_here",
+      "testnet": true,
+      "demoTrading": true,
+      "label": "srcNew sandbox 200k"
+    }
+  },
+  "50000": {
+    "key1": {
+      "apiKey": "your_isolated_demo_api_key_here",
+      "apiSecret": "your_isolated_demo_api_secret_here",
+      "testnet": true,
+      "demoTrading": true,
+      "label": "srcNew sandbox 50k"
+    }
+  }
+}
