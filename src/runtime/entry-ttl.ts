@@ -39,6 +39,12 @@ import { log } from '../core/logger';
 
 const PAUSE_FILE = path.resolve(__dirname, '..', '..', 'vault', 'Watchlist', 'PAUSE.md');
 
+// Bybit quirk: getActiveOrders queried BY orderLinkId returns recently
+// closed/cancelled orders for ~10 minutes after they died. Without this filter
+// the sweep re-"cancels" an already-dead order every tick until the visibility
+// window passes (log noise + wasted cancel calls).
+const OPEN_ORDER_STATUSES = new Set(['New', 'PartiallyFilled', 'Untriggered']);
+
 export type CancelOutcome = 'cancelled' | 'filled_awaiting_promotion' | 'partial_remainder_cancelled' | 'error';
 
 export async function cancelRestingEntry(
@@ -53,7 +59,9 @@ export async function cancelRestingEntry(
       () => c.getActiveOrders({ category: 'linear', symbol: row.symbol, orderLinkId: row.orderLinkId }),
       { label: `ttl-active-${row.symbol}-${account.keyName}` },
     );
-    const active = (ao.result?.list ?? []).find((o: any) => o.orderLinkId === row.orderLinkId);
+    const active = (ao.result?.list ?? []).find(
+      (o: any) => o.orderLinkId === row.orderLinkId && OPEN_ORDER_STATUSES.has(o.orderStatus),
+    );
 
     if (active) {
       const r: any = await withRetry(
@@ -127,7 +135,9 @@ async function cancelLinkedRemainder(account: AccountKey, row: RestingEntryPendi
       () => c.getActiveOrders({ category: 'linear', symbol: row.symbol, orderLinkId: row.orderLinkId }),
       { label: `ttl-rem-active-${row.symbol}-${account.keyName}` },
     );
-    const active = (ao.result?.list ?? []).find((o: any) => o.orderLinkId === row.orderLinkId);
+    const active = (ao.result?.list ?? []).find(
+      (o: any) => o.orderLinkId === row.orderLinkId && OPEN_ORDER_STATUSES.has(o.orderStatus),
+    );
     if (!active) return false;
     const r: any = await withRetry(
       () => c.cancelOrder({ category: 'linear', symbol: row.symbol, orderLinkId: row.orderLinkId }),
