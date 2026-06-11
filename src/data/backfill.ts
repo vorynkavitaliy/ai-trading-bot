@@ -30,8 +30,14 @@ export async function refreshForScan(): Promise<void> {
         [symbol, tf]
       );
       const last = r.rows[0]?.last ? parseInt(r.rows[0].last, 10) : null;
-      const tfMsLocal = TF_MS[tf];
-      const from = last ? last + tfMsLocal : now - 30 * 24 * 60 * 60_000;
+      // Re-fetch FROM the last stored bar (inclusive), not after it. `last + tf`
+      // skipped the forming bar after its first insert — MAX(ts) became the forming
+      // bar itself, `from` jumped past now, and the row froze at its first-seen
+      // partial state forever (2026-06-02..06-10 regression: 240m bars captured
+      // ~29% of true range, ATR(14) read ~half of reality). Refetching the last bar
+      // keeps the forming row updating every cycle AND delivers the final values of
+      // a just-closed bar on the next cycle (insertCandles grace window applies).
+      const from = last ?? now - 30 * 24 * 60 * 60_000;
       if (from >= now) continue;
       await backfillCandles(symbol, tf, from, now);
     }
@@ -46,10 +52,17 @@ export async function refreshForScan(): Promise<void> {
   }
 }
 
+// Update window: a bar is writable while OPEN and for one extra tf-duration after
+// close (grace). The grace is what lets the cycle AFTER a bar closes deliver its
+// FINAL exchange values — without it the row keeps whatever the last in-period
+// refresh saw (missing the tail of the period). Bars older than close+grace are
+// immutable (belt-and-suspenders vs API glitches rewriting deep history), except
+// in force mode (one-off repairs of frozen eras — see repairCandles).
 async function insertCandles(
   symbol: string,
   tf: string,
-  rows: BybitKline[]
+  rows: BybitKline[],
+  force = false
 ): Promise<number> {
   if (rows.length === 0) return 0;
   const CHUNK = 1000; // 1000 rows × 9 params = 9000 params, well under Postgres' 65535 limit
@@ -65,16 +78,8 @@ async function insertCandles(
       );
       params.push(symbol, tf, r.startTime, r.open, r.high, r.low, r.close, r.volume, r.turnover);
     });
-    const sql = `INSERT INTO candles (symbol, tf, ts, open, high, low, close, volume, turnover)
-                 VALUES ${values.join(', ')}
-                 ON CONFLICT (symbol, tf, ts) DO UPDATE SET
-                   open     = EXCLUDED.open,
-                   high     = EXCLUDED.high,
-                   low      = EXCLUDED.low,
-                   close    = EXCLUDED.close,
-                   volume   = EXCLUDED.volume,
-                   turnover = EXCLUDED.turnover
-                 WHERE candles.ts + (CASE candles.tf
+    const guard = force ? '' : `
+                 WHERE candles.ts + 2 * (CASE candles.tf
                                        WHEN '1m'   THEN 60000
                                        WHEN '5m'   THEN 300000
                                        WHEN '15m'  THEN 900000
@@ -84,6 +89,15 @@ async function insertCandles(
                                        WHEN '1W'   THEN 604800000
                                        ELSE 0
                                      END) > EXTRACT(EPOCH FROM NOW()) * 1000`;
+    const sql = `INSERT INTO candles (symbol, tf, ts, open, high, low, close, volume, turnover)
+                 VALUES ${values.join(', ')}
+                 ON CONFLICT (symbol, tf, ts) DO UPDATE SET
+                   open     = EXCLUDED.open,
+                   high     = EXCLUDED.high,
+                   low      = EXCLUDED.low,
+                   close    = EXCLUDED.close,
+                   volume   = EXCLUDED.volume,
+                   turnover = EXCLUDED.turnover${guard}`;
     const r = await query(sql, params);
     total += r.rowCount;
   }
@@ -106,7 +120,7 @@ async function insertFunding(symbol: string, rows: { ts: number; rate: number }[
   return r.rowCount;
 }
 
-export async function backfillCandles(symbol: string, tf: string, fromMs: number, toMs: number) {
+export async function backfillCandles(symbol: string, tf: string, fromMs: number, toMs: number, force = false) {
   const stepMs = TF_MS[tf] * 1000; // 1000 candles per request
   let cursor = fromMs;
   let totalInserted = 0;
@@ -128,7 +142,7 @@ export async function backfillCandles(symbol: string, tf: string, fromMs: number
       cursor = windowEnd + 1;
       continue;
     }
-    const inserted = await insertCandles(symbol, tf, candles);
+    const inserted = await insertCandles(symbol, tf, candles, force);
     totalInserted += inserted;
     batches++;
     // advance cursor past the last fetched candle
@@ -219,7 +233,8 @@ export async function runIncremental(): Promise<void> {
         [symbol, tf]
       );
       const last = r.rows[0]?.last ? parseInt(r.rows[0].last, 10) : null;
-      const from = last ? last + TF_MS[tf] : now - 365 * 24 * 60 * 60_000;
+      // Inclusive of the last stored bar — same forming-bar-freeze fix as refreshForScan.
+      const from = last ?? now - 365 * 24 * 60 * 60_000;
       if (from >= now) {
         log.debug('incremental: up-to-date', { symbol, tf });
         continue;
