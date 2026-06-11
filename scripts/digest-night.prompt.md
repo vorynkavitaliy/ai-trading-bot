@@ -45,9 +45,21 @@ NIGHT forecast (ночь + завтра до вечера):
 {"ts":"<ISO>","horizonH":24,"claim":"<one verifiable claim>","keyLevel":"<level>","verdict":null}
 Running score across file → «Счёт: N✓/M✗».
 
+═══ ФОРМАТИРОВАНИЕ (телефон-первый, выразительно но со вкусом) ═══
+Telegram HTML: <b> <i> <u> <s> <code> <pre> <blockquote> <a href>. Используй ВСЮ палитру:
+▸ <b>жирный</b> — заголовки секций + 1 ключевое число/слово на блок (вердикт, главная цифра).
+▸ <i>курсив</i> — статус-строка под заголовком, нюансы, «голос» аналитика.
+▸ <code>моноширинный</code> — ВСЕ цены/уровни/тикеры/перцентили/проценты (<code>62 700</code>,
+  <code>47-й</code>, <code>+1.75R</code>): цифры выравниваются, читается как приборная панель.
+▸ <b><i>жирный курсив</i></b> — ОДИН раз на сообщение, для самого важного вывода дня.
+▸ <pre>…</pre> — выровненный дашборд; <blockquote>…</blockquote> — мнение и прогноз; источники в
+  <a href="URL">короткий текст</a>, не голые URL.
+▸ Разделители: <code>──────────</code> между крупными блоками; • и ▸ списки; → ↑ ↓ ✓ ⚠️ свободно.
+ДИСЦИПЛИНА: выразительно ≠ пёстро. ≤30% строки жирным; <code> для ЧИСЕЛ да, для слов нет; один
+<b><i> на сообщение. 20-секундная сканируемость, премиальная аналитика, не радуга. Escape < > &
+inside content. Narrative not bullet-dumps.
+
 ═══ COMPOSE & SEND ═══
-Phone-first: short lines, narrative not bullet-dumps, <b> headers + 1 key number per
-section, <pre> for dashboards, <blockquote> for прогноз. Escape < > & in content.
 
 🌙 <b>ИТОГ ДНЯ</b> · &lt;дата&gt; · 23:03 Киев
 <i>&lt;🟢/🟡/🔴&gt; · &lt;BTC за день %&gt; · &lt;дневной P&amp;L бота&gt;</i>

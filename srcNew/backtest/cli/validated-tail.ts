@@ -65,6 +65,27 @@ function main(): void {
       `  ${d(t.placedTs)}  ${t.pair.padEnd(8)} ${t.side.padEnd(5)} entry ${t.entryPrice.toFixed(t.entryPrice > 100 ? 0 : 4)} -> exit ${t.exitPrice.toFixed(t.exitPrice > 100 ? 0 : 4)}  ${t.exitReason.padEnd(4)} netR ${t.netR >= 0 ? '+' : ''}${t.netR.toFixed(2)}  hold ${(t.holdMinutes / 60).toFixed(0)}h`,
     );
   }
+
+  // Concentration: is the edge broad or a couple of lucky episodes?
+  const byMonth = new Map<string, { r: number; n: number }>();
+  for (const t of result.trades) {
+    const m = new Date(t.exitTs).toISOString().slice(0, 7);
+    const e = byMonth.get(m) ?? { r: 0, n: 0 };
+    e.r += t.netR;
+    e.n++;
+    byMonth.set(m, e);
+  }
+  console.log('\nmonthly netR (book, R units):');
+  for (const [m, e] of [...byMonth.entries()].sort()) {
+    const bar = '█'.repeat(Math.max(0, Math.round(Math.abs(e.r) / 2)));
+    console.log(`  ${m}  ${e.r >= 0 ? '+' : ''}${e.r.toFixed(1).padStart(6)}R  (${String(e.n).padStart(2)} trades)  ${e.r >= 0 ? bar : '−' + bar}`);
+  }
+  const totalR = result.trades.reduce((s, t) => s + t.netR, 0);
+  const sorted = [...result.trades].sort((a, b) => b.netR - a.netR);
+  const top5 = sorted.slice(0, 5).reduce((s, t) => s + t.netR, 0);
+  const top10 = sorted.slice(0, 10).reduce((s, t) => s + t.netR, 0);
+  const greenMonths = [...byMonth.values()].filter(e => e.r > 0).length;
+  console.log(`\nconcentration: totalR ${totalR.toFixed(1)}  top-5 trades ${(100 * top5 / totalR).toFixed(0)}%  top-10 ${(100 * top10 / totalR).toFixed(0)}%  green months ${greenMonths}/${byMonth.size}`);
 }
 
 main();

@@ -6,31 +6,26 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down",
     "infra:logs": "docker compose logs -f",
     "setup": "docker compose up -d && sleep 4 && tsx src/tools/db/setup.ts",
     "db:migrate": "tsx src/tools/db/db-migrate.ts",
-
     "tg:test": "tsx src/tools/diagnostics/tg-test.ts",
     "tg:heartbeat": "tsx src/tools/ops/heartbeat.ts",
     "bybit:test": "tsx src/tools/diagnostics/bybit-test.ts",
     "cg:test": "tsx src/tools/diagnostics/coinglass-test.ts",
     "risk": "tsx src/tools/diagnostics/risk-status.ts",
-
     "data:backfill": "tsx src/data/cli/backfill-run.ts",
     "data:incremental": "tsx src/data/cli/incremental-run.ts",
     "data:features": "tsx src/data/cli/features-run.ts",
     "cg:backfill": "tsx src/data/cli/cg-backfill.ts",
     "cg:incremental": "tsx src/data/cli/cg-incremental.ts",
-
     "scan": "tsx src/reporting/scan-summary.ts all",
     "scan:decide": "tsx src/runtime/scan-decide.ts",
     "reconcile": "tsx src/runtime/reconcile.ts",
     "execute": "tsx src/runtime/execute.ts",
     "backtest:portfolio": "tsx src/backtest/cli/portfolio.ts 365 0.375 10",
-
     "trader:cycle": "scripts/cycle.sh",
     "trader:cron:install": "scripts/cron-install.sh",
     "trader:cron:uninstall": "scripts/cron-uninstall.sh",
@@ -41,7 +36,6 @@
     "trader:attach": "tmux attach -t claude-trader",
     "trader:stop": "tmux kill-session -t claude-trader",
     "tg-bot": "tsx src/bot/tg-bot.ts",
-
     "monitor:install": "sudo cp infra/position-monitor.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable position-monitor",
     "monitor:start": "sudo systemctl start position-monitor",
     "monitor:stop": "sudo systemctl stop position-monitor",
@@ -50,7 +44,6 @@
     "monitor:logs": "journalctl -u position-monitor -f",
     "monitor:health": "tsx src/tools/diagnostics/monitor-health.ts",
     "monitor:dev": "tsx src/runtime/position-monitor.ts",
-
     "backtest:vpsmc": "tsx src/backtest/cli/btc-vp-smc.ts 85",
     "backtest:vpsmc:y": "tsx src/backtest/cli/btc-vp-smc.ts 365",
     "backtest:vpsmc:wf": "tsx src/backtest/cli/btc-vp-smc.ts 365 wf",
@@ -73,7 +66,6 @@
     "backtest:vpsmc:near:wf": "tsx src/backtest/cli/alt-vp-smc.ts NEARUSDT 365 wf",
     "backtest:vpsmc:atom": "tsx src/backtest/cli/alt-vp-smc.ts ATOMUSDT 365",
     "backtest:vpsmc:atom:wf": "tsx src/backtest/cli/alt-vp-smc.ts ATOMUSDT 365 wf",
-
     "_archived_backtest_combined": "tsx src/backtest/archive/run.ts combined 365",
     "_archived_backtest_grid": "tsx src/backtest/archive/grid.ts 365",
     "_archived_backtest_v2": "tsx src/backtest/archive/rangefade-v2.ts 365",
@@ -97,5 +89,8 @@
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
     "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.60.0"
   }
 }
