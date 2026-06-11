@@ -18,7 +18,7 @@ export HOME="${HOME:-/root}"
 # --dangerously-skip-permissions is permitted (it is otherwise blocked under root).
 export IS_SANDBOX=1
 
-MODEL="opus"   # max effort/quality for the digest (operator: maximal effort). "sonnet" = cheaper.
+MODEL="claude-fable-5"   # operator 2026-06-11: newest model for the digest. Fallbacks: "opus", "sonnet".
 PROMPT_FILE="/root/Projects/ai-trading-bot/scripts/twice-daily-report.prompt.md"
 RUN_OUT="/tmp/twice-daily-report-run.out"
 

@@ -1,17 +1,16 @@
-// Per-pair decision X-ray. For every enabled Tier-1 pair, surfaces the FULL
-// internal state the live scan-decide path computes but throws away on a 'hold':
-//   - assigned strategy + percentile thresholds
-//   - current CG signal value(s) + their percentile over the 180×4H window
-//   - distance (in percentile points) to the nearest entry threshold
-//   - pair / BTC EMA20-50 trend filters and whether they'd block the implied side
-//   - ATR(14) on 4H + the SL/TP that WOULD be placed
-//   - strategy same-direction cooldown (DB) + risk-guard pairBlocked reason
+// Per-pair decision X-ray (v5 cgSlowFade edition, rewritten 2026-06-11 — the v4
+// version showed NaN thresholds after the migration). For every enabled pair,
+// surfaces the FULL internal state the live scan-decide path computes:
+//   - the EXACT percentiles the strategy sees (lag-1 CG read, excluding-current
+//     percentile, BTC source for btc-signal pairs) + distance to each trigger
+//   - BTC EMA20/50 gate state for btc-trend pairs, shortsOnly marker
+//   - the limit-entry geometry that WOULD be placed (entry ∓0.3·ATR, SL, TP)
+//   - once-per-anchor latch state, risk-guard block reason
 //   - the authoritative strategy.decide() result + the precise gate that held
 //
-// Reuses the EXACT live objects: buildContext from scan-decide (same 4H anchor +
-// CG read + bars), the strategy instances from TIER1_PORTFOLIO, and the same
-// percentile/trendUp/atr primitives the strategy itself calls — so the numbers
-// shown are the numbers the strategy decided on, not a re-derivation.
+// Reuses the EXACT live objects: buildContext from scan-decide (same anchor, same
+// cgReadLagBars), the strategy instances from TIER1_PORTFOLIO, and the same
+// indicator primitives — the numbers shown are the numbers the strategy decides on.
 //
 // Read-only. Writes /tmp/per-pair-state.json and prints a table.
 //   npx tsx src/tools/diagnostics/per-pair-state.ts
@@ -19,116 +18,59 @@
 import fs from 'node:fs';
 import { close as closePg } from '../../core/db';
 import { buildContext } from '../../runtime/scan-decide';
-import { TIER1_PORTFOLIO, getStrategyForPair, tier1Pairs } from '../../runtime/pair-strategies';
-import {
-  CgFadeStrategy,
-  LsTopPositionFade,
-  FundingFade,
-  FundingTaConfluence,
-} from '../../strategies/cg-fade';
+import { getStrategyForPair, tier1Pairs } from '../../runtime/pair-strategies';
+import { CgSlowFade } from '../../strategies/cg-slow-fade';
 import { CoinglassFeatures } from '../../data/coinglass-features';
-import { atr, percentile, trendUp } from '../../core/indicators';
+import { atr, trendUp } from '../../core/indicators';
 import { RiskManager } from '../../runtime/risk-guard';
 import { getLiveTickers } from '../../core/bybit';
 import { loadAccounts } from '../../core/accounts';
 import { refreshForScan } from '../../data/backfill';
 import { loadAll as loadCooldowns } from '../../core/strategy-cooldowns';
+import { loadDecidedAnchors } from '../../core/decided-anchors';
 import { loadBars as loadBarsCanonical } from '../../data/candles';
 import { Bar } from '../../backtest/types';
 
 interface SignalView {
-  name: string;
+  name: string;                  // e.g. 'ls_top_position (BTC)' for btc-signal pairs
   current: number | null;
-  currentPct: number | null;     // percentile [0,1]
-  shortAt: number;               // pctHi
-  longAt: number;                // pctLo
-  distToShortPp: number | null;  // percentile-points pct must RISE to reach short
-  distToLongPp: number | null;   // percentile-points pct must FALL to reach long
+  currentPct: number | null;     // percentile [0,1] — EXACT strategy semantics
+  trigger: string;               // 'short@95 / long@5', 'short@95', 'liq-short@97'
+  distToFirePp: number | null;   // pp to the NEAREST firing threshold of this signal
   histLen: number;
 }
 
 interface PairView {
   pair: string;
-  strategy: string;              // S1..S4
+  mode: string;                  // none / trend / signal (+S-only)
   strategyName: string;
-  pctHi: number;
-  pctLo: number;
-  usePairTrend: boolean;
-  useBtcTrend: boolean;
   price4hAnchor: number | null;
+  livePrice: number | null;
   atr14: number | null;
   signals: SignalView[];
-  impliedSide: 'long' | 'short' | null;  // from signals alone (pre trend/cooldown)
-  pairTrendUp: boolean | null | 'n/a';
+  impliedSide: 'long' | 'short' | null;
   btcTrendUp: boolean | null | 'n/a';
   trendBlocks: boolean;
+  entryIfEnter: number | null;   // limit price (base ∓ offset·ATR)
   slIfEnter: number | null;
   tpIfEnter: number | null;
-  strategyCooldown: { active: boolean; side: 'long' | 'short' | null; remainingMin: number | null };
+  anchorTs: number | null;
+  anchorDecided: boolean;        // once-per-4H latch already consumed this anchor
   riskGuardBlock: string | null;
   decide: 'hold' | 'enter';
   holdReason: string;
   cgMissing: boolean;
 }
 
-function sLabel(s: CgFadeStrategy): string {
-  if (s instanceof FundingTaConfluence) return 'S4';
-  if (s instanceof FundingFade) return 'S3';
-  if (s instanceof LsTopPositionFade) return s.p.usePairTrend ? 'S1' : 'S2';
-  return '?';
-}
-
-function pctView(name: string, hist: number[] | undefined, cur: number | null | undefined, pctHi: number, pctLo: number, windowBars: number): SignalView {
-  const histLen = hist?.length ?? 0;
-  if (!hist || histLen < windowBars || cur == null) {
-    return { name, current: cur ?? null, currentPct: null, shortAt: pctHi, longAt: pctLo, distToShortPp: null, distToLongPp: null, histLen };
-  }
-  const pct = percentile(hist.slice(-windowBars), cur);
-  return {
-    name,
-    current: cur,
-    currentPct: pct,
-    shortAt: pctHi,
-    longAt: pctLo,
-    distToShortPp: Math.max(0, pctHi - pct) * 100,
-    distToLongPp: Math.max(0, pct - pctLo) * 100,
-    histLen,
-  };
-}
-
-function buildSignals(strategy: CgFadeStrategy, cg: CoinglassFeatures | undefined): { signals: SignalView[]; impliedSide: 'long' | 'short' | null } {
-  const p = strategy.p;
-  if (!cg) return { signals: [], impliedSide: null };
-
-  if (strategy instanceof FundingTaConfluence) {
-    const f = pctView('funding_oi_weighted', cg.funding_oi_weighted_history, cg.funding_oi_weighted, p.pctHi, p.pctLo, p.windowBars);
-    const t = pctView('ls_top_account', cg.ls_top_account_history, cg.ls_top_account, p.pctHi, p.pctLo, p.windowBars);
-    let side: 'long' | 'short' | null = null;
-    if (f.currentPct != null && t.currentPct != null) {
-      if (f.currentPct >= p.pctHi && t.currentPct >= p.pctHi) side = 'short';
-      else if (f.currentPct <= p.pctLo && t.currentPct <= p.pctLo) side = 'long';
-    }
-    return { signals: [f, t], impliedSide: side };
-  }
-
-  if (strategy instanceof FundingFade) {
-    const f = pctView('funding_oi_weighted', cg.funding_oi_weighted_history, cg.funding_oi_weighted, p.pctHi, p.pctLo, p.windowBars);
-    let side: 'long' | 'short' | null = null;
-    if (f.currentPct != null) {
-      if (f.currentPct >= p.pctHi) side = 'short';
-      else if (f.currentPct <= p.pctLo) side = 'long';
-    }
-    return { signals: [f], impliedSide: side };
-  }
-
-  // LsTopPositionFade (S1/S2)
-  const l = pctView('ls_top_position', cg.ls_top_position_history, cg.ls_top_position, p.pctHi, p.pctLo, p.windowBars);
-  let side: 'long' | 'short' | null = null;
-  if (l.currentPct != null) {
-    if (l.currentPct >= p.pctHi) side = 'short';
-    else if (l.currentPct <= p.pctLo) side = 'long';
-  }
-  return { signals: [l], impliedSide: side };
+// EXACT replica of the strategy's percentile: current vs trailing window
+// EXCLUDING itself (cg-slow-fade.ts percentileExcludingCurrent).
+function pctExcl(history: number[] | undefined, current: number | null | undefined, windowBars: number): { pct: number | null; histLen: number } {
+  const histLen = history?.length ?? 0;
+  if (!history || histLen < windowBars + 1 || current == null) return { pct: null, histLen };
+  const window = history.slice(-(windowBars + 1), -1);
+  let below = 0;
+  for (const v of window) if (v <= current) below++;
+  return { pct: below / window.length, histLen };
 }
 
 async function main() {
@@ -144,6 +86,7 @@ async function main() {
   const riskManager = await RiskManager.createForTick(now);
   const risk = riskManager.state();
   const cooldownState = await loadCooldowns();
+  const decidedAnchors = await loadDecidedAnchors();
   const accounts = loadAccounts();
   const universe = tier1Pairs();
 
@@ -164,19 +107,23 @@ async function main() {
   const views: PairView[] = [];
 
   for (const pair of universe) {
-    const strategy = getStrategyForPair(pair) as unknown as CgFadeStrategy;
+    const strategy = getStrategyForPair(pair);
+    if (!(strategy instanceof CgSlowFade)) {
+      console.error(`${pair}: strategy is not CgSlowFade — skipping (tool supports v5 only)`);
+      continue;
+    }
     const p = strategy.p;
+    const mode = `${p.btcMode}${p.shortsOnly ? '+S-only' : ''}`;
     const live = livePrices.get(pair) ?? null;
-    const r = await buildContext(pair, nowTs, live, btcBars4h, cooldownState);
+    const r = await buildContext(pair, nowTs, live, btcBars4h, cooldownState, strategy.cgReadLagBars ?? 0);
 
     if (!r.ctx) {
       views.push({
-        pair, strategy: sLabel(strategy), strategyName: strategy.name,
-        pctHi: p.pctHi, pctLo: p.pctLo, usePairTrend: p.usePairTrend, useBtcTrend: p.useBtcTrend,
-        price4hAnchor: null, atr14: null, signals: [], impliedSide: null,
-        pairTrendUp: p.usePairTrend ? null : 'n/a', btcTrendUp: p.useBtcTrend ? null : 'n/a',
-        trendBlocks: false, slIfEnter: null, tpIfEnter: null,
-        strategyCooldown: { active: false, side: null, remainingMin: null },
+        pair, mode, strategyName: strategy.name,
+        price4hAnchor: null, livePrice: live, atr14: null, signals: [], impliedSide: null,
+        btcTrendUp: p.btcMode === 'trend' ? null : 'n/a', trendBlocks: false,
+        entryIfEnter: null, slIfEnter: null, tpIfEnter: null,
+        anchorTs: null, anchorDecided: false,
         riskGuardBlock: risk.pairBlocked[pair] ?? null,
         decide: 'hold', holdReason: `no-context: ${r.reason ?? 'unknown'}`, cgMissing: !!r.cgMissing,
       });
@@ -184,105 +131,115 @@ async function main() {
     }
 
     const ctx = r.ctx;
-    const cg = ctx.coinglass as CoinglassFeatures | undefined;
-    const price = ctx.price;
+    const own = ctx.coinglass as CoinglassFeatures | undefined;
+    const btcCg = ctx.btcCoinglass as CoinglassFeatures | undefined;
     const a = atr(ctx.recentBars ?? [], p.atrPeriod);
 
-    const { signals, impliedSide } = buildSignals(strategy, cg);
+    // Signal views — EXACT v5 sources: fade from BTC for btc-signal pairs, liq
+    // always from the pair's OWN series. OR-triggers → nearest distance fires.
+    const sentiment = p.btcMode === 'signal' ? btcCg : own;
+    const srcTag = p.btcMode === 'signal' ? ' (BTC)' : '';
+    const signals: SignalView[] = [];
+    let impliedSide: 'long' | 'short' | null = null;
 
-    // Trend filters (replicate trendFiltersAllow for display).
-    const pairCloses = (ctx.recentBars ?? []).map(b => b.close);
-    const pairUp = p.usePairTrend ? trendUp(pairCloses, p.emaFast, p.emaSlow) : null;
+    if (sentiment) {
+      const ls = pctExcl(sentiment.ls_top_position_history, sentiment.ls_top_position, p.windowBars);
+      const f = pctExcl(sentiment.funding_oi_weighted_history, sentiment.funding_oi_weighted, p.windowBars);
+      if (ls.pct != null && f.pct != null) {
+        if (ls.pct >= p.lsPctHi || f.pct >= p.fundingPctHi) impliedSide = 'short';
+        else if (ls.pct <= p.lsPctLo && !p.shortsOnly) impliedSide = 'long';
+      }
+      const lsDistShort = ls.pct != null ? Math.max(0, p.lsPctHi - ls.pct) * 100 : null;
+      const lsDistLong = ls.pct != null && !p.shortsOnly ? Math.max(0, ls.pct - p.lsPctLo) * 100 : null;
+      signals.push({
+        name: `ls_top_position${srcTag}`,
+        current: sentiment.ls_top_position, currentPct: ls.pct,
+        trigger: p.shortsOnly ? `short@${p.lsPctHi * 100}` : `short@${p.lsPctHi * 100} / long@${p.lsPctLo * 100}`,
+        distToFirePp: lsDistShort == null ? null : lsDistLong == null ? lsDistShort : Math.min(lsDistShort, lsDistLong),
+        histLen: ls.histLen,
+      });
+      signals.push({
+        name: `funding${srcTag}`,
+        current: sentiment.funding_oi_weighted, currentPct: f.pct,
+        trigger: `short@${p.fundingPctHi * 100}`,
+        distToFirePp: f.pct != null ? Math.max(0, p.fundingPctHi - f.pct) * 100 : null,
+        histLen: f.histLen,
+      });
+    }
+    if (own) {
+      const lq = pctExcl(own.liq_long_history, own.liq_long_history?.[own.liq_long_history.length - 1] ?? null, p.windowBars);
+      signals.push({
+        name: 'liq_long (own)',
+        current: own.liq_long_history?.[own.liq_long_history.length - 1] ?? null, currentPct: lq.pct,
+        trigger: `liq-short@${p.liqSpikePct * 100}`,
+        distToFirePp: lq.pct != null ? Math.max(0, p.liqSpikePct - lq.pct) * 100 : null,
+        histLen: lq.histLen,
+      });
+    }
+
+    // BTC trend gate (ETH): EMA20/50 over closed BTC 4H bars — fade only; the liq
+    // fallback bypasses it (v5 semantics).
     const btcCloses = (ctx.btcBars4hRecent ?? []).map(b => b.close);
     const btcEnough = (ctx.btcBars4hRecent ?? []).length >= p.emaSlow + 5;
-    const btcUp = p.useBtcTrend ? (btcEnough ? trendUp(btcCloses, p.emaFast, p.emaSlow) : null) : null;
-
+    const btcUp = p.btcMode === 'trend' ? (btcEnough ? trendUp(btcCloses, p.emaFast, p.emaSlow) : null) : null;
     let trendBlocks = false;
-    if (impliedSide) {
-      if (p.usePairTrend) {
-        if (pairUp == null) trendBlocks = true;
-        else if (impliedSide === 'short' && pairUp) trendBlocks = true;
-        else if (impliedSide === 'long' && !pairUp) trendBlocks = true;
-      }
-      if (p.useBtcTrend) {
-        if (btcUp == null) trendBlocks = true;
-        else if (impliedSide === 'short' && btcUp) trendBlocks = true;
-        else if (impliedSide === 'long' && !btcUp) trendBlocks = true;
-      }
+    if (impliedSide && p.btcMode === 'trend') {
+      if (btcUp == null) trendBlocks = true;
+      else if (impliedSide === 'short' && btcUp) trendBlocks = true;
+      else if (impliedSide === 'long' && !btcUp) trendBlocks = true;
     }
 
-    // Strategy same-direction cooldown (DB snapshot).
-    const cdEntry = cooldownState.get(pair);
-    let cdActive = false;
-    let cdRemainingMin: number | null = null;
-    if (cdEntry && impliedSide && cdEntry.side === impliedSide) {
-      const elapsed = nowTs - cdEntry.ts;
-      const windowMs = p.cooldownHours * 3_600_000;
-      if (elapsed < windowMs) {
-        cdActive = true;
-        cdRemainingMin = Math.round((windowMs - elapsed) / 60_000);
-      }
-    }
-
+    // Limit-entry geometry that WOULD be placed (mirror of decide()).
+    let entryIfEnter: number | null = null;
     let slIfEnter: number | null = null;
     let tpIfEnter: number | null = null;
     if (impliedSide && a != null && a > 0) {
-      const tpMult = p.scaledIn?.tpAtrMult ?? p.tpAtrMult;
-      slIfEnter = impliedSide === 'long' ? price - p.slAtrMult * a : price + p.slAtrMult * a;
-      tpIfEnter = impliedSide === 'long' ? price + tpMult * a : price - tpMult * a;
+      const dir = impliedSide === 'long' ? 1 : -1;
+      const base = ctx.livePrice ?? ctx.price;
+      entryIfEnter = base - dir * p.entryOffsetAtr * a;
+      slIfEnter = entryIfEnter - dir * p.slAtrMult * a;
+      tpIfEnter = entryIfEnter + dir * p.tpAtrMult * a;
     }
 
-    // Authoritative decision + precise hold reason (replicate decide() gate order).
+    const anchorTs = r.anchorTs ?? null;
+    const anchorDecided = anchorTs != null && decidedAnchors.get(pair) === anchorTs;
+
+    // Authoritative decision + precise hold reason.
     const action = strategy.decide(ctx);
     let holdReason: string;
     let riskGuardBlock: string | null = risk.pairBlocked[pair] ?? null;
     if (action.kind === 'enter') {
-      // Real risk-guard verdict — covers GLOBAL gates pairBlocked omits:
-      // funding window (±10min around 00/08/16 UTC), entry-window cap,
-      // max-parallel, kill switches. This is the authoritative live gate.
       const rc = await riskManager.precheck(pair, action.sizePct);
       riskGuardBlock = rc.allowed ? null : (rc.reason ?? 'blocked');
+      const latchNote = anchorDecided ? ' [латч: якорь уже решён — cron повторно НЕ войдёт до новой границы]' : '';
       holdReason = rc.allowed
-        ? `🟢 ENTER ${action.side?.toUpperCase()} — risk-guard ALLOWED (would auto-execute)`
-        : `ENTER ${action.side?.toUpperCase()} signal — BLOCKED by risk-guard: ${rc.reason}`;
-    } else if (!cg) {
+        ? `🟢 ENTER ${action.side?.toUpperCase()} — risk-guard ALLOWED${latchNote}`
+        : `ENTER ${action.side?.toUpperCase()} signal — BLOCKED by risk-guard: ${rc.reason}${latchNote}`;
+    } else if (!own) {
       holdReason = 'no-coinglass';
     } else if (!impliedSide) {
-      // Distance-to-fire. For confluence (>1 signal) BOTH must cross, so the
-      // binding constraint is the WORST signal (max distance), not the best.
-      const haveAll = signals.length > 0 && signals.every(s => s.currentPct != null);
-      let near: number | null = null;
-      if (haveAll) {
-        const distShort = Math.max(...signals.map(s => s.distToShortPp!));
-        const distLong = Math.max(...signals.map(s => s.distToLongPp!));
-        near = Math.min(distShort, distLong);
-      }
-      holdReason = near != null
-        ? `percentile-neutral (${signals.length > 1 ? 'confluence ' : ''}nearest threshold ${near.toFixed(1)}pp away)`
+      const dists = signals.map(s => s.distToFirePp).filter((d): d is number => d != null);
+      holdReason = dists.length > 0
+        ? `percentile-neutral (ближайший триггер в ${Math.min(...dists).toFixed(1)}pp)`
         : 'percentile-neutral (signal data short)';
-    } else if (cdActive) {
-      holdReason = `strategy-cooldown ${impliedSide} (${cdRemainingMin}min left)`;
     } else if (trendBlocks) {
-      const parts: string[] = [];
-      if (p.usePairTrend) parts.push(`pair EMA ${pairUp == null ? 'n/a' : pairUp ? 'up' : 'down'}`);
-      if (p.useBtcTrend) parts.push(`BTC EMA ${btcUp == null ? 'n/a' : btcUp ? 'up' : 'down'}`);
-      holdReason = `trend-filter blocks ${impliedSide} (${parts.join(', ')})`;
+      holdReason = `btc-trend gate blocks ${impliedSide} (BTC EMA ${btcUp == null ? 'n/a' : btcUp ? 'up' : 'down'}); liq-нога гейт обходит`;
+    } else if (p.shortsOnly && impliedSide === 'long') {
+      holdReason = 'shortsOnly — покупка отброшена';
     } else if (a == null || a <= 0) {
       holdReason = 'no-atr';
     } else {
-      holdReason = 'hold (unexpected — signal+trend pass but decide=hold)';
+      holdReason = 'hold (unexpected — signal passes but decide=hold)';
     }
 
     views.push({
-      pair, strategy: sLabel(strategy), strategyName: strategy.name,
-      pctHi: p.pctHi, pctLo: p.pctLo, usePairTrend: p.usePairTrend, useBtcTrend: p.useBtcTrend,
-      price4hAnchor: price, atr14: a,
+      pair, mode, strategyName: strategy.name,
+      price4hAnchor: ctx.price, livePrice: live, atr14: a,
       signals, impliedSide,
-      pairTrendUp: p.usePairTrend ? pairUp : 'n/a',
-      btcTrendUp: p.useBtcTrend ? btcUp : 'n/a',
+      btcTrendUp: p.btcMode === 'trend' ? btcUp : 'n/a',
       trendBlocks,
-      slIfEnter, tpIfEnter,
-      strategyCooldown: { active: cdActive, side: cdEntry?.side ?? null, remainingMin: cdRemainingMin },
+      entryIfEnter, slIfEnter, tpIfEnter,
+      anchorTs, anchorDecided,
       riskGuardBlock,
       decide: action.kind === 'enter' ? 'enter' : 'hold',
       holdReason,
@@ -306,22 +263,25 @@ async function main() {
   fs.writeFileSync('/tmp/per-pair-state.json', JSON.stringify(out, null, 2));
 
   // Human table
-  console.log(`\n==== per-pair X-ray @ ${out.cycle.iso}  (btcTrend ${btcStale ? 'STALE→disabled' : 'fresh'}) ====`);
-  console.log(`equity $${risk.totalEquityUsd.toFixed(0)}  dayPnL ${risk.dailyPnlPct.toFixed(2)}%  open ${risk.openPositionsCount}  entriesInWindow ${(risk as any).entriesInWindow}\n`);
+  console.log(`\n==== per-pair X-ray (v5) @ ${out.cycle.iso}  (btcTrend ${btcStale ? 'STALE→disabled' : 'fresh'}) ====`);
+  console.log(`equity $${risk.totalEquityUsd.toFixed(0)}  dayPnL ${risk.dailyPnlPct.toFixed(2)}%  open ${risk.openPositionsCount}/4  entriesInWindow ${(risk as any).entriesInWindow}\n`);
   for (const v of views) {
-    console.log(`${v.pair.padEnd(9)} [${v.strategy}] thr ${v.pctLo}/${v.pctHi}  price ${v.price4hAnchor?.toFixed(4) ?? '—'}  ATR ${v.atr14?.toFixed(4) ?? '—'}`);
+    const anchorStr = v.anchorTs ? new Date(v.anchorTs).toISOString().slice(5, 16).replace('T', ' ') : '—';
+    console.log(`${v.pair.padEnd(9)} [${v.mode}]  anchor ${anchorStr} ${v.anchorDecided ? '(решён)' : '(новый)'}  price ${v.price4hAnchor?.toFixed(4) ?? '—'}  live ${v.livePrice?.toFixed(4) ?? '—'}  ATR ${v.atr14?.toFixed(4) ?? '—'}`);
     for (const s of v.signals) {
       if (s.currentPct == null) {
-        console.log(`   ${s.name.padEnd(20)} cur ${s.current ?? '—'}  pct n/a (hist ${s.histLen})`);
+        console.log(`   ${s.name.padEnd(22)} cur ${s.current ?? '—'}  pct n/a (hist ${s.histLen})`);
       } else {
         const pctStr = (s.currentPct * 100).toFixed(1).padStart(5);
-        console.log(`   ${s.name.padEnd(20)} cur ${String(s.current).padStart(10)}  pct ${pctStr}%  →short@${(s.shortAt*100).toFixed(0)}% (${s.distToShortPp!.toFixed(1)}pp)  →long@${(s.longAt*100).toFixed(0)}% (${s.distToLongPp!.toFixed(1)}pp)`);
+        console.log(`   ${s.name.padEnd(22)} cur ${String(s.current).slice(0, 10).padStart(10)}  pct ${pctStr}%  ${s.trigger}  (до огня ${s.distToFirePp!.toFixed(1)}pp)`);
       }
     }
-    const trendStr = `pairEMA ${v.pairTrendUp === 'n/a' ? 'n/a' : v.pairTrendUp == null ? 'n/a' : v.pairTrendUp ? 'up' : 'down'}  btcEMA ${v.btcTrendUp === 'n/a' ? 'n/a' : v.btcTrendUp == null ? 'n/a' : v.btcTrendUp ? 'up' : 'down'}`;
-    const cd = v.strategyCooldown.active ? `CD ${v.strategyCooldown.side} ${v.strategyCooldown.remainingMin}min` : 'CD none';
+    if (v.entryIfEnter != null) {
+      console.log(`   would-place LIMIT ${v.impliedSide?.toUpperCase()}: entry ${v.entryIfEnter.toFixed(4)}  SL ${v.slIfEnter!.toFixed(4)}  TP ${v.tpIfEnter!.toFixed(4)}  TTL 230м`);
+    }
     const rg = v.riskGuardBlock ? `RG-BLOCK: ${v.riskGuardBlock}` : 'RG ok';
-    console.log(`   trend[${trendStr}]  ${cd}  ${rg}`);
+    const btcT = v.btcTrendUp === 'n/a' ? '' : `  btcEMA ${v.btcTrendUp == null ? 'n/a' : v.btcTrendUp ? 'up' : 'down'}`;
+    console.log(`   ${rg}${btcT}`);
     console.log(`   => decide=${v.decide.toUpperCase()}  reason: ${v.holdReason}\n`);
   }
 
