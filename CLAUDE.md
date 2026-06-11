@@ -18,8 +18,8 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 
 ## Targets and Constraints
 
-- **Goal:** +60–80% / year on starting balance. Живая конфигурация v5 валидирована 2026-06-10: ожидаемый конверт ≈ +52%/год, PF 1.50, MTM maxDD −6.9%, worst day −2.96%, обе WF-половины положительные (`srcNew/backtest/cli/live-policy-experiments.ts`, вариант `market-lag120` = market-вход + CG lag-1 + асимметричное funding-окно). Headline-вариант с лимитными входами +64.1%/год (permutation p=0.000) — кандидат Phase 2 (нужен TTL-canceller лимиток).
-- **Strategy (v5 cgSlowFade, миграция 2026-06-10):** портфель `cgSlowFadeV5` (`src/strategies/cg-slow-fade.ts`), per-pair конфиг в `src/runtime/pair-strategies.ts` — **истина = код, не этот файл**. Одно решение на закрытый 4H-бар (латч `decided_anchors`; funding-window блок → один ретрай +1h). Сигналы: перцентили Coinglass за 180×4H — L/S Top Position ≥0.95 → SHORT / ≤0.05 → LONG (fade), funding ≥0.95 → SHORT (fade), liq-каскад ≥0.97 → momentum SHORT. CG читается с лагом 1 бакет (`cgReadLagBars=1`). Вход market по закрытию анкера; SL = 2.0 × ATR(14), TP = 3.5 × ATR (один тейк, tp1=tp2). Max hold 12 × 4H (48h) — живое исполнение `src/runtime/max-hold.ts` (5-мин cron).
+- **Goal:** +60–80% / year on starting balance. Живая конфигурация v5 = headline-вариант `validated` (Phase 2, 2026-06-11): **+64.1%/год, PF 1.68, MTM maxDD −8.17%, worst day −2.36%**, обе WF-половины положительные, permutation p=0.000 (`srcNew/backtest/cli/live-policy-experiments.ts`). Откатный вариант (market-вход, `entryOffsetAtr:0`): +52.5%/год, PF 1.50, maxDD −6.92% — работал в лайве 2026-06-10..11.
+- **Strategy (v5 cgSlowFade; Phase 2 limit entries 2026-06-11):** портфель `cgSlowFadeV5` (`src/strategies/cg-slow-fade.ts`), per-pair конфиг в `src/runtime/pair-strategies.ts` — **истина = код, не этот файл**. Одно решение на закрытый 4H-бар (латч `decided_anchors`). Сигналы: перцентили Coinglass за 180×4H — L/S Top Position ≥0.95 → SHORT / ≤0.05 → LONG (fade), funding ≥0.95 → SHORT (fade), liq-каскад ≥0.97 → momentum SHORT. CG читается с лагом 1 бакет (`cgReadLagBars=1`). **Вход: отдыхающая ЛИМИТКА на пассивной стороне** (цена ∓ 0.3·ATR; long ниже, short выше), SL/TP якорятся от лимит-цены (SL = 2.0 × ATR(14), TP = 3.5 × ATR, один тейк tp1=tp2), TTL 230 мин (умирает за 10 мин до следующей границы — `src/runtime/entry-ttl.ts`). Trades-строка и maker-TP создаются ТОЛЬКО при исполнении (pendingOnly → промоушен демоном/reconcile); SL прикреплён к самому ордеру. Max hold 12 × 4H (48h) **от момента сигнала** — `src/runtime/max-hold.ts` (5-мин cron).
 - **Universe (Tier-1, 4 pairs, 2026-06-10):** BTCUSDT (свои сигналы, риск 1.0%), ETHUSDT (btc-trend гейт, только SHORT, 0.5%), SOLUSDT (btc-signal — fade от позиционирования BTC, 0.5%), XRPUSDT (btc-signal, только SHORT, 0.5%). Истинный источник — `src/runtime/pair-strategies.ts:TIER1_PORTFOLIO`.
 - **Archived (enabled:false, быстрый откат):** ADAUSDT, LINKUSDT (standalone-портфель 2026-06-03). Их валидация шла на до-ремонтных CG-данных (frozen-at-open, см. fix 2026-06-10) — перед ре-активацией обязателен повторный прогон на починенных данных.
 - **Accounts (2026-05-28):** 4 HyroTrader prop subkeys — 1 × 50k (Ivan) + 3 × 200k (Vitalii, Vera, Andrey). Total equity ~$668k, all `demoTrading: true`. Trades are broadcast to **every** sub-key inside `accounts.json` via `Promise.all`.
@@ -78,7 +78,8 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
   → db-migrate       (idempotent — applies pending migrations/NNN_*.sql)
   → reconcile.ts     (5-min catch-net audit: auto-close db_without_bybit, Telegram exits)
   → position-watcher.ts (legacy cron path — kept during TASK-006 overlap; daemon owns these events sub-second)
-  → max-hold.ts      (48h time-stop для v5-позиций; работает и под PAUSE.md — пауза останавливает входы, не выходы)
+  → max-hold.ts      (48h time-stop для v5-позиций от момента сигнала; работает и под PAUSE.md — пауза останавливает входы, не выходы)
+  → entry-ttl.ts     (Phase 2: снимает неисполненные лимитные входы старше TTL 230 мин; под PAUSE.md снимает ВСЕ отдыхающие входы)
   → heartbeat.ts     (self-throttles to 1/hour; surfaces daemon-staleness via /tmp/position-monitor-heartbeat.json)
   → if top-of-hour (HH:00-04):
        → cg-incremental (Coinglass refresh ДО scan-decide — upsert, открытый бакет финализируется первым фетчем после закрытия)
@@ -184,6 +185,17 @@ When any fires: send Telegram alert, trigger `/pause` (writes `vault/Watchlist/P
 
 **Known outstanding issues (to fix):**
 - ~~`cg-fade.ts` returns `tp1 = tp2` (single target) but `execute.ts` places 2 separate limit orders~~ — RESOLVED: `tp-planner.ts` SingleLimit mode ставит ОДИН reduce-only LIMIT на полный размер при tp1≈tp2 (проверено аудитом 2026-06-10).
+
+## What changed 2026-06-11 (Phase 2 — limit entries)
+
+Операторское GO на возврат лимитных входов: лайв = headline-вариант `validated` (+64.1%/год, PF 1.68). Механика входа: отдыхающая лимитка цена ∓ 0.3·ATR (пассивная сторона), SL/TP от лимит-цены, TTL 230 мин. Marketable-при-размещении лимитка исполняется сразу как taker — ровно first-bar правило движка.
+
+Инцидент-класс 2026-06-04 (фантомные 'open'-строки неисполненных лимиток) закрыт **тройной защитой**:
+1. `entry-ttl.ts` (5-мин cron) — снимает входы старше TTL; под PAUSE.md снимает все отдыхающие входы (пауза = никакой новой экспозиции); гонка «исполнилась во время отмены» разрешается в пользу промоушена.
+2. risk-guard: занятость пары статусная (нерешённый pending занимает пару TTL+60мин grace, был фикс. 90 мин — дыра в минутах 90..230); отдыхающая лимитка занимает слот cap-4 (паритет с движком).
+3. execute: cancel-before-place — снимает чужие нерешённые входы по паре перед размещением нового.
+
+Жизненный цикл: pending_orders при размещении (со strategy + ttl_minutes, миграция 015) → trades-строка ТОЛЬКО при исполнении (pendingOnly; промоушен демоном ≤1с или reconcile ≤5мин) → maker-TP ставится при промоушене (`armTpAfterPromotion`); SL прикреплён к самому ордеру (взводится на бирже в момент исполнения). Неисполнение = отмена БЕЗ кулдауна (паритет: пара ре-сигналит на следующей границе). Max-hold 48ч считается от момента сигнала (`pending_orders.requested_at`), не от исполнения.
 
 ## What changed 2026-06-10 (v5 cgSlowFade migration)
 

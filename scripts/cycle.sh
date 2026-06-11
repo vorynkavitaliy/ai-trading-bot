@@ -86,6 +86,17 @@ if [ "$RC" -ne 0 ]; then
   persist_out /tmp/cycle-history-errors.log /tmp/cycle-maxhold.out "$RC" "max-hold"
 fi
 
+# 2.6) entry-ttl: cancel resting limit entries past their TTL (230 min, Phase 2).
+#      Always runs — guarantees an unfilled limit is gone before the next 4H decision
+#      (TTL 230 < 240-min boundary spacing). Under PAUSE.md it sweeps ALL resting
+#      entries (pause = no new exposure). Exits (reduce-only TP/SL) are never touched.
+npx tsx src/runtime/entry-ttl.ts > /tmp/cycle-entryttl.out 2>&1
+RC=$?
+if [ "$RC" -ne 0 ]; then
+  log "entry-ttl failed (exit=$RC) — see /tmp/cycle-entryttl.out"
+  persist_out /tmp/cycle-history-errors.log /tmp/cycle-entryttl.out "$RC" "entry-ttl"
+fi
+
 # 3) heartbeat: self-throttles to 1/hour. Always called.
 npx tsx src/tools/ops/heartbeat.ts > /tmp/cycle-hb.out 2>&1
 RC=$?

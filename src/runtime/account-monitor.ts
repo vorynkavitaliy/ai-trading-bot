@@ -43,6 +43,8 @@ import { autoCloseTrade, fetchRecentClosedPnL } from './trade-closer';
 import { nakedTpRecovery } from './naked-tp-recovery';
 import { findUnpromotedPending } from '../core/pending-orders';
 import { promotePendingToTrade } from './pending-promoter';
+import { armTpAfterPromotion } from './tp-planner';
+import { cancelSymbolEntryRemainders } from './entry-ttl';
 import { coalesceEntryConfirmed, coalesceClose, coalesceNakedTpAlert } from './notification-coalescer';
 
 const NAKED_SL_GRACE_MS = 60_000;
@@ -297,6 +299,13 @@ export class AccountMonitor {
 
       const r = await promotePendingToTrade(pending, { size, avgPrice });
       if (r?.created) {
+        // Phase 2: a resting-limit fill reaches the DB only here — execute.ts
+        // deferred BOTH the trades row and the TP (pendingOnly). Arm the maker TP
+        // now for the actual credited size. Winner-only: created:true is serialized
+        // by the promoter's row lock, so the reconcile path can't double-place;
+        // tp-planner failures degrade to naked-tp-recovery (no stacking — it checks
+        // existing reduce-only orders).
+        await armTpAfterPromotion(this.account, pending, size);
         coalesceEntryConfirmed({
           symbol, side, size, avgPrice,
           sl: pending.sl, tp: pending.tp1,
@@ -534,6 +543,11 @@ export class AccountMonitor {
       log.info('daemon full-close finalized', {
         symbol, account: this.account.keyName, dbId: t.id, pnlR: evt.pnlR?.toFixed(2),
       });
+      // Phase 2: a partial-fill entry remainder must not survive its trade — the
+      // pending row is already linked, so a post-close re-fill could never be
+      // promoted (permanently unmanaged position). Reduce-only exits self-cancel
+      // with the position; non-reduce-only 'e-' entries need this explicit sweep.
+      await cancelSymbolEntryRemainders(this.account, symbol);
       return true;
     } catch (e: any) {
       log.warn('daemon full-close handling failed', {

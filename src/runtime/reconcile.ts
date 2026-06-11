@@ -5,6 +5,7 @@ import { log } from '../core/logger';
 import { findStaleOrphans, findUnpromotedPending, markPendingOrphanedByLink, StalePending } from '../core/pending-orders';
 import { tradeRepo, OpenTrade } from '../data/trade-repo';
 import { promotePendingToTrade } from './pending-promoter';
+import { armTpAfterPromotion } from './tp-planner';
 import { EntryConfirmedArgs, notifyEntryConfirmedGroup } from '../core/tg-templates';
 import { divergenceDetector } from './divergence-detector';
 import {
@@ -51,8 +52,13 @@ async function cancelScaledInOrphans(a: AccountKey, symbol: string): Promise<num
       return 0;
     }
     const orders = ao.result?.list ?? [];
+    // 'PartiallyFilled' included since Phase 2 (2026-06-11): a resting limit entry
+    // whose PARTIAL fill was promoted to a trade is by definition PartiallyFilled —
+    // filtering on 'New' only made this catch-net a no-op for exactly the remainder
+    // it must kill after an SL/TP close finalized by reconcile (daemon-down path).
     const orphans = orders.filter((o: any) =>
-      o.orderType === 'Limit' && o.reduceOnly === false && o.orderStatus === 'New'
+      o.orderType === 'Limit' && o.reduceOnly === false &&
+      (o.orderStatus === 'New' || o.orderStatus === 'PartiallyFilled')
     );
     if (orphans.length === 0) return 0;
     let cancelled = 0;
@@ -133,6 +139,10 @@ export async function runReconcile(): Promise<ReconcileResult> {
           if (pending) {
             const r = await promotePendingToTrade(pending, { size: pos.size, avgPrice: pos.entry });
             if (r?.created) {
+              // Phase 2 catch-net: if the daemon missed the fill, this is the first
+              // moment the position exists in the DB — arm the deferred maker TP
+              // (winner-only via the promoter row lock; see armTpAfterPromotion).
+              await armTpAfterPromotion(acc, pending, pos.size);
               confirmedEntries.push({
                 symbol: pos.symbol, side: pos.side, size: pos.size, avgPrice: pos.entry,
                 sl: pending.sl, tp: pending.tp1, account: pos.account,

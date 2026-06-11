@@ -227,6 +227,9 @@ export async function buildContext(
     symbol,
     ts: nowTs,
     price: anchorBar.close,           // LEVER 1: last CLOSED 4H bar (was last closed 1H)
+    // Phase 2: current ticker for the limit-entry base (srcNew lastPrice semantics —
+    // 1m close at boundary+60s ≈ live ticker at scan time). Signals stay on anchor/CG.
+    livePrice: livePrice ?? undefined,
     features1h,
     features4h,
     featuresD,
@@ -318,6 +321,10 @@ interface PairDecision {
   // max-hold enforcer (and reporting) can attribute trades to their strategy.
   strategy?: string;
   side?: 'long' | 'short';
+  // Phase 2: strategies choose market vs resting limit (auto-execute passes through;
+  // no more hardcoded market). ttlMinutes only for limit (entry-ttl.ts cancels after).
+  orderType?: 'market' | 'limit';
+  ttlMinutes?: number;
   entryPrice?: number;
   sl?: number;
   tp1?: number;
@@ -696,6 +703,8 @@ export async function scanDecide(): Promise<ScanDecideResult> {
       action: 'enter',
       strategy: strategy.name,
       side: action.side,
+      orderType: action.orderType,
+      ttlMinutes: action.ttlMinutes,
       entryPrice: action.entryPrice,
       sl: action.sl,
       tp1: action.tp1,

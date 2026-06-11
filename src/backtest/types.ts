@@ -53,6 +53,9 @@ export type Action =
       sizePct: number;          // 0.6 means 0.6% risk
       rationale: string;
       scaledIn?: ScaledInConfig;  // optional: convert to multi-entry trade
+      // Resting-limit TTL (Phase 2, v5): cancel the unfilled entry after this many
+      // minutes. srcNew-validated 230 — expires 10 min before the next 4H boundary.
+      ttlMinutes?: number;
     }
   | { kind: 'exit'; reason: string }
   | { kind: 'hold' };
@@ -194,6 +197,12 @@ export interface StrategyContext {
   // BTC Coinglass features for cross-pair sentiment signals (v5 cgSlowFade btc-signal
   // mode trades alts off BTC positioning extremes). For BTCUSDT this equals coinglass.
   btcCoinglass?: any;
+  // Live ticker price at decision time (set ONLY by scan-decide; engines leave it
+  // unset → strategies fall back to ctx.price). Phase 2 limit entries anchor the
+  // limit at the CURRENT price ∓ offset: srcNew used the 1m close at decisionTs
+  // (boundary + 60s), and the live ticker at scan time (~boundary + 90s) is the
+  // faithful equivalent. ctx.price (4H anchor close) stays the signal anchor.
+  livePrice?: number;
   // Last closed trade on THIS symbol (any reason: tp/sl/strategy_exit). Set by
   // engine after each close. Strategies use this to implement cooldown-after-TP
   // (prevent re-entry into a freshly-resolved cycle).

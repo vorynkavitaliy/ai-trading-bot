@@ -114,19 +114,19 @@ async function main() {
     const args = [
       '--symbol', d.symbol,
       '--side', sideForExecute,
-      // MARKET entry for ALL orders (2026-06-04). This line previously hardcoded
-      // `scaledIn ? 'market' : 'limit'` — which IGNORED cg-fade's orderType and left
-      // single-entry as a resting LIMIT that often never filled → db_without_bybit
-      // phantom 'open' rows + missed moves (BTC @66097 / @64318 incidents 2026-06-03/04).
-      // Scaled-in slot-1 was already market (slots 2/3 stay Limit via execute.ts
-      // placeScaledIn). Market = immediate fill, matches the cron-realistic backtest's
-      // fill-at-signal semantics.
-      '--order-type', 'market',
+      // Phase 2 (2026-06-11): honor the strategy's orderType. The 2026-06-04 market
+      // hardcode existed because resting limits had no lifecycle (phantom 'open' rows
+      // for unfilled limits, no TTL canceller). That lifecycle now exists: execute.ts
+      // defers the trades row until fill (pendingOnly), entry-ttl.ts cancels at TTL,
+      // the promoter+daemon place the TP on late fills, and risk-guard occupancy is
+      // status-driven. Default stays market for strategies that don't say otherwise.
+      '--order-type', d.orderType === 'limit' ? 'limit' : 'market',
       '--entry-price', String(d.entryPrice),
       '--sl', String(d.sl),
       '--risk-pct', String(d.sizePct ?? 0.375),
       '--rationale-file', RATIONALE_PATH,
     ];
+    if (d.orderType === 'limit' && d.ttlMinutes != null) args.push('--ttl-minutes', String(d.ttlMinutes));
     if (d.tp1 != null) args.push('--tp1', String(d.tp1));
     if (d.tp2 != null) args.push('--tp2', String(d.tp2));
     if (d.strategy) args.push('--strategy', String(d.strategy));
@@ -145,7 +145,7 @@ async function main() {
       log.error('auto-execute: execute.ts failed', { symbol: d.symbol, code, stderr: stderr.slice(0, 500) });
     } else {
       // Check for TP submit errors in stderr (silent fails that don't fail process)
-      const tpFail = /TP[12] SUBMIT (REJECTED|THREW)|naked.tp/i.test(stderr);
+      const tpFail = /(TP[12]|SINGLE-TP) SUBMIT (REJECTED|THREW)|naked.tp/i.test(stderr);
       if (tpFail) {
         log.error('auto-execute: TP submit silent fail', { symbol: d.symbol, stderr: stderr.slice(-500) });
       } else {

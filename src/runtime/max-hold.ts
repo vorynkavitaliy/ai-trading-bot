@@ -49,12 +49,23 @@ function maxHoldMsForSymbol(symbol: string): number {
 }
 
 export async function enforceMaxHold(): Promise<{ closedSymbols: string[]; overdueTrades: number }> {
+  // Age from SIGNAL time, not fill time (srcNew parity: maxHoldUntilTs = placedTs +
+  // 12×4H). A resting limit can fill up to 230 min after placement — counting from
+  // opened_at would hold those up to ~4h longer than the validated engine.
+  // pending_orders.requested_at is the placement timestamp; market entries fill
+  // within seconds of it, and trades without a linked pending row fall back to
+  // opened_at.
   const { rows } = await query<OverdueRow>(
-    `SELECT id, symbol, strategy, rationale, opened_at::text,
-            (EXTRACT(EPOCH FROM (NOW() - opened_at)) * 1000)::text AS age_ms
-     FROM trades
-     WHERE status = 'open'
-       AND (strategy LIKE $1 OR (strategy IS NULL AND rationale LIKE '[auto]%'))`,
+    `SELECT t.id, t.symbol, t.strategy, t.rationale, t.opened_at::text,
+            (EXTRACT(EPOCH FROM (NOW() - COALESCE(po.placed_at, t.opened_at))) * 1000)::text AS age_ms
+     FROM trades t
+     LEFT JOIN LATERAL (
+       SELECT MIN(requested_at) AS placed_at
+         FROM pending_orders
+        WHERE trade_id = t.id
+     ) po ON TRUE
+     WHERE t.status = 'open'
+       AND (t.strategy LIKE $1 OR (t.strategy IS NULL AND t.rationale LIKE '[auto]%'))`,
     [`${V5_PREFIX}%`],
   );
 

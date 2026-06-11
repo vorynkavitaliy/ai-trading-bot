@@ -367,11 +367,55 @@ export async function handleDcaFill(pos: BybitPos): Promise<RecoveryAction | nul
     log.warn('DCA fill — DB update failed', { err: e?.message });
   }
 
-  // NO TP re-placement needed. TP+SL are attached to the slot-1 entry order as
-  // POSITION-LEVEL conditionals (execute.ts placeScaledIn). Bybit auto-applies
-  // them to the full position as DCA slots fill — the grown size is covered
-  // automatically. Placing a reduce-only limit TP here would create a DOUBLE TP
-  // (attached market-TP + limit-TP). We only update the DB qty above + notify.
+  // Scaled-in path: NO TP re-placement needed — TP+SL ride the slot-1 entry order
+  // as POSITION-LEVEL conditionals (execute.ts placeScaledIn); Bybit auto-applies
+  // them to the grown size. Placing a reduce-only limit TP here would double it.
+  //
+  // Phase 2 resting-limit path (2026-06-11): the opposite — there is NO
+  // position-level TP (curTP empty); the TP is a reduce-only LIMIT sized to the
+  // FIRST partial fill (armTpAfterPromotion). When the remainder fills, that limit
+  // under-covers the position — AMEND its qty to the full size (edit-never-cancel,
+  // same discipline as SL moves). naked-tp-recovery cannot catch this: it counts
+  // legs, never compares qty.
+  const hasPositionLevelTp = pos.curTP != null && pos.curTP > 0;
+  if (!hasPositionLevelTp) {
+    try {
+      const c = getRest(pos.account);
+      const info = await getInstrumentInfo(pos.account, pos.symbol);
+      const closeSide = pos.side === 'Buy' ? 'Sell' : 'Buy';
+      const ao: any = await withRetry(
+        () => c.getActiveOrders({ category: 'linear', symbol: pos.symbol }),
+        { label: `dca-tp-scan-${pos.symbol}-${pos.account.keyName}` },
+      );
+      const tpLegs = (ao.result?.list ?? []).filter(
+        (o: any) => o.reduceOnly === true && o.side === closeSide && o.orderType === 'Limit',
+      );
+      if (tpLegs.length === 1) {
+        const newQtyStr = roundQtyToStep(pos.size, info);
+        const r: any = await withRetry(
+          () => c.amendOrder({ category: 'linear', symbol: pos.symbol, orderId: tpLegs[0].orderId, qty: newQtyStr }),
+          { label: `dca-tp-amend-${pos.symbol}-${pos.account.keyName}` },
+        );
+        if (r.retCode === 0) {
+          log.info('remainder fill — reduce-only TP amended to full size', {
+            symbol: pos.symbol, account: accLabel, qty: newQtyStr,
+          });
+        } else {
+          log.error('remainder fill — TP amend rejected (naked-qty gap until manual review)', {
+            symbol: pos.symbol, account: accLabel, retMsg: r.retMsg,
+          });
+        }
+      } else {
+        log.warn('remainder fill — expected exactly one reduce-only TP leg, found different', {
+          symbol: pos.symbol, account: accLabel, legs: tpLegs.length,
+        });
+      }
+    } catch (e: any) {
+      log.error('remainder fill — TP amend threw', {
+        symbol: pos.symbol, account: accLabel, err: e?.message ?? String(e),
+      });
+    }
+  }
 
   coalesceDcaFill({
     symbol: pos.symbol,
@@ -388,6 +432,6 @@ export async function handleDcaFill(pos: BybitPos): Promise<RecoveryAction | nul
     symbol: pos.symbol,
     account: accLabel,
     action: 'DCA-FILL-DETECTED',
-    reason: `size grew ${pos.dbInitialQty}→${pos.size}; position-level TP auto-covers`,
+    reason: `size grew ${pos.dbInitialQty}→${pos.size}; ${pos.curTP != null && pos.curTP > 0 ? 'position-level TP auto-covers' : 'reduce-only TP amended to full size'}`,
   };
 }

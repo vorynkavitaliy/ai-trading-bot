@@ -10,7 +10,8 @@ import { precheckEntry, RISK } from './risk-guard';
 import { recordEntry as recordStrategyCooldown } from '../core/strategy-cooldowns';
 import { config } from '../core/config';
 import { log } from '../core/logger';
-import { insertPending, markPlaced, markFailed, linkTradeId, getLinkedTradeId } from '../core/pending-orders';
+import { insertPending, markPlaced, markFailed, linkTradeId, getLinkedTradeId, findRestingEntryPendings } from '../core/pending-orders';
+import { cancelRestingEntry } from './entry-ttl';
 import { tpPlanner } from './tp-planner';
 import { writeTradeJournal } from './trade-journal';
 
@@ -43,6 +44,7 @@ interface CliArgs {
   scaledIn?: ScaledInArgs;                  // S5 multi-entry config
   onlyAccount?: string;                     // operator override: restrict to a single keyName (default: all)
   strategy?: string;                        // strategy.name for trades.strategy attribution (max-hold enforcer keys off this)
+  ttlMinutes?: number;                      // resting-limit TTL (Phase 2) — entry-ttl.ts cancels the unfilled entry after this
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -71,6 +73,7 @@ function parseArgs(argv: string[]): CliArgs {
       case '--only-account': args.onlyAccount = next(); break;
       case '--scaled-in': args.scaledIn = JSON.parse(next()); break;
       case '--strategy': args.strategy = next(); break;
+      case '--ttl-minutes': args.ttlMinutes = parseFloat(next()); break;
       default: throw new Error(`unknown flag: ${a}`);
     }
   }
@@ -236,6 +239,8 @@ async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<Accou
       tp2: args.tp2 ?? null,
       riskPct: args.riskPct ?? null,
       rationale: args.rationale,
+      strategy: args.strategy ?? null,
+      ttlMinutes: args.orderType === 'limit' ? (args.ttlMinutes ?? null) : null,
     });
 
     const r = await withRetry(() => c.submitOrder(orderParams), {
@@ -259,6 +264,26 @@ async function placeOnAccount(account: AccountKey, args: CliArgs): Promise<Accou
         const pos = (pr.result?.list ?? []).find((p: any) => p.symbol === args.symbol && p.side === expectedSide);
         if (pos && parseFloat(pos.size) > 0) { positionReady = true; break; }
       } catch {}
+    }
+    // ─── Resting limit (Phase 2): defer EVERYTHING until the fill ────────────────
+    // The 2026-06-04 incident class came from creating a trades row + attempting TP
+    // for an entry that never filled. A limit that didn't fill within the 5s poll is
+    // a healthy RESTING order: pendingOnly defers the trades row (persistTrade skips
+    // it), the SL is already attached to the order (arms server-side at fill), and
+    // the TP is placed by the promotion paths (daemon/reconcile) once Bybit credits
+    // the position. entry-ttl.ts cancels it at TTL if it never fills.
+    if (!positionReady && args.orderType === 'limit') {
+      result.ok = true;
+      result.pendingOnly = true;
+      result.bybitOrderId = r.result?.orderId;
+      result.orderLinkId = entryLinkId;
+      result.plannedQty = parseFloat(qtyStr);
+      result.plannedEntry = args.entryPrice;
+      log.info('resting limit placed — trades row + TP deferred to fill', {
+        symbol: args.symbol, account: account.keyName,
+        price: orderParams.price, ttlMinutes: args.ttlMinutes ?? null,
+      });
+      return result;
     }
     if (!positionReady) {
       log.warn('position not credited after 5s — TP submit may fail', { symbol: args.symbol, account: account.keyName });
@@ -691,6 +716,22 @@ async function main() {
   if (accounts.length === 0) {
     console.log(JSON.stringify({ ok: true, skipped: 'all accounts emergency-halted' }, null, 2));
     return;
+  }
+
+  // Cancel-before-place (Phase 2 guard layer 3): a legitimate resting entry on this
+  // symbol cannot exist at a new decision (TTL 230 < 240-min boundary spacing), so
+  // any unresolved 'placed' entry pending here means the TTL canceller missed —
+  // stacking a second limit on top risks a 2× double-fill (the ARB-248 class).
+  // Cancel the stragglers first; fill-vs-cancel races resolve to promotion, and the
+  // 90-min/occupancy precheck already blocked truly-active pairs upstream.
+  try {
+    const stale = await findRestingEntryPendings(args.symbol);
+    for (const row of stale) {
+      const acc = loadAccounts().find((a) => a.bucket === row.accountBucket && a.keyName === row.accountKey);
+      if (acc) await cancelRestingEntry(acc, row, 'cancel-before-place: new decision on pair');
+    }
+  } catch (e: any) {
+    log.warn('cancel-before-place sweep failed (non-fatal)', { symbol: args.symbol, err: e?.message ?? String(e) });
   }
 
   const results = await Promise.all(accounts.map(a => placeOnAccount(a, args)));

@@ -30,13 +30,14 @@ import { Strategy } from '../backtest/types';
 import { lsTopPositionFade, fundingFade, fundingTaConfluence } from '../strategies/cg-fade';
 import { cgSlowFadeV5 } from '../strategies/cg-slow-fade';
 
-// ── v5 cgSlowFade portfolio (2026-06-10 migration from srcNew research) ────────
+// ── v5 cgSlowFade portfolio (2026-06-10 migration; Phase 2 limit entries 06-11) ──
 // Per-trade risk: BTC carries 1.0% (the most validated leg: permutation p=0.000,
 // full stress battery); alts 0.5%. Heat 1.0+0.5×3 = 2.5% < 3.75% cap.
-// Headline (limit entries): +64.1%/yr, MTM maxDD -8.17%, worst day -2.36%.
-// Measured LIVE config (market entry, CG lag-1, asymmetric funding window =
-// boundary entries taken): +52.5%/yr, PF 1.50, maxDD -6.92%, worst day -2.96%
-// — live-policy-experiments.ts 'market-lag120' 2026-06-10.
+// LIVE config = the 'validated' headline: resting limit ∓0.3·ATR / TTL 230min,
+// CG lag-1, asymmetric funding window (boundary entries taken):
+// +64.1%/yr, PF 1.68, MTM maxDD -8.17%, worst day -2.36% (live-policy-experiments).
+// Fallback variant (entryOffsetAtr:0 = market entry): +52.5%/yr, PF 1.50,
+// maxDD -6.92% — ran live 2026-06-10..11, kept as the rollback switch.
 export const LIVE_RISK_PCT = 0.5;          // alt per-trade risk (ETH/SOL/XRP)
 export const LIVE_RISK_PCT_BTC = 1.0;      // BTC per-trade risk
 
@@ -61,7 +62,7 @@ export interface PairStrategyCfg {
 }
 
 export const TIER1_PORTFOLIO: PairStrategyCfg[] = [
-  // ═══ ACTIVE — v5 cgSlowFade portfolio (2026-06-10), SINGLE ENTRY MARKET, mixed risk ═══
+  // ═══ ACTIVE — v5 cgSlowFade portfolio, SINGLE resting-LIMIT entry (Phase 2), mixed risk ═══
   // Validated end-to-end on the srcNew honest engine (see src/strategies/cg-slow-fade.ts
   // header): permutation p=0.000, WF both directions OOS +18%/half, 11/13 months green.
   // BTC — own signals (L/S top position + funding fade + liq-cascade momentum short).

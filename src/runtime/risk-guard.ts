@@ -221,6 +221,23 @@ export async function getRiskState(now: Date = new Date()): Promise<RiskState> {
   // accounts creates N rows in the DB but it's still ONE pair-position. Strategy
   // is symmetric across accounts (Promise.all broadcast), so they live and die together.
   const uniquePairs = new Set(openPositions.map((p) => p.symbol));
+  // Phase 2 parity: a RESTING entry limit occupies a slot exactly like an open
+  // position — the srcNew engine counts position∨pending toward maxParallelPositions
+  // (portfolio-engine.ts:216). Unresolved entry pendings within TTL+grace join the
+  // unique-pair set; pairs that are both open and pending count once.
+  try {
+    const pendingPairsR = await query<{ symbol: string }>(
+      `SELECT DISTINCT symbol FROM pending_orders
+        WHERE status = 'placed' AND trade_id IS NULL
+          AND order_type = 'Limit' AND order_link_id LIKE 'e-%'
+          AND requested_at > NOW() - make_interval(mins => COALESCE(ttl_minutes, 230) + 60)`
+    );
+    for (const r of pendingPairsR.rows) uniquePairs.add(r.symbol);
+  } catch (e: any) {
+    log.warn('pending-pair slot count failed — cap uses open positions only this tick', {
+      err: e?.message ?? String(e),
+    });
+  }
   const uniquePositionsCount = uniquePairs.size;
   // Per-side UNIQUE-pair counts for the macro-corr overlay. Dedup by symbol (one
   // signal broadcast to N accounts = N rows but ONE pair-position), same as uniquePairs.
@@ -344,23 +361,27 @@ async function runPrecheck(symbol: string, riskPct: number, state: RiskState): P
   // the cancelled-orphan promise was best-effort, so a second ladder stacked on
   // the pair and inflated effective sizing 2.4×.
   //
-  // New rule: any pending_orders row placed in the last 90 minutes on this pair
-  // counts as "pair occupied" UNLESS explicitly cancelled/failed AND its trade
-  // (if any) has closed. The 90-min window covers the next 4H decision boundary
-  // plus reconcile latency. Matches the spirit of cg-fade's in-process 6h cooldown
-  // (which is a no-op across cron forks).
+  // Rule (Phase 2, 2026-06-11 — was a fixed 90-min window): a pending_orders row
+  // occupies the pair while it is genuinely UNRESOLVED, for up to its own TTL plus
+  // a 60-min grace (covers the canceller's 5-min cron plus retries). A resting
+  // limit lives 230 min — far past the old 90-min window, which left minutes
+  // 90..230 unguarded against a second entry stacking on the pair (the ARB-248
+  // double-fill class). Truly terminal rows ('cancelled'/'failed') never occupy;
+  // rows linked to a CLOSED trade never occupy; 'orphaned' still occupies inside
+  // the window (that escape WAS the ARB-248 bug). The grace cap prevents a leaked
+  // row from wedging the pair forever — past it the stale-orphan report owns it.
   const pairPendingR = await query<{ c: string }>(
     `SELECT COUNT(*)::text AS c FROM pending_orders po
       LEFT JOIN trades t ON po.trade_id = t.id
       WHERE po.symbol = $1
-        AND po.requested_at > NOW() - INTERVAL '90 minutes'
+        AND po.requested_at > NOW() - make_interval(mins => COALESCE(po.ttl_minutes, 230) + 60)
         AND po.status NOT IN ('cancelled', 'failed')
         AND (po.trade_id IS NULL OR t.status = 'open')`,
     [symbol]
   );
   const pairPendingCount = parseInt(pairPendingR.rows[0]?.c ?? '0', 10);
   if (pairPendingCount > 0) {
-    return { allowed: false, reason: `${symbol} has ${pairPendingCount} unresolved pending order(s) in last 90min — duplicate signal` };
+    return { allowed: false, reason: `${symbol} has ${pairPendingCount} unresolved pending order(s) within TTL+grace — duplicate signal` };
   }
   if (riskPct > RISK.riskPctCap) {
     return { allowed: false, reason: `risk ${riskPct}% exceeds cap ${RISK.riskPctCap}%` };
