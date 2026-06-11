@@ -5,7 +5,7 @@
 
 import { loadAccounts } from '../../core/accounts';
 import { closeAcrossAccounts } from '../../core/close-verifier';
-import { close as closePg } from '../../core/db';
+import { close as closePg, query } from '../../core/db';
 import { log } from '../../core/logger';
 
 function statusTag(status: string): string {
@@ -23,6 +23,14 @@ async function main() {
   }
 
   const accounts = loadAccounts();
+
+  // Pre-tag the open rows as 'manual' BEFORE the Bybit close so the finalizer
+  // (daemon/reconcile via autoCloseTrade) preserves the true reason instead of
+  // price-proximity-inferring 'sl' (wrong journal + wrong 12h cooldown).
+  await query(
+    `UPDATE trades SET exit_reason = 'manual' WHERE symbol = $1 AND status = 'open'`,
+    [symbol],
+  );
 
   const result = await closeAcrossAccounts(accounts, symbol, {
     reason: 'admin close-symbol',

@@ -104,11 +104,16 @@ export async function autoCloseTrade(t: OpenTrade, fills: ClosedFill[]): Promise
   const wAvgEntry = matched.reduce((s, f) => s + f.avgEntryPrice * f.closedSize, 0) / totalClosedSize;
   const lastTs = matched[matched.length - 1].closedTime;
 
-  // max-hold pre-tags exit_reason='time_stop' on the open row BEFORE closing the
-  // Bybit position, so whichever close-handler wins (WS daemon / reconcile catch-net)
-  // reports the true reason instead of inferring 'manual' from price distance.
+  // Pre-tagged reasons are preserved: max-hold tags 'time_stop', admin close tools
+  // tag 'manual' BEFORE closing the Bybit position, so whichever close-handler wins
+  // (WS daemon / reconcile catch-net) reports the true reason. Without the 'manual'
+  // pre-tag, inferExitReason's 1% price-proximity heuristic labels an operator
+  // close near the stop level as 'sl' — wrong journal AND a wrong 12h cooldown
+  // (seen live 2026-06-11: BTC manual close at 0.8% from SL → 'sl').
   const exitReason: CloseEvent['exitReason'] =
-    t.exit_reason === 'time_stop' ? 'time_stop' : inferExitReason(t, wAvgExit);
+    t.exit_reason === 'time_stop' || t.exit_reason === 'manual'
+      ? t.exit_reason
+      : inferExitReason(t, wAvgExit);
   const pnlR = Position.fromOpenTrade(t).riskUnits(totalPnl);
 
   const res = await query(
