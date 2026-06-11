@@ -148,13 +148,23 @@ export class TradeRepo implements ITradeRepository {
   }
 
   /**
-   * Timestamp (epoch ms) of the most recent losing SL close for a pair, or null.
-   * Used by risk-guard for post-SL cooldown.
+   * Timestamp (epoch ms) of the most recent STOP-LOSS close for a pair, or null.
+   * Used by risk-guard for the 12h post-SL cooldown.
+   *
+   * Backtest-parity semantics (operator directive 2026-06-11, live must match the
+   * srcNew engine 1:1): the validated engine applies the 12h cooldown ONLY to
+   * exitReason='sl' — TP/time/eod exits get the 4h any-close cooldown regardless of
+   * sign. The old live predicate (realized_r < 0 = any losing close, incl. manual
+   * and losing time-stops) was stricter than validation. `realized_r <= -0.9` stays
+   * as a safety net for gap-slippage SL fills that inferExitReason mislabels
+   * 'manual' (its 1% price-proximity check fails on a >1% gap through the stop) —
+   * a full-stop-magnitude loss is a stop, whatever the label.
    */
   async lastSlCloseTs(symbol: string): Promise<number | null> {
     const r = await query<{ ts: string }>(
       `SELECT EXTRACT(EPOCH FROM closed_at) * 1000 AS ts FROM trades
-       WHERE symbol = $1 AND status = 'closed' AND realized_r < 0
+       WHERE symbol = $1 AND status = 'closed'
+         AND (exit_reason = 'sl' OR realized_r <= -0.9)
          AND closed_at IS NOT NULL
        ORDER BY closed_at DESC LIMIT 1`,
       [symbol]
@@ -177,8 +187,9 @@ export class TradeRepo implements ITradeRepository {
   }
 
   /**
-   * Count of UNIQUE losing SL events (side + second-rounded opened_at) for a pair
+   * Count of UNIQUE stop-loss events (side + second-rounded opened_at) for a pair
    * since `sessionStartMs`. Multi-account broadcast counts as one event.
+   * Same stop-semantics predicate as lastSlCloseTs (backtest parity 2026-06-11).
    */
   async countSlInSession(symbol: string, sessionStartMs: number): Promise<number> {
     const r = await query<{ c: string }>(
@@ -186,7 +197,7 @@ export class TradeRepo implements ITradeRepository {
        FROM trades
        WHERE symbol = $1 AND status = 'closed'
          AND closed_at IS NOT NULL AND EXTRACT(EPOCH FROM closed_at) * 1000 >= $2
-         AND realized_r < 0`,
+         AND (exit_reason = 'sl' OR realized_r <= -0.9)`,
       [symbol, sessionStartMs]
     );
     return parseInt(r.rows[0]?.c ?? '0', 10);

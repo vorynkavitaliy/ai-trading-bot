@@ -43,9 +43,9 @@ This document is the **inviolable contract**. It is loaded into every cycle. Nev
 | Total heat cap | 3.75% of equity (full-deploy v5 = 1.0+3×0.5 = 2.5%) |
 | Daily-DD защита | entry-block kill switches ОТКЛЮЧЕНЫ (`dailyKillSwitchesEnabled=false`, 2026-06-03); активная защита — DD-flatten daemon −4.3% от дневного пика (position-monitor). |
 | Total kill | −8% → halt + manual review |
-| Max SL/pair/day | 2 → pair disabled until next UTC day |
-| Cooldown after SL | 12h on the same pair (survives UTC day boundary) |
-| Cooldown after any close | 4h on the same pair (prevents immediate re-entry on TP/manual) |
+| Max SL/pair/day | 2 → pair disabled until next UTC day (с CD 12ч недостижимо легитимно — чистый backstop) |
+| Cooldown after SL | 12h on the same pair. **Семантика = бэктест (1:1, 2026-06-11):** только выход по стопу (`exit_reason='sl'` или ≤ −0.9R как страховка от гэпа); ручной/тайм-аут убыток → 4h, как в движке srcNew |
+| Cooldown after any close | 4h on the same pair (любое закрытие: TP/time/manual — как в валидированном движке) |
 | Decision latch | одно решение на (пара, закрытый 4H-бар) — `decided_anchors`; в strategy-кулдаунах v5 не нуждается |
 | Max hold | 48h (12 × 4H) → market-close, `exit_reason='time_stop'` (`src/runtime/max-hold.ts`) |
 | Funding window | **Асимметричное (решение оператора 2026-06-10):** блок только 10 мин ДО settlement 00/08/16 UTC; вход сразу после settlement разрешён — валидированная политика `take` (+52.5%/maxDD −6.9% против +40.3%/−9.3% у defer +1h и +23.0% у drop). |

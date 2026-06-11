@@ -19,7 +19,7 @@ export const RISK = Object.freeze({
   riskPctCap: 1.5,                          // 2026-06-03: raised 0.6→1.5 for the 3-pair standalone portfolio (BTC 1.25%/trade, SOL/ADA 0.875%). Backstop vs runaway sizing. Full-deploy heat = 1.25+0.875+0.875 = 3.0% < 3.75% cap.
   maxParallelPositions: 4,                  // 2026-06-04: 4-pair book (BTC+SOL+ADA+LINK, single entry) → cap-4 = one position per pair. Heat 1.25+0.875+0.875+0.6=3.6% < 3.75% cap. Was cap-3 (3-pair BTC+SOL+ADA), cap-6 (8-pair v5, archived).
   maxSameSideConcentration: 0,              // L5 macro-corr overlay — DISABLED 2026-06-06 after direct verification REFUTED its justification. The claim "removes the 2026-05-21 Hyro gap-day breach" is FALSE on the honest recent-170d (fresh-$200k) window: base AND blk3 both breach 1/1 (raw DD −8.13% vs −7.74% — a price gap flatten can't catch either way). blk3 also UNDERPERFORMS base on BOTH halves (OLD −6.2pp, recent −9.6pp ret, +2.2pp MaxDD) — the lone FULL-340d +3.7pp gain is a compounding-path artifact, not a robust edge (flatten path-chaos: gap-day delta sign is noise). Plumbing (openLongCount/openShortCount, telemetry, scan-decide gate) is left in place but inert via this 0. Set to 3 to re-enable IF re-justified on decomposed windows. See memory/project_l5_macrocorr_overlay_2026_06_06.md. Block logic mirrors lever-macrocorr blk3: wouldBe = openSame + sameCycleApproved + 1; block if wouldBe ≥ this.
-  maxEntriesPerWindow: 6,                     // 2026-06-03: raised 3→6 for the 3-pair book — the validated WF used no entry-throttle; 6/12h lets all 3 pairs enter + re-enter without strangling the edge, while still a runaway backstop.
+  maxEntriesPerWindow: 16,                    // 2026-06-11 (backtest-parity directive): the validated srcNew engine has NO entry throttle, and 6/12h could bind in a legitimate hot streak (theoretical max with cap-4 + 4h any-close CD = 3/pair × 4 pairs = 12 per 12h). 16 > 12 = pure runaway-bug backstop (duplicate-fire class), unreachable in legitimate operation.
   entryCapWindowHours: 12,                    // rolling window for maxEntriesPerWindow (operator: 12h, not calendar day)
   entryCapEpochMs: 1780424189205,             // operator-reset 2026-06-02 18:16 UTC: counter cleared after ETH SL cluster. Entries BEFORE this don't count toward the cap.
   totalHeatCapPct: 3.75,                    // worst-case bt MaxDD 3.96% @ slip 0.40%
@@ -161,9 +161,10 @@ async function fetchAndUpsertDailyPeak(
 }
 
 // Returns a cooldown-block reason string if the pair is in cooldown; null otherwise.
-// Combines two cooldown windows: (a) long post-SL (default 12h, losing closes only),
-// (b) short post-any-close (default 4h, any TP/manual close). The 12h survives the
-// UTC-day boundary so back-to-back SL clusters can't re-enter.
+// Combines two cooldown windows: (a) long post-SL (default 12h, STOP exits only —
+// exit_reason='sl' or ≤ −0.9R gap safety-net, backtest-parity 2026-06-11),
+// (b) short post-any-close (default 4h, any TP/time/manual close). The 12h survives
+// the UTC-day boundary so back-to-back SL clusters can't re-enter.
 async function lastSlCooldown(now: Date, symbol: string): Promise<string | null> {
   const slCutoff = now.getTime() - RISK.cooldownAfterSlHours * 3_600_000;
   const slTs = await tradeRepo.lastSlCloseTs(symbol);
