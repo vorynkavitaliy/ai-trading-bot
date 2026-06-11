@@ -159,11 +159,19 @@ export class TradeRepo implements ITradeRepository {
    * as a safety net for gap-slippage SL fills that inferExitReason mislabels
    * 'manual' (its 1% price-proximity check fails on a >1% gap through the stop) —
    * a full-stop-magnitude loss is a stop, whatever the label.
+   *
+   * MANUAL EXCLUSION (operator directive 2026-06-11): exit_reason='manual' closes
+   * (admin close-symbol / operator discretionary exits) impose NO algo cooldown —
+   * the validated engine has no manual trades at all, so an operator unwinding his
+   * own position must not gate the bot's algo entries. This is the "trade from
+   * scratch" semantics + tighter backtest parity. Admin closes pre-tag 'manual'
+   * before closing (close-symbol.ts), so a real stop is never mislabeled as manual.
    */
   async lastSlCloseTs(symbol: string): Promise<number | null> {
     const r = await query<{ ts: string }>(
       `SELECT EXTRACT(EPOCH FROM closed_at) * 1000 AS ts FROM trades
        WHERE symbol = $1 AND status = 'closed'
+         AND exit_reason IS DISTINCT FROM 'manual'
          AND (exit_reason = 'sl' OR realized_r <= -0.9)
          AND closed_at IS NOT NULL
        ORDER BY closed_at DESC LIMIT 1`,
@@ -173,13 +181,15 @@ export class TradeRepo implements ITradeRepository {
   }
 
   /**
-   * Timestamp (epoch ms) of the most recent close (any reason) for a pair, or null.
-   * Used by risk-guard for post-any-close cooldown.
+   * Timestamp (epoch ms) of the most recent ALGO close (any reason) for a pair, or
+   * null. Used by risk-guard for the 4h post-any-close cooldown. Excludes manual
+   * closes (operator exits don't gate algo entries — see lastSlCloseTs).
    */
   async lastCloseTs(symbol: string): Promise<number | null> {
     const r = await query<{ ts: string }>(
       `SELECT EXTRACT(EPOCH FROM closed_at) * 1000 AS ts FROM trades
        WHERE symbol = $1 AND status = 'closed' AND closed_at IS NOT NULL
+         AND exit_reason IS DISTINCT FROM 'manual'
        ORDER BY closed_at DESC LIMIT 1`,
       [symbol]
     );
@@ -189,7 +199,8 @@ export class TradeRepo implements ITradeRepository {
   /**
    * Count of UNIQUE stop-loss events (side + second-rounded opened_at) for a pair
    * since `sessionStartMs`. Multi-account broadcast counts as one event.
-   * Same stop-semantics predicate as lastSlCloseTs (backtest parity 2026-06-11).
+   * Same stop-semantics predicate as lastSlCloseTs (backtest parity 2026-06-11),
+   * including the manual exclusion.
    */
   async countSlInSession(symbol: string, sessionStartMs: number): Promise<number> {
     const r = await query<{ c: string }>(
@@ -197,6 +208,7 @@ export class TradeRepo implements ITradeRepository {
        FROM trades
        WHERE symbol = $1 AND status = 'closed'
          AND closed_at IS NOT NULL AND EXTRACT(EPOCH FROM closed_at) * 1000 >= $2
+         AND exit_reason IS DISTINCT FROM 'manual'
          AND (exit_reason = 'sl' OR realized_r <= -0.9)`,
       [symbol, sessionStartMs]
     );
