@@ -18,30 +18,22 @@ const HISTORY_LIMIT = 2160;
 // it has the deepest data and is consistently available.
 const REF_EXCHANGE = 'Binance';
 
-// v3 universe (post 2026-05-18, Standard plan): 14 pairs incl. HYPE.
-// Standard plan removes the 10-symbol cap of Hobbyist — full universe now covered.
-// 2026-06-03: added LINK + ADA for standalone-strategy research (operator). Adding here
-// also keeps them fresh via the cron incremental. Does NOT add them to the trading
-// universe (that's TIER1_PORTFOLIO in pair-strategies.ts) — ingestion only.
-const SYMBOLS_COIN = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'LTC', 'ATOM', 'DOGE', 'TON', 'APT', 'ARB', 'INJ', 'TAO', 'HYPE', 'ZEC', 'LINK', 'ADA'];
+// Ingestion universe trimmed 2026-06-12 (operator): 17 → 6. Only the LIVE v5
+// universe (BTC/ETH/SOL/XRP) + the two enabled:false rollback pairs (ADA/LINK,
+// for a fast return to the standalone portfolio without a cold re-backfill).
+// The other 11 were ingestion-only research/rollback candidates — dropping them
+// cuts the hourly incremental from ~140 to ~52 requests (≈272→~100 req/min peak,
+// big margin under the 300/min Standard cap). To research a new coin: add it
+// here + run runCgBackfill once to seed history. Already-ingested rows for the
+// dropped coins stay in the DB (immutable history), they just stop refreshing.
+const SYMBOLS_COIN = ['BTC', 'ETH', 'SOL', 'XRP', 'ADA', 'LINK'];
 const PAIRS = [
   { symbol: 'BTC',  pair: 'BTCUSDT'  },
   { symbol: 'ETH',  pair: 'ETHUSDT'  },
   { symbol: 'SOL',  pair: 'SOLUSDT'  },
   { symbol: 'XRP',  pair: 'XRPUSDT'  },
-  { symbol: 'BNB',  pair: 'BNBUSDT'  },
-  { symbol: 'LTC',  pair: 'LTCUSDT'  },
-  { symbol: 'ATOM', pair: 'ATOMUSDT' },
-  { symbol: 'DOGE', pair: 'DOGEUSDT' },
-  { symbol: 'TON',  pair: 'TONUSDT'  },
-  { symbol: 'APT',  pair: 'APTUSDT'  },
-  { symbol: 'ARB',  pair: 'ARBUSDT'  },
-  { symbol: 'INJ',  pair: 'INJUSDT'  },
-  { symbol: 'TAO',  pair: 'TAOUSDT'  },
-  { symbol: 'HYPE', pair: 'HYPEUSDT' },
-  { symbol: 'ZEC',  pair: 'ZECUSDT'  },
-  { symbol: 'LINK', pair: 'LINKUSDT' },
   { symbol: 'ADA',  pair: 'ADAUSDT'  },
+  { symbol: 'LINK', pair: 'LINKUSDT' },
 ];
 
 function delay(ms: number) {
